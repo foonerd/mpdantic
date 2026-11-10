@@ -20,7 +20,7 @@
     "os": ["bookworm"],
     "architectures": ["armhf", "amd64"],
     "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management page.",
-    "changelog": "0.1.0 The skeleton: the core, the shell, the build and the signed release pipeline. Nothing to use yet."
+    "changelog": "0.1.0 First test cut: the management pages on the player (Ignore, CUE sheets, Tags, Playlists, Written, About), .mpdignore lines written with suggestions, CUE sheet repairs, tag edits, playlist rebasing and import into Volumio's playlists, every write undoable; MPD's output buffer sized to the player through Volumio's own MPD configuration."
   },
   "dependencies": {
     "kew": "^0.7.0",

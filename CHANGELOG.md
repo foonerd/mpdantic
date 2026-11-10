@@ -4,6 +4,12 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-11-10
+
+The first test cut, published as a pre-release for testing on more players and more libraries before the plugin store. Every feature below has been driven on a Raspberry Pi 5 (Volumio 4.239, the 32-bit image) and an x86 player (Volumio 4.231). Every write is undoable from the Written tab.
+
 ### Added
 
 - The skeleton: the core (`bins/mpdantic`, one static binary per architecture, starts and waits), the shell (`plugin/`, the settings page with the management port and a status button, the core's service), the workshop pass (`scripts/check.sh`), the cross builds and the plugin zip, CI and the signed release workflow. Nothing to use yet.
