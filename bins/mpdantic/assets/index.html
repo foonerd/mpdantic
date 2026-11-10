@@ -22,8 +22,6 @@
   .header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
   .header h1 { font-size: 18px; font-weight: 600; white-space: nowrap; }
   .header .sub { color: var(--muted); font-size: 13px; }
-  .header a.sub { color: var(--accent); text-decoration: none; }
-  .header a.sub:hover { text-decoration: underline; }
   .grow { flex: 1; min-width: 0; }
   .badge { font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 2px 8px; border-radius: 10px; background: var(--line); color: var(--muted); text-transform: uppercase; }
   .badge.ok { background: var(--accent); color: #fff; }
@@ -53,8 +51,9 @@
   .empty, .error { padding: 18px 12px; color: var(--muted); }
   .error { color: var(--danger); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 18px; overflow-x: auto; }
-  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 10px 18px; white-space: nowrap; font-size: 15px; }
-  .tab:hover { background: none; color: var(--text); border-color: transparent; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 10px 18px; white-space: nowrap; font-size: 15px; text-decoration: none; display: inline-block; }
+  .tab:hover { background: none; color: var(--text); border-color: transparent; text-decoration: none; }
+  .tabs .grow { flex: 1; }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .panel { margin-top: 12px; }
   .panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -117,7 +116,6 @@
 <div class="header">
   <h1>MPDantic</h1>
   <span class="sub" id="version"></span>
-  <a class="sub" href="/about">About</a>
   <span class="grow"></span>
   <span class="badge" id="state">...</span>
   <button class="small" id="close" hidden>Close</button>
@@ -132,6 +130,7 @@
     <button class="tab" id="tab-cue">CUE sheets</button>
     <button class="tab" id="tab-tags">Tags</button>
     <button class="tab" id="tab-undo">Written</button>
+    <a class="tab" href="/about">About</a>
   </nav>
 
   <div class="panel" id="panel-ignore" hidden>
