@@ -217,7 +217,8 @@
 
   const CLASSES = {
     system_folder: 'NAS and system folders', sidecar: 'Sidecar files', archive: 'Archives', video: 'Video containers',
-    audio: 'Audio', cue: 'CUE sheets', playlist: 'Playlists', image: 'Images', other: 'Other', folder: 'Folders'
+    ffmpeg_only: 'Claimed only by ffmpeg', audio: 'Audio', cue: 'CUE sheets', playlist: 'Playlists', image: 'Images',
+    other: 'Other', folder: 'Folders'
   };
   let job = null;
 
@@ -338,11 +339,26 @@
       row.appendChild(el('div', 'top', (l.dir || 'the root') + '/.mpdignore'));
       const lines = el('div', 'ex');
       l.lines.forEach((line, i) => { if (i) lines.appendChild(document.createTextNode('  |  ')); lines.appendChild(el('code', '', line)); });
+      if (!l.lines.length) lines.textContent = 'no pattern in it';
       row.appendChild(lines);
+      // A line starting with # is a comment to MPD; one that looks like a name did
+      // nothing for its writer.
+      l.dead.forEach((line) => {
+        const why = el('div', 'why');
+        why.appendChild(el('span', 'tag warn', 'dead line'));
+        why.appendChild(document.createTextNode(' '));
+        why.appendChild(el('code', '', line));
+        why.appendChild(document.createTextNode(' is a comment to MPD, so it keeps nothing out. For a name starting with a hash, the line that works is '));
+        why.appendChild(el('code', '', '[#]' + line.slice(1)));
+        why.appendChild(document.createTextNode('.'));
+        row.appendChild(why);
+      });
       f.appendChild(row);
     });
     const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
     if (audio.length) table(section(box, 'Audio by suffix'), audio);
+    const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => ['.' + k, String(r.ffmpeg_suffixes[k])]);
+    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; the rest is counted here.'), ffmpeg);
     if (r.other_suffixes.length) {
       table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. A line by hand would spare the stat.'), r.other_suffixes.map((p) => [p[0].startsWith('(') ? p[0] : '.' + p[0], String(p[1])]));
     }

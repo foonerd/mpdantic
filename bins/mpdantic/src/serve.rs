@@ -47,7 +47,12 @@ impl Shared {
                 DecoderNote {
                     source: "mpd".to_string(),
                     count: d.suffixes.len(),
-                    detail: format!("MPD {}, {} plugins", d.version, d.plugins.len()),
+                    detail: format!(
+                        "MPD protocol {}, {} plugins, {} suffixes only ffmpeg claims",
+                        d.protocol,
+                        d.plugins.len(),
+                        d.ffmpeg_only.len()
+                    ),
                 },
                 d,
             ),
@@ -181,8 +186,9 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         (_, "/api/decoders") if get => {
             let (note, decoders) = shared.decoders();
             let body = serde_json::json!({
-                "source": note.source, "detail": note.detail,
-                "plugins": decoders.plugins, "suffixes": decoders.suffixes,
+                "source": note.source, "detail": note.detail, "protocol": decoders.protocol,
+                "plugins": decoders.plugins.iter().map(|(name, suffixes)| serde_json::json!({ "name": name, "suffixes": suffixes })).collect::<Vec<_>>(),
+                "suffixes": decoders.suffixes, "ffmpeg_only": decoders.ffmpeg_only,
             })
             .to_string()
                 + "\n";
@@ -514,6 +520,12 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(value["source"], "mpd");
         assert_eq!(value["suffixes"][0], "flac");
+        assert_eq!(value["ffmpeg_only"][0], "mkv");
+        assert_eq!(value["plugins"][0]["name"], "mad");
+        assert!(value["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("MPD protocol 0.24.6"));
         let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET /api/decoders HTTP/1.0\r\n\r\n");
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();

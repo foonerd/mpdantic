@@ -2,14 +2,15 @@
 //! v0.24.6): a song when a decoder claims its suffix, else an archive it opens and
 //! walks, else a playlist; and what it is to a library's owner: a folder the NAS
 //! writes for itself, a sidecar a desktop leaves, a video the ffmpeg decoder happens
-//! to claim, an image Volumio shows as folder art.
+//! to claim, a text or subtitle file only the ffmpeg decoder claims, an image Volumio
+//! shows as folder art.
 
-use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
 use serde::Serialize;
 
 use crate::ignore::Pattern;
+use crate::mpd::Decoders;
 
 /// What MPD opens as an archive and walks inside.
 pub const ARCHIVE_SUFFIXES: &[&str] = &["iso", "zip", "bz2"];
@@ -21,7 +22,19 @@ pub const VIDEO_SUFFIXES: &[&str] = &[
     "mp4", "m4v", "mkv", "avi", "mov", "flv", "wmv", "webm", "ts", "mts", "m2ts", "mpg", "mpeg",
     "vob", "swf", "3gp",
 ];
-/// Folder art and the rest: never suggested.
+/// Audio that only the ffmpeg decoder decodes on Volumio's MPD: music, not junk.
+pub const AUDIO_BY_FFMPEG: &[&str] = &[
+    "m4a", "m4b", "aac", "ac3", "eac3", "dts", "dtshd", "thd", "mlp", "wma", "ape", "tta", "tak",
+    "shn", "amr", "aa", "aax", "mka", "oma", "mpa", "m2a", "spx", "alac",
+];
+/// What ffmpeg alone claims that is never music: text, lyrics, subtitles, CD images.
+/// MPD opens and probes each at every update; a line keeps it out.
+pub const PROBE_SUFFIXES: &[&str] = &[
+    "txt", "nfo", "lrc", "ans", "asc", "diz", "art", "ice", "vt", "srt", "sub", "ass", "ssa",
+    "vtt", "idx", "sup", "smi", "sami", "jss", "stl", "pjs", "mpl2", "rt", "sbg", "dat", "bin",
+];
+/// Folder art and the rest: never suggested, and classed before the decoders so a
+/// picture the ffmpeg decoder claims (gif) stays a picture.
 pub const IMAGE_SUFFIXES: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff"];
 /// Folders a NAS or a desktop writes for itself, as patterns on the folder's name.
 pub const SYSTEM_FOLDERS: &[&str] = &[
@@ -50,6 +63,7 @@ pub enum Class {
     Sidecar,
     Archive,
     Video,
+    FfmpegOnly,
     Audio,
     Cue,
     Playlist,
@@ -66,6 +80,7 @@ impl Class {
             Class::Sidecar => "A file a desktop leaves beside the music; MPD tries it by its suffix.",
             Class::Archive => "MPD opens archives and walks inside; an SACD ISO is not ISO9660 and fails.",
             Class::Video => "MPD's ffmpeg decoder claims this suffix; usually video. Audio-only MP4 is normally .m4a.",
+            Class::FfmpegOnly => "Only MPD's ffmpeg decoder claims this suffix: the file is opened and probed at every update, though it is not music.",
             Class::Audio => "A decoder claims it: a song to MPD.",
             Class::Cue => "A CUE sheet: MPD's cue playlist plugin reads it.",
             Class::Playlist => "A playlist: MPD's playlist plugins read it.",
@@ -115,7 +130,7 @@ pub fn classify(
     rules: &Rules,
     name: &OsStr,
     is_dir: bool,
-    decoders: &BTreeSet<String>,
+    decoders: &Decoders,
 ) -> (Class, Option<String>) {
     if is_dir {
         return match rules.system.iter().find(|p| p.matches(name)) {
@@ -131,12 +146,18 @@ pub fn classify(
         return (Class::Other, None);
     };
     let s = s.as_str();
-    if decoders.contains(s) {
-        return if VIDEO_SUFFIXES.contains(&s) {
-            (Class::Video, Some(format!("*.{s}")))
-        } else {
-            (Class::Audio, None)
-        };
+    if IMAGE_SUFFIXES.contains(&s) {
+        return (Class::Image, None);
+    }
+    if decoders.suffixes.contains(s) {
+        if VIDEO_SUFFIXES.contains(&s) {
+            return (Class::Video, Some(format!("*.{s}")));
+        }
+        if !decoders.ffmpeg_only.contains(s) || AUDIO_BY_FFMPEG.contains(&s) {
+            return (Class::Audio, None);
+        }
+        let suggested = PROBE_SUFFIXES.contains(&s).then(|| format!("*.{s}"));
+        return (Class::FfmpegOnly, suggested);
     }
     if ARCHIVE_SUFFIXES.contains(&s) {
         return (Class::Archive, Some(format!("*.{s}")));
@@ -147,21 +168,27 @@ pub fn classify(
     if PLAYLIST_SUFFIXES.contains(&s) {
         return (Class::Playlist, None);
     }
-    if IMAGE_SUFFIXES.contains(&s) {
-        return (Class::Image, None);
-    }
     (Class::Other, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mpd::tests::decoders_of;
 
-    fn decoders() -> BTreeSet<String> {
-        ["flac", "mp3", "mp4", "mkv", "mov", "dsf"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+    /// flac and mp3 from MPD's own plugins; ffmpeg claims the rest, music and not.
+    fn decoders() -> Decoders {
+        decoders_of(&[
+            ("flac", &["flac"]),
+            ("mad", &["mp3"]),
+            ("dsf", &["dsf"]),
+            (
+                "ffmpeg",
+                &[
+                    "flac", "mp4", "mkv", "mov", "m4a", "wma", "txt", "srt", "gif", "lrc", "aa3",
+                ],
+            ),
+        ])
     }
 
     fn class(name: &str, is_dir: bool) -> (Class, Option<String>) {
@@ -200,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn files_fall_into_their_class_in_mpds_order() {
+    fn files_fall_into_their_class_in_mpds_order_with_the_owners_reading() {
         assert_eq!(
             class("._01 Track.flac", false),
             (Class::Sidecar, Some("._*".to_string()))
@@ -209,8 +236,12 @@ mod tests {
             class(".DS_Store", false),
             (Class::Sidecar, Some(".DS_Store".to_string()))
         );
+        // MPD's own plugins, or ffmpeg on an audio container: music.
         assert_eq!(class("01 Track.flac", false), (Class::Audio, None));
         assert_eq!(class("01 Track.FLAC", false), (Class::Audio, None));
+        assert_eq!(class("01 Track.m4a", false), (Class::Audio, None));
+        assert_eq!(class("01 Track.wma", false), (Class::Audio, None));
+        // ffmpeg on a video container.
         assert_eq!(
             class("clip.mkv", false),
             (Class::Video, Some("*.mkv".to_string()))
@@ -219,15 +250,32 @@ mod tests {
             class("clip.MOV", false),
             (Class::Video, Some("*.mov".to_string()))
         );
+        // ffmpeg alone on text and subtitles: probed at every update, suggested.
+        assert_eq!(
+            class("notes.txt", false),
+            (Class::FfmpegOnly, Some("*.txt".to_string()))
+        );
+        assert_eq!(
+            class("film.srt", false),
+            (Class::FfmpegOnly, Some("*.srt".to_string()))
+        );
+        assert_eq!(
+            class("song.lrc", false),
+            (Class::FfmpegOnly, Some("*.lrc".to_string()))
+        );
+        // ffmpeg alone on something unknown: counted, not suggested.
+        assert_eq!(class("x.aa3", false), (Class::FfmpegOnly, None));
+        // A picture ffmpeg claims is still a picture.
+        assert_eq!(class("cover.gif", false), (Class::Image, None));
+        assert_eq!(class("cover.jpg", false), (Class::Image, None));
         assert_eq!(
             class("album.iso", false),
             (Class::Archive, Some("*.iso".to_string()))
         );
         assert_eq!(class("album.cue", false), (Class::Cue, None));
         assert_eq!(class("album.m3u8", false), (Class::Playlist, None));
-        assert_eq!(class("cover.jpg", false), (Class::Image, None));
-        assert_eq!(class("album.txt", false), (Class::Other, None));
         assert_eq!(class("README", false), (Class::Other, None));
+        assert_eq!(class("album.log", false), (Class::Other, None));
         // A video suffix no decoder claims is nothing to MPD.
         assert_eq!(class("clip.avi", false), (Class::Other, None));
     }

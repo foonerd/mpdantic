@@ -63,6 +63,8 @@ pub struct Suggestion {
 pub struct InForceLines {
     pub dir: String,
     pub lines: Vec<String>,
+    /// `#` lines that look like names: comments to MPD, dead to their writer.
+    pub dead: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -84,6 +86,8 @@ pub struct Report {
     pub excluded: Count,
     pub classes: BTreeMap<Class, Count>,
     pub audio_suffixes: BTreeMap<String, usize>,
+    /// What ffmpeg alone claims, by suffix.
+    pub ffmpeg_suffixes: BTreeMap<String, usize>,
     pub other_suffixes: Vec<(String, usize)>,
     pub in_force: Vec<InForceLines>,
     pub suggestions: Vec<Suggestion>,
@@ -144,11 +148,12 @@ pub fn analyse(
             excluded: Count::default(),
             classes: BTreeMap::new(),
             audio_suffixes: BTreeMap::new(),
+            ffmpeg_suffixes: BTreeMap::new(),
             other_suffixes: Vec::new(),
             in_force: in_force
                 .lines()
                 .into_iter()
-                .map(|(dir, lines)| InForceLines { dir, lines })
+                .map(|(dir, lines, dead)| InForceLines { dir, lines, dead })
                 .collect(),
             suggestions: Vec::new(),
             decoders: source,
@@ -220,7 +225,7 @@ impl Walk<'_> {
                 continue;
             };
             let (class, pattern) =
-                classify::classify(&self.rules, &name, meta.is_dir(), &self.decoders.suffixes);
+                classify::classify(&self.rules, &name, meta.is_dir(), self.decoders);
             if class == Class::Folder {
                 let child = entry.path();
                 let pushed = match read_list(&child) {
@@ -250,6 +255,11 @@ impl Walk<'_> {
                 Class::Audio => {
                     if let Some(s) = classify::suffix(&name.to_string_lossy()) {
                         *self.report.audio_suffixes.entry(s).or_insert(0) += 1;
+                    }
+                }
+                Class::FfmpegOnly => {
+                    if let Some(s) = classify::suffix(&name.to_string_lossy()) {
+                        *self.report.ffmpeg_suffixes.entry(s).or_insert(0) += 1;
                     }
                 }
                 Class::Other => {
@@ -315,16 +325,23 @@ mod tests {
         put("NAS/Pop/#recycle/deep/old.flac", 100);
         put("NAS/Jazz/Live/03.mp3", 100);
         put("NAS/Jazz/Live/skip.iso", 100);
-        fs::write(root.join("NAS/.mpdignore"), "# Jazz is clean\n*.opus\n").unwrap();
+        fs::write(
+            root.join("NAS/.mpdignore"),
+            "# Jazz is clean\n*.opus\n#recycle\n",
+        )
+        .unwrap();
         fs::write(root.join("NAS/Jazz/.mpdignore"), "skip.*\n").unwrap();
         put("NAS/Jazz/Live/x.opus", 100);
         root
     }
 
+    /// MPD's own flac and mp3, ffmpeg on mov (video), m4a (music) and txt (neither).
     fn decoders() -> Decoders {
-        let mut d = mpd::assumed();
-        d.suffixes.insert("mov".to_string());
-        d
+        mpd::tests::decoders_of(&[
+            ("flac", &["flac"]),
+            ("mad", &["mp3"]),
+            ("ffmpeg", &["mov", "m4a", "txt"]),
+        ])
     }
 
     fn note() -> DecoderNote {
@@ -353,11 +370,13 @@ mod tests {
         assert_eq!(count(Class::Image), 1);
         assert_eq!(count(Class::Cue), 1);
         assert_eq!(count(Class::Playlist), 1);
-        assert_eq!(count(Class::Other), 1);
+        assert_eq!(count(Class::Other), 0);
+        assert_eq!(count(Class::FfmpegOnly), 1);
         assert_eq!(count(Class::Archive), 1);
         assert_eq!(count(Class::SystemFolder), 2);
         assert_eq!(r.audio_suffixes.get("flac"), Some(&2));
-        assert_eq!(r.other_suffixes, vec![("txt".to_string(), 1)]);
+        assert_eq!(r.ffmpeg_suffixes.get("txt"), Some(&1));
+        assert!(r.other_suffixes.is_empty());
         assert_eq!(
             r.classes[&Class::Archive].examples,
             ["NAS/Pop/Genesis/_SACD/album.iso"]
@@ -374,15 +393,18 @@ mod tests {
                 ("[#]recycle", 1),
                 ("._*", 1),
                 ("*.iso", 1),
-                ("*.mov", 1)
+                ("*.mov", 1),
+                ("*.txt", 1)
             ]
         );
         assert_eq!(r.suggestions[3].bytes, 1000);
         assert_eq!(r.suggestions[4].note, Class::Video.note());
-        // The root's list is in force at NAS/Pop: NAS/.mpdignore.
+        assert_eq!(r.suggestions[5].note, Class::FfmpegOnly.note());
+        // The root's list is in force at NAS/Pop: NAS/.mpdignore, with its dead line.
         assert_eq!(r.in_force.len(), 1);
         assert_eq!(r.in_force[0].dir, "NAS");
         assert_eq!(r.in_force[0].lines, ["*.opus"]);
+        assert_eq!(r.in_force[0].dead, ["#recycle"]);
         assert_eq!(r.excluded.count, 0);
         assert!(!r.cancelled);
         fs::remove_dir_all(&root).unwrap();

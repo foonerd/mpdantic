@@ -36,24 +36,44 @@ impl Pattern {
     }
 }
 
-/// The lines of one `.mpdignore`, parsed as MPD parses them.
+/// The lines of one `.mpdignore`, parsed as MPD parses them; and the lines MPD drops
+/// as comments that look like a name (`#recycle`), which the owner meant as patterns.
 pub struct ExcludeList {
     patterns: Vec<Pattern>,
+    dead: Vec<String>,
 }
 
 impl ExcludeList {
     pub fn parse(text: &str) -> ExcludeList {
-        let patterns = text
+        let lines: Vec<&str> = text
             .lines()
             .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .filter_map(Pattern::new)
+            .filter(|l| !l.is_empty())
             .collect();
-        ExcludeList { patterns }
+        let patterns = lines
+            .iter()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| Pattern::new(l))
+            .collect();
+        // A comment is `#` and a space, or `#` alone; `#recycle` is a name nobody
+        // meant as a comment.
+        let dead = lines
+            .iter()
+            .filter(|l| {
+                l.len() > 1 && l.starts_with('#') && !l[1..].starts_with(char::is_whitespace)
+            })
+            .map(|l| l.to_string())
+            .collect();
+        ExcludeList { patterns, dead }
     }
 
     pub fn lines(&self) -> Vec<String> {
         self.patterns.iter().map(|p| p.text.clone()).collect()
+    }
+
+    /// The `#` lines that look like names: comments to MPD, dead to their writer.
+    pub fn dead(&self) -> Vec<String> {
+        self.dead.clone()
     }
 
     /// The first line that matches the name.
@@ -95,11 +115,11 @@ impl InForce {
             .find_map(|(dir, list)| list.matches(name).map(|line| (dir.as_str(), line)))
     }
 
-    /// Every list in force with its lines, outermost first.
-    pub fn lines(&self) -> Vec<(String, Vec<String>)> {
+    /// Every list in force with its lines and its dead lines, outermost first.
+    pub fn lines(&self) -> Vec<(String, Vec<String>, Vec<String>)> {
         self.lists
             .iter()
-            .map(|(dir, list)| (dir.clone(), list.lines()))
+            .map(|(dir, list)| (dir.clone(), list.lines(), list.dead()))
             .collect()
     }
 }
@@ -115,8 +135,10 @@ mod tests {
     #[test]
     fn a_list_is_parsed_as_mpd_parses_it() {
         // A line starting with # is a comment, so Synology's bin needs the bracket.
-        let list = ExcludeList::parse("  *.iso  \n\n# a comment\n99*\n#recycle\n[#]recycle\n  \n");
+        let list =
+            ExcludeList::parse("  *.iso  \n\n# a comment\n99*\n#recycle\n[#]recycle\n#\n  \n");
         assert_eq!(list.lines(), ["*.iso", "99*", "[#]recycle"]);
+        assert_eq!(list.dead(), ["#recycle"]);
         assert_eq!(list.matches(name("x.iso")), Some("*.iso"));
         assert_eq!(list.matches(name("99 - track.flac")), Some("99*"));
         assert_eq!(list.matches(name("#recycle")), Some("[#]recycle"));
@@ -150,10 +172,11 @@ mod tests {
         assert_eq!(
             in_force.lines(),
             vec![
-                (String::new(), vec!["*.iso".to_string()]),
+                (String::new(), vec!["*.iso".to_string()], vec![]),
                 (
                     "NAS".to_string(),
-                    vec!["*.mov".to_string(), "*.iso".to_string()]
+                    vec!["*.mov".to_string(), "*.iso".to_string()],
+                    vec![]
                 ),
             ]
         );

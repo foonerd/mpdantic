@@ -107,34 +107,61 @@ impl Connection {
     }
 }
 
-/// The decoders of an MPD: its version, its plugins, and every suffix they claim,
-/// lowercased.
+/// The decoders of an MPD: the protocol version its greeting names, its plugins with
+/// what each claims, every suffix lowercased, and the suffixes only the ffmpeg
+/// plugin claims (libavformat's whole list, text and subtitles included).
 #[derive(Clone, Debug)]
 pub struct Decoders {
-    pub version: String,
-    pub plugins: Vec<String>,
+    pub protocol: String,
+    pub plugins: Vec<(String, BTreeSet<String>)>,
     pub suffixes: BTreeSet<String>,
+    pub ffmpeg_only: BTreeSet<String>,
+}
+
+impl Decoders {
+    /// From the plugins and their suffixes, the rest derived.
+    pub fn from_plugins(protocol: String, plugins: Vec<(String, BTreeSet<String>)>) -> Decoders {
+        let suffixes: BTreeSet<String> = plugins
+            .iter()
+            .flat_map(|(_, s)| s.iter().cloned())
+            .collect();
+        let others: BTreeSet<String> = plugins
+            .iter()
+            .filter(|(name, _)| name != "ffmpeg")
+            .flat_map(|(_, s)| s.iter().cloned())
+            .collect();
+        let ffmpeg_only = plugins
+            .iter()
+            .filter(|(name, _)| name == "ffmpeg")
+            .flat_map(|(_, s)| s.iter().cloned())
+            .filter(|s| !others.contains(s))
+            .collect();
+        Decoders {
+            protocol,
+            plugins,
+            suffixes,
+            ffmpeg_only,
+        }
+    }
 }
 
 /// What the running MPD says it decodes.
 pub fn decoders(address: &Address) -> Result<Decoders, String> {
     let mut c = connect(address)?;
     let lines = c.command("decoders")?;
-    let mut out = Decoders {
-        version: c.version.clone(),
-        plugins: Vec::new(),
-        suffixes: BTreeSet::new(),
-    };
+    let mut plugins: Vec<(String, BTreeSet<String>)> = Vec::new();
     for (key, value) in lines {
         match key.as_str() {
-            "plugin" => out.plugins.push(value),
+            "plugin" => plugins.push((value, BTreeSet::new())),
             "suffix" => {
-                out.suffixes.insert(value.to_lowercase());
+                if let Some((_, suffixes)) = plugins.last_mut() {
+                    suffixes.insert(value.to_lowercase());
+                }
             }
             _ => {}
         }
     }
-    Ok(out)
+    Ok(Decoders::from_plugins(c.version.clone(), plugins))
 }
 
 /// When MPD cannot be asked: the suffixes Volumio's MPD build commonly claims, so the
@@ -145,9 +172,10 @@ pub fn assumed() -> Decoders {
         "aif", "aiff", "aifc", "wv", "ape", "mpc", "dsf", "dff", "dst", "wma", "tta", "mka",
     ];
     Decoders {
-        version: String::new(),
+        protocol: String::new(),
         plugins: Vec::new(),
         suffixes: SUFFIXES.iter().map(|s| s.to_string()).collect(),
+        ffmpeg_only: BTreeSet::new(),
     }
 }
 
@@ -169,7 +197,7 @@ pub mod tests {
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     let answer = match line.trim() {
-                        "decoders" => "plugin: mad\nsuffix: mp3\nsuffix: mp2\nmime_type: audio/mpeg\nplugin: ffmpeg\nsuffix: FLAC\nsuffix: mkv\nOK\n".to_string(),
+                        "decoders" => "plugin: mad\nsuffix: mp3\nsuffix: mp2\nmime_type: audio/mpeg\nplugin: flac\nsuffix: flac\nplugin: ffmpeg\nsuffix: FLAC\nsuffix: mkv\nsuffix: txt\nOK\n".to_string(),
                         other => format!("ACK [5@0] {{}} unknown command \"{other}\"\n"),
                     };
                     let _ = stream.write_all(answer.as_bytes());
@@ -196,11 +224,22 @@ pub mod tests {
     fn the_decoders_are_read_from_the_running_mpd_lowercased() {
         let address = fake_mpd("OK MPD 0.24.6\n");
         let d = decoders(&address).unwrap();
-        assert_eq!(d.version, "0.24.6");
-        assert_eq!(d.plugins, ["mad", "ffmpeg"]);
+        assert_eq!(d.protocol, "0.24.6");
+        assert_eq!(
+            d.plugins
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["mad", "flac", "ffmpeg"]
+        );
         assert_eq!(
             d.suffixes.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["flac", "mkv", "mp2", "mp3"]
+            ["flac", "mkv", "mp2", "mp3", "txt"]
+        );
+        // flac is ffmpeg's too, but MPD's own flac plugin claims it first.
+        assert_eq!(
+            d.ffmpeg_only.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["mkv", "txt"]
         );
         let mut c = connect(&address).unwrap();
         assert_eq!(c.version, "0.24.6");
@@ -218,10 +257,27 @@ pub mod tests {
         assert!(decoders(&Address::Tcp("127.0.0.1:1".to_string())).is_err());
     }
 
+    /// Decoders from a list of plugins and their suffixes, for other modules' tests.
+    pub fn decoders_of(plugins: &[(&str, &[&str])]) -> Decoders {
+        Decoders::from_plugins(
+            "0.24.0".to_string(),
+            plugins
+                .iter()
+                .map(|(name, suffixes)| {
+                    (
+                        name.to_string(),
+                        suffixes.iter().map(|s| s.to_string()).collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     #[test]
     fn the_assumed_set_is_audio_without_video() {
         let d = assumed();
         assert!(d.suffixes.contains("flac"));
         assert!(!d.suffixes.contains("mkv"));
+        assert!(d.ffmpeg_only.is_empty());
     }
 }
