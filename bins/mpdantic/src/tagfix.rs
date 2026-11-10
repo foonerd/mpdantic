@@ -689,8 +689,76 @@ fn not_here(kind: &Kind, format: &str) -> String {
     format!("a {kind:?} block is not written in a {format} file")
 }
 
-/// The changes applied to the file through lofty and the file saved.
+/// The bytes of the file after its leading tags: the audio, which a tag write must
+/// leave as it is. For FLAC the bytes after the metadata blocks (an ID3v2 tag before
+/// the marker skipped); for the formats that carry ID3v2 at the front, the bytes
+/// after that tag; none for the formats whose tag sits at the end, which lofty
+/// rewrites whole in memory.
+pub fn audio_after_tags(path: &Path, format: &str) -> Result<Option<u64>, String> {
+    use std::io::Read as _;
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut head = [0u8; 10];
+    let got = file.read(&mut head).map_err(|e| e.to_string())?;
+    let mut pos: u64 = 0;
+    if got >= 10 && &head[0..3] == b"ID3" {
+        // A synchsafe size, the header, and a footer when the flag says so.
+        let size = ((head[6] as u64) << 21)
+            | ((head[7] as u64) << 14)
+            | ((head[8] as u64) << 7)
+            | (head[9] as u64);
+        pos = 10 + size + if head[5] & 0x10 != 0 { 10 } else { 0 };
+    }
+    match format {
+        "flac" => {
+            file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+            let mut marker = [0u8; 4];
+            file.read_exact(&mut marker).map_err(|e| e.to_string())?;
+            if &marker != b"fLaC" {
+                return Err("not a FLAC stream".to_string());
+            }
+            pos += 4;
+            loop {
+                let mut header = [0u8; 4];
+                file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+                file.read_exact(&mut header)
+                    .map_err(|_| "the metadata runs past the end of the file".to_string())?;
+                let block_len =
+                    ((header[1] as u64) << 16) | ((header[2] as u64) << 8) | header[3] as u64;
+                pos += 4 + block_len;
+                if header[0] & 0x80 != 0 {
+                    break;
+                }
+            }
+            Ok(Some(len.saturating_sub(pos)))
+        }
+        "mp3" | "aac" | "ape" | "mpc" => Ok(Some(len.saturating_sub(pos))),
+        _ => Ok(None),
+    }
+}
+
+/// The changes applied to the file through lofty and the file saved, with the audio
+/// checked to be there before and the same length after. A file with no audio after
+/// its tags is not written: lofty's writer truncates such a file when the tag shrinks
+/// (its `replace_range` fast path, lofty 0.25.5), and there is nothing in it to keep.
 pub fn apply_file(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), String> {
+    let before = audio_after_tags(path, format)?;
+    if before == Some(0) {
+        return Err("no audio after the tags; not written".to_string());
+    }
+    write_changes(path, format, changes)?;
+    let after = audio_after_tags(path, format)?;
+    if before != after {
+        return Err(format!(
+            "the audio is not the same length after the write ({} bytes, then {}); the file needs a look",
+            before.unwrap_or(0),
+            after.unwrap_or(0)
+        ));
+    }
+    Ok(())
+}
+
+fn write_changes(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -1183,6 +1251,83 @@ pub mod tests {
         assert_eq!(seen.title, ["Title"]);
         assert_eq!(seen.date, ["1999"]);
         assert_eq!(seen.track, ["7"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_with_no_audio_after_its_tags_is_not_written_and_a_real_one_keeps_its_audio() {
+        let dir = folder("audio");
+        // The bare metadata the reader tests build: no audio after it. lofty writes it
+        // once and truncates it on a shrink; here it is refused before either.
+        fs::write(
+            dir.join("bare.flac"),
+            flac_bytes(44100, 44100, &[("TITLE", "One")]),
+        )
+        .unwrap();
+        assert_eq!(
+            audio_after_tags(&dir.join("bare.flac"), "flac").unwrap(),
+            Some(0)
+        );
+        let change = vec![KeyChange {
+            kind: Kind::VorbisComments,
+            key: "TITLE".into(),
+            before: vec!["One".into()],
+            after: vec!["T".into()],
+        }];
+        let err = apply_file(&dir.join("bare.flac"), "flac", &change).unwrap_err();
+        assert!(err.contains("no audio after the tags"), "{err}");
+        assert_eq!(
+            fs::read(dir.join("bare.flac")).unwrap(),
+            flac_bytes(44100, 44100, &[("TITLE", "One")]),
+            "untouched"
+        );
+        // A real file: the audio measured, the same length after a grow and a shrink.
+        fs::write(dir.join("real.flac"), real_flac(&[("TITLE", "One")])).unwrap();
+        let audio = audio_after_tags(&dir.join("real.flac"), "flac").unwrap();
+        assert!(audio.unwrap() > 0);
+        let grow = vec![KeyChange {
+            kind: Kind::VorbisComments,
+            key: "TITLE".into(),
+            before: vec!["One".into()],
+            after: vec!["A rather long title to make the block grow".into()],
+        }];
+        apply_file(&dir.join("real.flac"), "flac", &grow).unwrap();
+        apply_file(&dir.join("real.flac"), "flac", &change).unwrap();
+        assert_eq!(
+            audio_after_tags(&dir.join("real.flac"), "flac").unwrap(),
+            audio
+        );
+        // An MP3: the frame after the tag is the audio.
+        let mut mp3 = Vec::new();
+        let mut tag = Id3v2Tag::new();
+        tag.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::Valid(Cow::Owned("TIT2".to_string())),
+            TextEncoding::UTF8,
+            "One".to_string(),
+        )));
+        tag.dump_to(&mut mp3, WriteOptions::default()).unwrap();
+        mp3.extend_from_slice(&mpeg_frame());
+        fs::write(dir.join("a.mp3"), &mp3).unwrap();
+        assert_eq!(
+            audio_after_tags(&dir.join("a.mp3"), "mp3").unwrap(),
+            Some(417)
+        );
+        let mp3_change = vec![KeyChange {
+            kind: Kind::Id3v2,
+            key: "TIT2".into(),
+            before: vec!["One".into()],
+            after: vec!["A rather long title to make the tag grow".into()],
+        }];
+        apply_file(&dir.join("a.mp3"), "mp3", &mp3_change).unwrap();
+        assert_eq!(
+            audio_after_tags(&dir.join("a.mp3"), "mp3").unwrap(),
+            Some(417)
+        );
+        // Formats whose tag sits at the end are not measured.
+        assert_eq!(
+            audio_after_tags(&dir.join("a.mp3"), "wavpack").unwrap(),
+            None
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
