@@ -2,7 +2,7 @@
 // The plugin's pure parts, with no dependency on the player: what the tests exercise
 // and index.js uses. Nothing here reads a file or talks to the player.
 
-const DEFAULT_PORT = 8030;
+const DEFAULT_PORT = 6218;
 
 // A port as typed: an integer from 1024 to 65535.
 function validatePort(value) {

@@ -6,7 +6,7 @@
 use serde::Serialize;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Entries in one reply unless asked otherwise, and the most that can be asked.
 pub const LIMIT_DEFAULT: usize = 500;
@@ -45,6 +45,11 @@ pub enum ListError {
 impl Library {
     pub fn new(music: PathBuf) -> Library {
         Library { music }
+    }
+
+    /// MPD's music directory.
+    pub fn music(&self) -> &Path {
+        &self.music
     }
 
     /// A path in MPD's form, checked and trimmed: relative, no empty, `.` or `..`

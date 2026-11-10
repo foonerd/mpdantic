@@ -10,6 +10,9 @@ publish.workspace = true
 # The API's JSON: the listings and the status out, the shell's settings in.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# fnmatch, the matcher MPD uses for .mpdignore, so a pattern matches here what it
+# matches there.
+libc = "0.2"
 
 [lints]
 workspace = true

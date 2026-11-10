@@ -1,17 +1,23 @@
 //! The core of MPDantic: one daemon, started by the plugin as its own systemd
 //! unit, that audits and repairs the library and serves the management
 //! interface. At this version it serves the pages, the library one folder at a
-//! time, and its status.
+//! time, the `.mpdignore` analysis of a folder as a job, and its status.
 //!
-//! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--version]`
+//! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--version]`
 //!
 //! `DIR` under `--run` holds `status.json` (`/run/mpdantic` unless given);
 //! `--settings` is the file the plugin writes, with the port
 //! (`/data/configuration/system_controller/mpdantic/settings.json` unless given,
 //! the default port when the file is not there); `--music` is MPD's music
-//! directory (`/var/lib/mpd/music` unless given).
+//! directory (`/var/lib/mpd/music` unless given); `--mpd` is where MPD listens,
+//! a socket path or host:port (`/run/mpd/socket` unless given).
 
+mod analyse;
+mod classify;
+mod ignore;
+mod jobs;
 mod library;
+mod mpd;
 mod serve;
 mod status;
 
@@ -23,23 +29,25 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use jobs::Jobs;
 use library::Library;
 use status::Status;
 
 /// The version the workspace carries; `--version` and the status say it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The pages' port when the settings say nothing.
-const DEFAULT_PORT: u16 = 8030;
+const DEFAULT_PORT: u16 = 6218;
 
 /// What the command line said.
 struct Args {
     run: PathBuf,
     settings: PathBuf,
     music: PathBuf,
+    mpd: mpd::Address,
 }
 
 fn usage() -> ! {
-    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--version]");
+    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--version]");
     process::exit(64);
 }
 
@@ -48,6 +56,7 @@ fn args() -> Args {
         run: PathBuf::from("/run/mpdantic"),
         settings: PathBuf::from("/data/configuration/system_controller/mpdantic/settings.json"),
         music: PathBuf::from("/var/lib/mpd/music"),
+        mpd: mpd::Address::parse("/run/mpd/socket"),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -55,6 +64,12 @@ fn args() -> Args {
             "--run" => out.run = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--settings" => out.settings = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--music" => out.music = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
+            "--mpd" => {
+                out.mpd = it
+                    .next()
+                    .map(|s| mpd::Address::parse(&s))
+                    .unwrap_or_else(|| usage())
+            }
             "--version" => {
                 println!("mpdantic {VERSION}");
                 process::exit(0);
@@ -110,13 +125,21 @@ fn main() {
     let shared = Arc::new(serve::Shared {
         status: status.clone(),
         library: Library::new(args.music.clone()),
+        jobs: Arc::new(Jobs::new()),
+        mpd: args.mpd.clone(),
+        decoders: Mutex::new(None),
     });
     // The pages. A port that cannot be taken is said in the status, and the core stays
     // up so the plugin's button can say it too; the unit is not restarted in a loop.
     let _server = match serve::start(port, shared) {
         Ok(server) => {
             status.lock().unwrap_or_else(|e| e.into_inner()).port = Some(server.port);
-            eprintln!("mpdantic {VERSION}: the pages on port {}", server.port);
+            eprintln!(
+                "mpdantic {VERSION}: the pages on port {}, the library at {}, MPD at {}",
+                server.port,
+                args.music.display(),
+                args.mpd
+            );
             Some(server)
         }
         Err(e) => {
@@ -152,8 +175,8 @@ mod tests {
     #[test]
     fn the_port_comes_from_the_settings_or_is_the_default_when_there_are_none() {
         assert_eq!(
-            port_from(&temp_file("settings.json", Some("{ \"port\": 8031 }\n"))),
-            Ok(8031)
+            port_from(&temp_file("settings.json", Some("{ \"port\": 6219 }\n"))),
+            Ok(6219)
         );
         assert_eq!(
             port_from(&temp_file("missing.json", None)),

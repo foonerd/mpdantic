@@ -6,11 +6,13 @@ MPDantic is a Volumio 4 plugin that audits and repairs a music library for MPD, 
 
 ## Status
 
-In design. There is nothing to install yet: the repository carries the core, which serves the pages and the library one folder at a time, the shell that starts it and announces the pages on the network, and the pipeline that builds, checks and signs a release. The first release will appear on the releases page and in the changelog.
+In design. There is nothing to install yet: the repository carries the core, which serves the pages, the library one folder at a time and the first analysis, the shell that starts it and announces the pages on the network, and the pipeline that builds, checks and signs a release. The first release will appear on the releases page and in the changelog.
 
 ## The pages
 
-The core serves them on a port of the player (8030 unless set on the settings page), from its memory, for any browser on the network: `http://<player>:8030/`. The settings page opens them inside Volumio's own page or in a tab of their own, and shows the address; on the network they are announced as "MPDantic on <player>" for anything that lists Bonjour services. The first page is the library as MPD sees it, folder by folder from the roots (`NAS`, `USB`, `INTERNAL`), read on request one directory at a time; it never asks for the whole library.
+The core serves them on a port of the player (6218 unless set on the settings page), from its memory, for any browser on the network: `http://<player>:6218/`. The settings page opens them inside Volumio's own page or in a tab of their own, and shows the address; on the network they are announced as "MPDantic on <player>" for anything that lists Bonjour services. The first page is the library as MPD sees it, folder by folder from the roots (`NAS`, `USB`, `INTERNAL`), read on request one directory at a time; it never asks for the whole library.
+
+Under the listing, the `.mpdignore` analysis of the folder in hand: a job walks everything under it, one directory at a time, and says what MPD's update would meet there by class (audio, CUE sheets, playlists, images, archives MPD would open and walk inside, video containers its ffmpeg decoder happens to claim, the folders a NAS writes for itself, the sidecar files a desktop leaves) and which `.mpdignore` lines, already in force from the root down, keep what out. It suggests the lines that would keep the junk out, each with its reason, its count and examples. The audio suffixes come from the running MPD's own decoder list, so the analysis matches the MPD on the player; the matching is the same `fnmatch` MPD uses. Nothing is written from the page yet.
 
 ## What it will do
 
@@ -35,7 +37,7 @@ Two parts in one zip, one copy of the core per Volumio architecture (`arm`, `arm
 
 Every release is built by GitHub Actions from a tag: the check, the cross builds, the zip with `MANIFEST` and its Ed25519 signature inside and `SHA256SUMS` with its signature beside, published as a pre-release and promoted by hand once tried. `build.json` in the zip names the commit.
 
-To work on it: `scripts/check.sh` is the workshop pass (format, lints, tests, docs, the shell scripts, the plugin's files and tests, the pages' scripts), `scripts/ship.sh` the cross builds, `scripts/package.sh` the zip. The Rust toolchain is pinned by `rust-toolchain.toml`; Node is needed only for the plugin's checks. The core runs on a workstation too, for the pages against any folder: `mpdantic --run /tmp/mpdantic --music /path/to/music`.
+To work on it: `scripts/check.sh` is the workshop pass (format, lints, tests, docs, the shell scripts, the plugin's files and tests, the pages' scripts), `scripts/ship.sh` the cross builds, `scripts/package.sh` the zip. The Rust toolchain is pinned by `rust-toolchain.toml`; Node is needed only for the plugin's checks. The core runs on a workstation too, for the pages against any folder: `mpdantic --run /tmp/mpdantic --music /path/to/music --mpd 127.0.0.1:6600` (without an MPD to ask, the analysis assumes the usual audio suffixes and says so).
 
 ## Licence
 

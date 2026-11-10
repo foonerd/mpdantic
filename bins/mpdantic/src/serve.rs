@@ -2,7 +2,7 @@
 //! a browser anywhere on the network: an HTTP/1.0 server on the standard library,
 //! one thread per connection with a cap on how many at once, every response closed
 //! when written. The page is one file built into the binary; it asks the API for the
-//! status and for one directory's listing at a time.
+//! status, for one directory's listing at a time, and for the jobs it starts.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::analyse::{self, DecoderNote};
+use crate::jobs::Jobs;
 use crate::library::{self, Library, ListError};
+use crate::mpd::{self, Address, Decoders};
 use crate::status::Status;
 
 /// The page, whole.
@@ -21,13 +24,56 @@ const PAGE: &str = include_str!("../assets/index.html");
 /// Connections answered at once; the rest wait in the listen queue, and past that are
 /// told to come back.
 const AT_ONCE: usize = 8;
-/// A request head longer than this is dropped.
+/// A request head longer than this is dropped; a body longer than this refused.
 const MAX_HEAD: usize = 16384;
+const MAX_BODY: usize = 65536;
 
-/// What the routes read.
+/// What the routes read and start.
 pub struct Shared {
     pub status: Arc<Mutex<Status>>,
     pub library: Library,
+    pub jobs: Arc<Jobs>,
+    pub mpd: Address,
+    /// The decoders last read, with where they came from.
+    pub decoders: Mutex<Option<(DecoderNote, Decoders)>>,
+}
+
+impl Shared {
+    /// The running MPD's decoders, or the assumed set when it cannot be asked; kept
+    /// for the page.
+    pub fn decoders(&self) -> (DecoderNote, Decoders) {
+        let (note, decoders) = match mpd::decoders(&self.mpd) {
+            Ok(d) => (
+                DecoderNote {
+                    source: "mpd".to_string(),
+                    count: d.suffixes.len(),
+                    detail: format!("MPD {}, {} plugins", d.version, d.plugins.len()),
+                },
+                d,
+            ),
+            Err(e) => {
+                let d = mpd::assumed();
+                (
+                    DecoderNote {
+                        source: "assumed".to_string(),
+                        count: d.suffixes.len(),
+                        detail: format!("MPD could not be asked: {e}"),
+                    },
+                    d,
+                )
+            }
+        };
+        let kept = (
+            DecoderNote {
+                source: note.source.clone(),
+                count: note.count,
+                detail: note.detail.clone(),
+            },
+            decoders.clone(),
+        );
+        *self.decoders.lock().unwrap_or_else(|e| e.into_inner()) = Some(kept);
+        (note, decoders)
+    }
 }
 
 /// The server, alive while it is held.
@@ -80,81 +126,170 @@ pub fn start(port: u16, shared: Arc<Shared>) -> Result<Server, String> {
     })
 }
 
+/// A request as read: the method, the path, the query, the body.
+struct Request {
+    method: String,
+    path: String,
+    query: String,
+    body: Vec<u8>,
+}
+
 /// One request answered and the connection closed.
 fn serve(mut stream: TcpStream, shared: &Shared) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-    let Some(head) = read_head(&mut stream) else {
-        return;
-    };
-    let request_line = head.lines().next().unwrap_or("");
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("/");
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let head_only = method == "HEAD";
-    if method != "GET" && !head_only {
-        respond(
-            &mut stream,
-            405,
-            "application/json",
-            &error("method not allowed"),
-            head_only,
-        );
-        return;
-    }
-    match path {
-        "/" | "/index.html" => {
+    let request = match read_request(&mut stream) {
+        Ok(r) => r,
+        Err(code) => {
             respond(
                 &mut stream,
-                200,
-                "text/html; charset=utf-8",
-                PAGE,
-                head_only,
+                code,
+                "application/json",
+                &error(reason(code)),
+                false,
             );
+            return;
         }
-        "/api/status" => {
+    };
+    let head_only = request.method == "HEAD";
+    let (code, content_type, body) = route(shared, &request);
+    respond(&mut stream, code, content_type, &body, head_only);
+}
+
+/// The routes: what each answers, as (code, content type, body).
+fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
+    let json = "application/json";
+    let get = r.method == "GET" || r.method == "HEAD";
+    let job_id = r
+        .path
+        .strip_prefix("/api/jobs/")
+        .and_then(|s| s.parse::<u64>().ok());
+    match (r.method.as_str(), r.path.as_str()) {
+        (_, "/") | (_, "/index.html") if get => (200, "text/html; charset=utf-8", PAGE.to_string()),
+        (_, "/api/status") if get => {
             let body = shared
                 .status
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .json();
-            respond(&mut stream, 200, "application/json", &body, head_only);
+            (200, json, body)
         }
-        "/api/list" => {
-            let (code, body) = list(&shared.library, query);
-            respond(&mut stream, code, "application/json", &body, head_only);
+        (_, "/api/list") if get => {
+            let (code, body) = list(&shared.library, &r.query);
+            (code, json, body)
         }
-        _ => respond(
-            &mut stream,
-            404,
-            "application/json",
-            &error("not found"),
-            head_only,
-        ),
+        (_, "/api/decoders") if get => {
+            let (note, decoders) = shared.decoders();
+            let body = serde_json::json!({
+                "source": note.source, "detail": note.detail,
+                "plugins": decoders.plugins, "suffixes": decoders.suffixes,
+            })
+            .to_string()
+                + "\n";
+            (200, json, body)
+        }
+        ("POST", "/api/jobs") => {
+            let (code, body) = start_job(shared, &r.body);
+            (code, json, body)
+        }
+        (_, "/api/jobs") if get => match shared.jobs.current() {
+            Some(job) => (200, json, job.to_string() + "\n"),
+            None => (404, json, error("no job yet")),
+        },
+        (_, _) if job_id.is_some() && get => match shared.jobs.get(job_id.unwrap_or(0)) {
+            Some(job) => (200, json, job.to_string() + "\n"),
+            None => (404, json, error("no such job")),
+        },
+        ("DELETE", _) if job_id.is_some() => {
+            if shared.jobs.cancel(job_id.unwrap_or(0)) {
+                (204, json, String::new())
+            } else {
+                (404, json, error("no such running job"))
+            }
+        }
+        (_, "/")
+        | (_, "/index.html")
+        | (_, "/api/status")
+        | (_, "/api/list")
+        | (_, "/api/decoders") => (405, json, error("method not allowed")),
+        _ => (404, json, error("not found")),
     }
 }
 
-/// The request head, up to the blank line; none when the client sends nothing
-/// usable.
-fn read_head(stream: &mut TcpStream) -> Option<String> {
+/// `POST /api/jobs` with `{ "kind": "ignore", "path": "NAS/Jazz" }`.
+fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (400, error("the body is not JSON"));
+    };
+    let kind = request["kind"].as_str().unwrap_or("");
+    let path = request["path"].as_str().unwrap_or("").to_string();
+    if kind != "ignore" {
+        return (400, error("the kind is not one the core knows"));
+    }
+    if Library::check(&path).is_none() {
+        return (400, error("not a library path"));
+    }
+    let music = shared.library.music().to_path_buf();
+    let (note, decoders) = shared.decoders();
+    let job_path = path.clone();
+    let started = shared.jobs.start(kind, &path, move |progress, cancel| {
+        analyse::analyse(&music, &job_path, &decoders, note, progress, cancel)
+            .and_then(|report| serde_json::to_value(report).map_err(|e| e.to_string()))
+    });
+    match started {
+        Ok(id) => (202, serde_json::json!({ "id": id }).to_string() + "\n"),
+        Err(_) => (409, error("a job is running; wait for it or cancel it")),
+    }
+}
+
+/// The request head, up to the blank line, and the body its Content-Length names;
+/// the status code when it cannot be read.
+fn read_request(stream: &mut TcpStream) -> Result<Request, u16> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
-    loop {
+    let (head, body_start) = loop {
         match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return None,
+            Ok(0) | Err(_) => return Err(400),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
         }
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            return Some(String::from_utf8_lossy(&buf[..i]).into_owned());
+            break (String::from_utf8_lossy(&buf[..i]).into_owned(), i + 4);
         }
         if let Some(i) = buf.windows(2).position(|w| w == b"\n\n") {
-            return Some(String::from_utf8_lossy(&buf[..i]).into_owned());
+            break (String::from_utf8_lossy(&buf[..i]).into_owned(), i + 2);
         }
         if buf.len() > MAX_HEAD {
-            return None;
+            return Err(431);
+        }
+    };
+    let mut lines = head.lines();
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let target = parts.next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let content_length: usize = lines
+        .filter_map(|l| l.split_once(':'))
+        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.trim().parse().ok())
+        .unwrap_or(0);
+    if content_length > MAX_BODY {
+        return Err(413);
+    }
+    let mut body = buf[body_start..].to_vec();
+    while body.len() < content_length {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return Err(400),
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
         }
     }
+    body.truncate(content_length);
+    Ok(Request {
+        method,
+        path: path.to_string(),
+        query: query.to_string(),
+        body,
+    })
 }
 
 /// `/api/list?path=P&offset=N&limit=N`: one page of one directory.
@@ -233,9 +368,14 @@ fn respond(stream: &mut TcpStream, code: u16, content_type: &str, body: &str, he
 fn reason(code: u16) -> &'static str {
     match code {
         200 => "OK",
+        202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
         _ => "",
@@ -246,12 +386,16 @@ fn reason(code: u16) -> &'static str {
 mod tests {
     use super::*;
     use crate::library::tests::temp_library;
+    use crate::mpd::tests::fake_mpd;
     use std::path::PathBuf;
 
-    fn server(root: PathBuf) -> Server {
+    fn make_server(root: PathBuf, mpd: Address) -> Server {
         let shared = Arc::new(Shared {
             status: Arc::new(Mutex::new(Status::new())),
             library: Library::new(root),
+            jobs: Arc::new(Jobs::new()),
+            mpd,
+            decoders: Mutex::new(None),
         });
         start(0, shared).unwrap()
     }
@@ -268,10 +412,14 @@ mod tests {
         response.split("\r\n\r\n").nth(1).unwrap_or("")
     }
 
+    fn no_mpd() -> Address {
+        Address::Tcp("127.0.0.1:1".to_string())
+    }
+
     #[test]
     fn the_page_is_served_at_the_root_and_a_head_has_no_body() {
         let root = temp_library("serve-page");
-        let server = server(root.clone());
+        let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET / HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         assert!(out.contains("Content-Type: text/html; charset=utf-8"));
@@ -286,7 +434,7 @@ mod tests {
     #[test]
     fn the_status_is_served_as_json() {
         let root = temp_library("serve-status");
-        let server = server(root.clone());
+        let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET /api/status HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
@@ -298,7 +446,7 @@ mod tests {
     #[test]
     fn a_listing_is_served_one_folder_at_a_time_in_pages() {
         let root = temp_library("serve-list");
-        let server = server(root.clone());
+        let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET /api/list HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         let roots: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
@@ -323,7 +471,7 @@ mod tests {
     #[test]
     fn a_bad_path_a_missing_folder_and_a_file_are_refused() {
         let root = temp_library("serve-errors");
-        let server = server(root.clone());
+        let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET /api/list?path=..%2Fx HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 400"), "{out}");
         assert!(body(&out).contains("not a library path"));
@@ -339,9 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_route_is_not_found_and_a_post_is_not_allowed() {
+    fn an_unknown_route_is_not_found_and_a_wrong_method_is_not_allowed() {
         let root = temp_library("serve-routes");
-        let server = server(root.clone());
+        let server = make_server(root.clone(), no_mpd());
         let out = talk(server.port, "GET /nothing HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 404"), "{out}");
         let out = talk(
@@ -349,6 +497,104 @@ mod tests {
             "POST /api/list HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
         );
         assert!(out.starts_with("HTTP/1.0 405"), "{out}");
+        let out = talk(server.port, "GET /api/jobs/7 HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        let out = talk(server.port, "GET /api/jobs HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        let out = talk(server.port, "DELETE /api/jobs/7 HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_decoders_come_from_mpd_or_are_assumed() {
+        let root = temp_library("serve-decoders");
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let out = talk(server.port, "GET /api/decoders HTTP/1.0\r\n\r\n");
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["source"], "mpd");
+        assert_eq!(value["suffixes"][0], "flac");
+        let server = make_server(root.clone(), no_mpd());
+        let out = talk(server.port, "GET /api/decoders HTTP/1.0\r\n\r\n");
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["source"], "assumed");
+        assert!(value["detail"]
+            .as_str()
+            .unwrap()
+            .contains("could not be asked"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_job_is_started_followed_and_its_report_read() {
+        let root = temp_library("serve-job");
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let request = "{\"kind\":\"ignore\",\"path\":\"NAS\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/jobs HTTP/1.0\r\nContent-Length: {}\r\n\r\n{request}",
+                request.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 202"), "{out}");
+        let id = serde_json::from_str::<serde_json::Value>(body(&out)).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let mut job = serde_json::Value::Null;
+        for _ in 0..200 {
+            let out = talk(server.port, &format!("GET /api/jobs/{id} HTTP/1.0\r\n\r\n"));
+            job = serde_json::from_str(body(&out)).unwrap();
+            if job["state"] != "running" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(job["state"], "done", "{job}");
+        assert_eq!(job["result"]["path"], "NAS");
+        assert_eq!(job["result"]["decoders"]["source"], "mpd");
+        assert_eq!(job["result"]["classes"]["audio"]["count"], 2);
+        // The current job, for a page that opens after the job was started.
+        let out = talk(server.port, "GET /api/jobs HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let current: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(current["id"], id);
+        // A bad body, a bad path, a kind the core does not know.
+        let out = talk(
+            server.port,
+            "POST /api/jobs HTTP/1.0\r\nContent-Length: 3\r\n\r\nabc",
+        );
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let bad = "{\"kind\":\"ignore\",\"path\":\"../x\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/jobs HTTP/1.0\r\nContent-Length: {}\r\n\r\n{bad}",
+                bad.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let bad = "{\"kind\":\"tags\",\"path\":\"NAS\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/jobs HTTP/1.0\r\nContent-Length: {}\r\n\r\n{bad}",
+                bad.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_body_too_large_is_refused() {
+        let root = temp_library("serve-large");
+        let server = make_server(root.clone(), no_mpd());
+        let out = talk(
+            server.port,
+            "POST /api/jobs HTTP/1.0\r\nContent-Length: 999999\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 413"), "{out}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

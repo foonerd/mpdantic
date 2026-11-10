@@ -10,7 +10,7 @@ User=volumio
 Group=volumio
 RuntimeDirectory=mpdantic
 RuntimeDirectoryMode=0755
-ExecStart=/data/plugins/system_controller/mpdantic/bin/mpdantic --run /run/mpdantic --settings /data/configuration/system_controller/mpdantic/settings.json --music /var/lib/mpd/music
+ExecStart=/data/plugins/system_controller/mpdantic/bin/mpdantic --run /run/mpdantic --settings /data/configuration/system_controller/mpdantic/settings.json --music /var/lib/mpd/music --mpd /run/mpd/socket
 # Well behind the player's audio thread, which is real-time; a library walk never
 # starves it.
 Nice=10

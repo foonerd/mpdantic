@@ -7,13 +7,13 @@
 <style>
   :root {
     --bg: #f4f4f1; --panel: #ffffff; --line: #d8d8d2; --text: #1d1d1b; --muted: #6b6b66;
-    --accent: #2f7d32; --danger: #b3261e; --hover: #eef5ee;
+    --accent: #2f7d32; --danger: #b3261e; --warn: #9a6200; --hover: #eef5ee; --code: #efefeb;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #1c1c1c; --panel: #262626; --line: #404040; --text: #e6e6e6; --muted: #9a9a9a;
-      --accent: #54b948; --danger: #d64545; --hover: #2e342e;
+      --accent: #54b948; --danger: #d64545; --warn: #e6a23c; --hover: #2e342e; --code: #303030;
       color-scheme: dark;
     }
   }
@@ -32,7 +32,7 @@
   .crumbs a:hover { text-decoration: underline; }
   .crumbs .sep { color: var(--muted); }
   .crumbs .here { font-weight: 600; }
-  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .list, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
   .row:last-child { border-bottom: 0; }
   .row.dir { cursor: pointer; }
@@ -45,8 +45,31 @@
   .foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
   button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
   button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
   .empty, .error { padding: 18px 12px; color: var(--muted); }
   .error { color: var(--danger); }
+  .panel { margin-top: 18px; }
+  .panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .panel .head b { font-size: 15px; }
+  .panel .head .sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .panel .body { padding: 10px 12px 14px; }
+  .progress { color: var(--muted); font-size: 13px; }
+  .progress.bad { color: var(--danger); }
+  .section { margin-top: 14px; }
+  .section h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .section .help { color: var(--muted); font-size: 13px; }
+  table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.kv td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.kv tr:last-child td { border-bottom: 0; }
+  table.kv td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 1px 5px; border-radius: 4px; }
+  .sugg { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .sugg:last-child { border-bottom: 0; }
+  .sugg .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .sugg .why { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .sugg .ex { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; background: var(--line); color: var(--muted); text-transform: uppercase; }
+  .tag.warn { background: var(--warn); color: #fff; }
 </style>
 </head>
 <body>
@@ -60,6 +83,19 @@
   <div class="crumbs" id="crumbs"></div>
   <div class="list" id="list"></div>
   <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden>More</button></div>
+  <div class="panel" id="panel">
+    <div class="head">
+      <b>.mpdignore</b>
+      <span class="sub" id="panel-sub">What MPD's update would meet under this folder, and the lines that would keep the junk out. Read-only.</span>
+      <span class="grow"></span>
+      <button id="analyse">Analyse this folder</button>
+      <button id="cancel" hidden>Cancel</button>
+    </div>
+    <div class="body">
+      <div class="progress" id="progress">Not analysed yet.</div>
+      <div id="report"></div>
+    </div>
+  </div>
 </div>
 <script>
 'use strict';
@@ -86,12 +122,15 @@
     return node;
   };
 
-  async function api(url) {
-    const r = await fetch(url, { cache: 'no-store' });
+  async function api(url, options) {
+    const r = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
+    if (r.status === 204) return null;
     const body = await r.json().catch(() => ({ error: r.statusText }));
     if (!r.ok) throw new Error(body.error || r.statusText);
     return body;
   }
+
+  // ------------------------------------------------------------- the library
 
   function crumbs(path) {
     const box = $('crumbs');
@@ -129,6 +168,7 @@
       ? (shown < current.total ? shown + ' of ' + current.total + ' shown' : current.total + ' entries') + ', ' + dirs + ' folders'
       : '';
     $('more').hidden = !current.more;
+    $('analyse').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
   }
 
   function failed(path, message) {
@@ -173,9 +213,156 @@
     }
   }
 
+  // ------------------------------------------------------------ the analysis
+
+  const CLASSES = {
+    system_folder: 'NAS and system folders', sidecar: 'Sidecar files', archive: 'Archives', video: 'Video containers',
+    audio: 'Audio', cue: 'CUE sheets', playlist: 'Playlists', image: 'Images', other: 'Other', folder: 'Folders'
+  };
+  let job = null;
+
+  function progress(text, bad) {
+    const p = $('progress');
+    p.textContent = text;
+    p.className = 'progress' + (bad ? ' bad' : '');
+  }
+
+  async function analyse() {
+    $('report').textContent = '';
+    try {
+      const started = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ignore', path: current.path }) });
+      follow(started.id);
+    } catch (e) {
+      progress(String(e.message || e), true);
+    }
+  }
+
+  function follow(id) {
+    if (job && job.timer) clearTimeout(job.timer);
+    job = { id, timer: null };
+    $('cancel').hidden = false;
+    $('analyse').disabled = true;
+    poll();
+  }
+
+  async function poll() {
+    if (!job) return;
+    try {
+      const j = await api('/api/jobs/' + job.id);
+      if (j.state === 'running') {
+        progress('Walking ' + (j.path || 'the library') + ': ' + j.directories + ' folders, ' + j.files + ' files, ' + j.seconds + ' s.');
+        job.timer = setTimeout(poll, 1000);
+        return;
+      }
+      ended(j);
+    } catch (e) {
+      progress(String(e.message || e), true);
+      ended(null);
+    }
+  }
+
+  function ended(j) {
+    $('cancel').hidden = true;
+    $('analyse').disabled = false;
+    job = null;
+    if (!j) return;
+    if (j.state === 'failed') { progress('Failed: ' + j.error, true); return; }
+    progress((j.state === 'cancelled' ? 'Cancelled after ' : 'Done in ') + j.seconds + ' s: ' + j.directories + ' folders, ' + j.files + ' files under ' + (j.path || 'the library') + '.');
+    report(j.result);
+  }
+
+  async function cancel() {
+    if (!job) return;
+    try { await api('/api/jobs/' + job.id, { method: 'DELETE' }); } catch (e) { progress(String(e.message || e), true); }
+  }
+
+  function section(parent, title, help) {
+    const s = el('div', 'section');
+    s.appendChild(el('h3', '', title));
+    if (help) s.appendChild(el('div', 'help', help));
+    parent.appendChild(s);
+    return s;
+  }
+
+  function table(parent, rows) {
+    const t = el('table', 'kv');
+    rows.forEach((cells) => {
+      const tr = el('tr');
+      cells.forEach((c, i) => {
+        const td = el('td', i > 0 ? 'num' : '');
+        if (c instanceof Node) td.appendChild(c); else td.textContent = c;
+        tr.appendChild(td);
+      });
+      t.appendChild(tr);
+    });
+    parent.appendChild(t);
+  }
+
+  function report(r) {
+    const box = $('report');
+    box.textContent = '';
+    if (!r) return;
+    const decoders = r.decoders.source === 'mpd'
+      ? 'The decoders of the running MPD: ' + r.decoders.count + ' suffixes, ' + r.decoders.detail + '.'
+      : 'MPD could not be asked for its decoders (' + r.decoders.detail + '); ' + r.decoders.count + ' audio suffixes assumed.';
+    const notes = [decoders];
+    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
+    if (r.too_deep) notes.push(r.too_deep + ' folders were nested too deep to walk.');
+    if (r.cancelled) notes.push('The walk was cancelled: the counts are partial.');
+    const s = section(box, 'Suggested lines', 'Each would go into .mpdignore at ' + (r.path || 'the library root') + ' and cover everything under it. Nothing is written from this page.');
+    if (!r.suggestions.length) {
+      s.appendChild(el('div', 'help', 'Nothing to keep out: MPD meets only music, playlists, sheets and pictures here.'));
+    } else {
+      r.suggestions.forEach((g) => {
+        const d = el('div', 'sugg');
+        const top = el('div', 'top');
+        top.appendChild(el('code', '', g.pattern));
+        top.appendChild(el('span', 'tag' + (g.class === 'video' ? ' warn' : ''), CLASSES[g.class] || g.class));
+        top.appendChild(el('span', '', g.count + (g.count === 1 ? ' entry' : ' entries') + (g.bytes ? ', ' + size(g.bytes) : '')));
+        d.appendChild(top);
+        d.appendChild(el('div', 'why', g.note));
+        if (g.examples.length) d.appendChild(el('div', 'ex', g.examples.join('  |  ')));
+        s.appendChild(d);
+      });
+    }
+    const classes = Object.keys(r.classes).map((k) => [CLASSES[k] || k, String(r.classes[k].count), r.classes[k].bytes ? size(r.classes[k].bytes) : '']);
+    const c = section(box, 'What MPD meets here', notes.join(' '));
+    table(c, classes.length ? classes : [['Nothing', '', '']]);
+    if (r.excluded.count) {
+      const e = section(box, 'Already kept out', r.excluded.count + ' entries match a line in force, so MPD never looks at them.');
+      e.appendChild(el('div', 'ex', r.excluded.examples.join('  |  ')));
+    }
+    const f = section(box, 'Lines in force', r.in_force.length ? 'The .mpdignore files from the root down to this folder, as MPD inherits them.' : 'No .mpdignore from the root down to this folder.');
+    r.in_force.forEach((l) => {
+      const row = el('div', 'sugg');
+      row.appendChild(el('div', 'top', (l.dir || 'the root') + '/.mpdignore'));
+      const lines = el('div', 'ex');
+      l.lines.forEach((line, i) => { if (i) lines.appendChild(document.createTextNode('  |  ')); lines.appendChild(el('code', '', line)); });
+      row.appendChild(lines);
+      f.appendChild(row);
+    });
+    const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
+    if (audio.length) table(section(box, 'Audio by suffix'), audio);
+    if (r.other_suffixes.length) {
+      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. A line by hand would spare the stat.'), r.other_suffixes.map((p) => [p[0].startsWith('(') ? p[0] : '.' + p[0], String(p[1])]));
+    }
+  }
+
+  // The job already there when the page opens, from this device or another: followed
+  // while it runs, shown when it is done.
+  async function resume() {
+    try {
+      const j = await api('/api/jobs');
+      if (j.state === 'running') follow(j.id); else ended(j);
+    } catch (e) { /* no job yet */ }
+  }
+
   $('more').addEventListener('click', () => load(current.path, true));
+  $('analyse').addEventListener('click', analyse);
+  $('cancel').addEventListener('click', cancel);
   window.addEventListener('hashchange', () => load(fromHash(), false));
   load(fromHash(), false);
+  resume();
   status();
   setInterval(status, 5000);
 })();

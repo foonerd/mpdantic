@@ -1,4 +1,4 @@
 {
-  "port": { "type": "string", "value": "8030" },
+  "port": { "type": "string", "value": "6218" },
   "address": { "type": "string", "value": "" }
 }
