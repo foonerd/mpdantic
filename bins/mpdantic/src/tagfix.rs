@@ -1235,6 +1235,23 @@ pub mod tests {
         assert_eq!(b.changes[0].before, ["Two"]);
         assert_eq!(b.changes[1].before, ["Them"]);
         assert_eq!(a.path, "a.flac");
+        // A value no file carries, typed by the user, goes on every file too: the ones
+        // the files carry can all be wrong.
+        let typed = Choice {
+            repairs: Some(&["unify".to_string()]),
+            album: None,
+            album_artist: Some("Bruno Mars"),
+            date: Some("2010"),
+        };
+        let p = plan(&dir, "", &decoders(), &typed).unwrap();
+        assert!(p.changed);
+        for f in &p.files {
+            let aa = f.changes.iter().find(|c| c.key == "ALBUMARTIST").unwrap();
+            assert_eq!(aa.after, ["Bruno Mars"], "{}: {:?}", f.name, f.changes);
+            let d = f.changes.iter().find(|c| c.key == "DATE").unwrap();
+            assert_eq!(d.after, ["2010"], "{}: {:?}", f.name, f.changes);
+        }
+        assert!(p.values.album_artist.iter().all(|v| v.0 != "Bruno Mars"));
         // Unify alone with nothing chosen changes nothing and says what to pick.
         let none = Choice {
             repairs: Some(&["unify".to_string()]),

@@ -105,6 +105,7 @@
   label.repair input { margin: 0; flex: none; position: relative; top: 2px; }
   label.repair select { padding: 2px 6px; font-size: 13px; }
   label.repair.unify { flex-wrap: wrap; gap: 6px 10px; }
+  label.repair.unify input.typed { position: static; flex: 1 1 14em; min-width: 12em; padding: 2px 6px; font-size: 13px; }
   .files { margin-top: 8px; max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; background: var(--panel); }
   pre.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 8px 10px; border-radius: 6px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
   .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
@@ -897,9 +898,29 @@
               o.selected = p[f[0]] === v[0];
               pick.appendChild(o);
             });
+            // A value of the user's own, since the ones the files carry can all be wrong.
+            const own = el('option', '', f[1] + ': type a value');
+            own.value = '\u0000typed';
+            pick.appendChild(own);
+            const typed = el('input');
+            typed.type = 'text';
+            typed.className = 'typed';
+            typed.placeholder = f[1];
+            typed.spellcheck = false;
+            const carried = values.some((v) => v[0] === p[f[0]]);
+            if (p[f[0]] && !carried) { own.selected = true; typed.value = p[f[0]]; } else { typed.hidden = true; }
             if (p[f[0]]) extra[f[0]] = p[f[0]];
-            pick.addEventListener('change', () => { extra[f[0]] = pick.value || null; chosen(); });
+            const commit = () => { const v = typed.value.trim(); if (v && v !== extra[f[0]]) { extra[f[0]] = v; chosen(); } };
+            typed.addEventListener('change', commit);
+            typed.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+            pick.addEventListener('change', () => {
+              if (pick.value === own.value) { typed.hidden = false; typed.focus(); return; }
+              typed.hidden = true;
+              extra[f[0]] = pick.value || null;
+              chosen();
+            });
             row.appendChild(pick);
+            row.appendChild(typed);
           });
           list.appendChild(row);
           return;
