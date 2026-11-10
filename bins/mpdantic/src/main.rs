@@ -33,6 +33,7 @@ mod prefs;
 mod serve;
 mod status;
 mod tagcheck;
+mod tagfix;
 mod tags;
 mod undo;
 mod walk;

@@ -24,13 +24,13 @@ use lofty::musepack::MpcFile;
 use lofty::ogg::{OpusFile, SpeexFile, VorbisFile};
 use lofty::wavpack::WavPackFile;
 use lofty::TextEncoding;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The most of a DSD file's tail read for its tag, as MPD caps it.
 const DSD_TAG_MAX: u64 = 4 * 1024 * 1024;
 
 /// Where a tag block came from.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     VorbisComments,
@@ -429,7 +429,9 @@ fn ilst_block(t: &lofty::mp4::Ilst) -> Block {
     let mut items = Vec::new();
     for atom in t {
         let key = match atom.ident() {
-            AtomIdent::Fourcc(b) => String::from_utf8_lossy(b).into_owned(),
+            // The iTunes atoms start with the byte A9, which is no UTF-8 on its own:
+            // kept as the copyright sign, as the table above names them.
+            AtomIdent::Fourcc(b) => b.iter().map(|&c| c as char).collect::<String>(),
             AtomIdent::Freeform { mean, name } => format!("----:{mean}:{name}"),
         };
         for data in atom.data() {

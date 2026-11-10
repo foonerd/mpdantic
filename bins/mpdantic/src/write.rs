@@ -1,8 +1,8 @@
 //! A batch of writes: prepared without writing, shown whole, confirmed once, applied
-//! with a check that the file is what the preview read, journaled for the undo, and
-//! followed by MPD's update of the folder. Two kinds: `mpdignore`, lines into the
+//! with a check that each file is what the preview read, journaled for the undo, and
+//! followed by MPD's update of the folder. Three kinds: `mpdignore`, lines into the
 //! `.mpdignore` of the folder in hand; `cue`, a sheet's text repaired or the sheet
-//! removed.
+//! removed; `tags`, the tags of the folder's audio files edited key by key.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,17 +18,23 @@ use crate::ignore::Pattern;
 use crate::library::Library;
 use crate::mount::{self, Mount, Mounter, Share, Where};
 use crate::mpd::{self, Decoders};
+use crate::tagfix::{self, FilePlan, KeyChange, Values};
+use crate::tags;
 use crate::undo::{Batch, Entry, Journal};
 
 /// What the page asks for.
 pub struct Request {
     pub kind: String,
-    /// The folder in hand for `mpdignore`; the sheet for `cue`.
+    /// The folder in hand for `mpdignore` and `tags`; the sheet for `cue`.
     pub path: String,
     pub lines: Vec<String>,
-    /// The repairs by id; every one but `remove` when not given.
+    /// The repairs by id; the kind's default set when not given.
     pub repairs: Option<Vec<String>>,
     pub encoding: Option<String>,
+    /// The values every file of the folder gets (`tags`).
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub date: Option<String>,
 }
 
 /// The batch as it would be written, for the page to confirm.
@@ -36,16 +42,16 @@ pub struct Request {
 pub struct Preview {
     pub id: u64,
     pub kind: String,
-    /// The folder the file is in, MPD's form: what is mounted, what MPD updates.
+    /// The folder the files are in, MPD's form: what is mounted, what MPD updates.
     pub path: String,
-    /// The file, MPD's form.
+    /// The file, MPD's form; the folder itself for `tags`.
     pub file: String,
-    /// `write_text` or `remove`.
+    /// `write_text`, `remove` or `tags`.
     pub op: String,
     pub exists: bool,
     /// The file as it is, as text (bytes that are not UTF-8 shown as Latin-1).
     pub before: String,
-    /// The file as it would be; empty when removed.
+    /// The file as it would be; empty when removed, or for `tags`.
     pub after: String,
     /// Whether the write would change anything.
     pub changed: bool,
@@ -71,6 +77,17 @@ pub struct Preview {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
     pub lines_changed: usize,
+    /// The folder's files and their changes (`tags`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FilePlan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Values>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
 }
 
 /// What an apply or an undo did.
@@ -79,6 +96,8 @@ pub struct Applied {
     pub batch: String,
     pub file: String,
     pub written: bool,
+    /// The files written (`tags`); one otherwise.
+    pub count: usize,
     /// MPD's update job for the folder, or why there is none.
     pub updated: Option<u64>,
     pub update_error: Option<String>,
@@ -133,6 +152,37 @@ fn display(bytes: &[u8]) -> String {
     }
 }
 
+fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: String) -> Preview {
+    Preview {
+        id,
+        kind: kind.to_string(),
+        path,
+        file,
+        op: op.to_string(),
+        exists: false,
+        before: String::new(),
+        after: String::new(),
+        changed: false,
+        place,
+        size: 0,
+        mtime: 0,
+        added: Vec::new(),
+        already: Vec::new(),
+        refused: Vec::new(),
+        repairs: Vec::new(),
+        encoding: None,
+        encodings: Vec::new(),
+        remaining: Vec::new(),
+        notes: Vec::new(),
+        lines_changed: 0,
+        files: Vec::new(),
+        values: None,
+        album: None,
+        album_artist: None,
+        date: None,
+    }
+}
+
 /// The batch prepared, nothing written.
 pub fn prepare(
     music: &Path,
@@ -144,6 +194,7 @@ pub fn prepare(
     match req.kind.as_str() {
         "mpdignore" => prepare_lines(music, shares, id, req),
         "cue" => prepare_cue(music, shares, decoders, id, req),
+        "tags" => prepare_tags(music, shares, decoders, id, req),
         _ => Err("the kind is not one the core writes".to_string()),
     }
 }
@@ -214,33 +265,22 @@ fn prepare_lines(
         after.push_str(line);
         after.push('\n');
     }
-    Ok(Preview {
-        id,
-        kind: req.kind.clone(),
-        file: if path.is_empty() {
-            ".mpdignore".to_string()
-        } else {
-            format!("{path}/.mpdignore")
-        },
-        path,
-        op: "write_text".to_string(),
-        exists,
-        before,
-        after,
-        changed: !added.is_empty(),
-        place,
-        size,
-        mtime,
-        added,
-        already,
-        refused,
-        repairs: Vec::new(),
-        encoding: None,
-        encodings: Vec::new(),
-        remaining: Vec::new(),
-        notes: Vec::new(),
-        lines_changed: 0,
-    })
+    let file = if path.is_empty() {
+        ".mpdignore".to_string()
+    } else {
+        format!("{path}/.mpdignore")
+    };
+    let mut p = empty(id, "mpdignore", path, file, "write_text", place);
+    p.exists = exists;
+    p.before = before;
+    p.after = after;
+    p.changed = !added.is_empty();
+    p.size = size;
+    p.mtime = mtime;
+    p.added = added;
+    p.already = already;
+    p.refused = refused;
+    Ok(p)
 }
 
 /// A sheet's repairs, or its removal, against the sheet as it is and the files
@@ -277,33 +317,62 @@ fn prepare_cue(
         encoding: req.encoding.as_deref(),
     };
     let fixed = cuefix::plan(&bytes, &dir, &name, &beside, decoders, &choice)?;
-    Ok(Preview {
-        id,
-        kind: req.kind.clone(),
-        path: folder,
-        file: path,
-        op: if fixed.remove {
-            "remove".to_string()
-        } else {
-            "write_text".to_string()
-        },
-        exists,
-        before: display(&bytes),
-        after: fixed.after,
-        changed: fixed.changed,
-        place,
-        size,
-        mtime,
-        added: Vec::new(),
-        already: Vec::new(),
-        refused: Vec::new(),
-        repairs: fixed.repairs,
-        encoding: fixed.encoding,
-        encodings: fixed.encodings,
-        remaining: fixed.remaining,
-        notes: fixed.notes,
-        lines_changed: fixed.lines_changed,
-    })
+    let op = if fixed.remove { "remove" } else { "write_text" };
+    let mut p = empty(id, "cue", folder, path, op, place);
+    p.exists = exists;
+    p.before = display(&bytes);
+    p.after = fixed.after;
+    p.changed = fixed.changed;
+    p.size = size;
+    p.mtime = mtime;
+    p.repairs = fixed.repairs;
+    p.encoding = fixed.encoding;
+    p.encodings = fixed.encodings;
+    p.remaining = fixed.remaining;
+    p.notes = fixed.notes;
+    p.lines_changed = fixed.lines_changed;
+    Ok(p)
+}
+
+/// The tags of the folder's audio files, each file's changes planned.
+fn prepare_tags(
+    music: &Path,
+    shares: &[Share],
+    decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, String> {
+    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+    let dir = folder_dir(music, &path);
+    if !dir.is_dir() {
+        return Err("no such folder".to_string());
+    }
+    let place = place_text(shares, &path)?;
+    let choice = tagfix::Choice {
+        repairs: req.repairs.as_deref(),
+        album: req
+            .album
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        album_artist: req
+            .album_artist
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        date: req.date.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    };
+    let planned = tagfix::plan(&dir, &path, decoders, &choice)?;
+    let mut p = empty(id, "tags", path.clone(), path, "tags", place);
+    p.exists = true;
+    p.changed = planned.changed;
+    p.repairs = planned.repairs;
+    p.files = planned.files;
+    p.values = Some(planned.values);
+    p.album = choice.album.map(str::to_string);
+    p.album_artist = choice.album_artist.map(str::to_string);
+    p.date = choice.date.map(str::to_string);
+    Ok(p)
 }
 
 /// Where the folder is written: the folder itself for a local root, the mount's
@@ -351,20 +420,37 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+fn files_word(n: usize) -> String {
+    if n == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{n} files")
+    }
+}
+
 /// What the batch did, in a line.
-fn note_for(preview: &Preview) -> String {
+fn note_for(preview: &Preview, written: usize) -> String {
+    let on = || {
+        preview
+            .repairs
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| r.id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     match preview.kind.as_str() {
         "cue" if preview.op == "remove" => format!("sheet {} removed", preview.file),
-        "cue" => format!(
-            "sheet {} repaired: {}",
-            preview.file,
-            preview
-                .repairs
-                .iter()
-                .filter(|r| r.on)
-                .map(|r| r.id)
-                .collect::<Vec<_>>()
-                .join(", ")
+        "cue" => format!("sheet {} repaired: {}", preview.file, on()),
+        "tags" => format!(
+            "tags of {} in {}: {}",
+            files_word(written),
+            if preview.path.is_empty() {
+                "the library root"
+            } else {
+                &preview.path
+            },
+            on()
         ),
         _ => format!(
             "{} {} into {}",
@@ -376,6 +462,13 @@ fn note_for(preview: &Preview) -> String {
             },
             preview.file
         ),
+    }
+}
+
+fn update_after(mpd_address: &mpd::Address, folder: &str) -> (Option<u64>, Option<String>) {
+    match mpd::update(mpd_address, folder) {
+        Ok(n) => (Some(n), None),
+        Err(e) => (None, Some(e)),
     }
 }
 
@@ -392,6 +485,9 @@ pub fn apply(
 ) -> Result<Applied, String> {
     if !preview.changed {
         return Err("nothing to write".to_string());
+    }
+    if preview.kind == "tags" {
+        return apply_tags(music, shares, mounter, journal, mpd_address, preview);
     }
     let ro = music.join(&preview.file);
     let (exists, size, mtime) = stat(&ro);
@@ -421,7 +517,7 @@ pub fn apply(
             kind: preview.kind.clone(),
             path: preview.path.clone(),
             when: now(),
-            note: note_for(preview),
+            note: note_for(preview, 1),
             entries: vec![Entry {
                 path: preview.file.clone(),
                 op: preview.op.clone(),
@@ -441,21 +537,105 @@ pub fn apply(
         mounter.unmount(&mut m);
     }
     let batch = journaled?;
-    let (updated, update_error) = match mpd::update(mpd_address, &preview.path) {
-        Ok(n) => (Some(n), None),
-        Err(e) => (None, Some(e)),
-    };
+    let (updated, update_error) = update_after(mpd_address, &preview.path);
     Ok(Applied {
         batch,
         file: preview.file.clone(),
         written: true,
+        count: 1,
         updated,
         update_error,
     })
 }
 
-/// A batch undone: the file checked to be what the batch left, the before written
-/// back byte for byte or the file removed, the batch marked, MPD told.
+/// The folder's files written one by one through lofty: each checked to be what the
+/// preview read; a file that fails stops the batch there, with the files before it
+/// written and journaled.
+fn apply_tags(
+    music: &Path,
+    shares: &[Share],
+    mounter: &Mounter,
+    journal: &Journal,
+    mpd_address: &mpd::Address,
+    preview: &Preview,
+) -> Result<Applied, String> {
+    let todo: Vec<&FilePlan> = preview
+        .files
+        .iter()
+        .filter(|f| !f.changes.is_empty())
+        .collect();
+    for fp in &todo {
+        let (exists, size, mtime) = stat(&music.join(&fp.path));
+        if !exists || size != fp.size || mtime != fp.mtime {
+            return Err(format!(
+                "{} changed since the preview; preview it again",
+                fp.path
+            ));
+        }
+    }
+    let (dir, mount) = writable(music, shares, mounter, &preview.path)?;
+    let mut entries = Vec::new();
+    let mut failure = None;
+    for fp in &todo {
+        match tagfix::apply_file(&dir.join(&fp.name), &fp.format, &fp.changes) {
+            Ok(()) => {
+                let text = serde_json::to_string(&fp.changes).unwrap_or_default();
+                entries.push(Entry {
+                    path: fp.path.clone(),
+                    op: "tags".to_string(),
+                    before: Some(text.clone()),
+                    before_bytes: None,
+                    after: text,
+                });
+            }
+            Err(e) => {
+                failure = Some(format!("{}: {e}", fp.path));
+                break;
+            }
+        }
+    }
+    if let Some(mut m) = mount {
+        mounter.unmount(&mut m);
+    }
+    let written = entries.len();
+    let batch = if written > 0 {
+        let batch = Batch {
+            id: journal.new_id(),
+            kind: "tags".to_string(),
+            path: preview.path.clone(),
+            when: now(),
+            note: note_for(preview, written),
+            entries,
+            undone: false,
+        };
+        journal.record(&batch)?;
+        Some(batch.id)
+    } else {
+        None
+    };
+    if let Some(e) = failure {
+        return Err(match &batch {
+            Some(id) => format!(
+                "{e}; the {} before it written and journaled as batch {id}",
+                files_word(written)
+            ),
+            None => e,
+        });
+    }
+    let (updated, update_error) = update_after(mpd_address, &preview.path);
+    Ok(Applied {
+        batch: batch.unwrap_or_default(),
+        file: preview.path.clone(),
+        written: true,
+        count: written,
+        updated,
+        update_error,
+    })
+}
+
+/// A batch undone: each file checked to be what the batch left, the before written
+/// back byte for byte or the file removed (or the tags set back key by key), the
+/// batch marked, MPD told.
 pub fn undo(
     music: &Path,
     shares: &[Share],
@@ -469,6 +649,9 @@ pub fn undo(
         .ok_or_else(|| "no such batch".to_string())?;
     if batch.undone {
         return Err("already undone".to_string());
+    }
+    if batch.kind == "tags" {
+        return undo_tags(music, shares, mounter, journal, mpd_address, &batch);
     }
     let Some(entry) = batch.entries.first() else {
         return Err("an empty batch".to_string());
@@ -498,14 +681,86 @@ pub fn undo(
     }
     result?;
     journal.mark_undone(id)?;
-    let (updated, update_error) = match mpd::update(mpd_address, &batch.path) {
-        Ok(n) => (Some(n), None),
-        Err(e) => (None, Some(e)),
-    };
+    let (updated, update_error) = update_after(mpd_address, &batch.path);
     Ok(Applied {
         batch: id.to_string(),
         file: entry.path.clone(),
         written: true,
+        count: 1,
+        updated,
+        update_error,
+    })
+}
+
+/// The tags set back: each key checked to hold what the batch wrote (or what it
+/// held before, so an undo cut short runs again), then the change the other way.
+fn undo_tags(
+    music: &Path,
+    shares: &[Share],
+    mounter: &Mounter,
+    journal: &Journal,
+    mpd_address: &mpd::Address,
+    batch: &Batch,
+) -> Result<Applied, String> {
+    let mut todo: Vec<(String, String, Vec<KeyChange>)> = Vec::new();
+    for entry in &batch.entries {
+        let changes: Vec<KeyChange> =
+            serde_json::from_str(&entry.after).map_err(|e| format!("{}: {e}", entry.path))?;
+        let suffix = classify::suffix(&entry.path).unwrap_or_default();
+        let format = tags::format_of(&suffix).unwrap_or("").to_string();
+        let raw = tags::read(&music.join(&entry.path), &suffix);
+        if let Some(p) = &raw.problem {
+            return Err(format!("{}: {p}; not undone", entry.path));
+        }
+        let mut reverse = Vec::new();
+        for c in changes {
+            let current = tagfix::current_values(&raw, &c.kind, &c.key);
+            if current == c.after {
+                reverse.push(KeyChange {
+                    kind: c.kind,
+                    key: c.key,
+                    before: c.after,
+                    after: c.before,
+                });
+            } else if current != c.before {
+                return Err(format!(
+                    "{}: {} changed since the batch; not undone",
+                    entry.path, c.key
+                ));
+            }
+        }
+        if !reverse.is_empty() {
+            todo.push((entry.path.clone(), format, reverse));
+        }
+    }
+    let (dir, mount) = writable(music, shares, mounter, &batch.path)?;
+    let mut put_back = 0;
+    let mut failure = None;
+    for (path, format, reverse) in &todo {
+        match tagfix::apply_file(&dir.join(file_name(path)), format, reverse) {
+            Ok(()) => put_back += 1,
+            Err(e) => {
+                failure = Some(format!("{path}: {e}"));
+                break;
+            }
+        }
+    }
+    if let Some(mut m) = mount {
+        mounter.unmount(&mut m);
+    }
+    if let Some(e) = failure {
+        return Err(format!(
+            "{e}; {} put back before it, the undo can be run again",
+            files_word(put_back)
+        ));
+    }
+    journal.mark_undone(&batch.id)?;
+    let (updated, update_error) = update_after(mpd_address, &batch.path);
+    Ok(Applied {
+        batch: batch.id.clone(),
+        file: batch.path.clone(),
+        written: true,
+        count: put_back,
         updated,
         update_error,
     })
@@ -516,6 +771,7 @@ mod tests {
     use super::*;
     use crate::mount::tests::sample_config;
     use crate::mpd::tests::{decoders_of, fake_mpd};
+    use crate::tagfix::tests::{faulty_flac, real_flac};
     use std::sync::{Arc, Mutex};
 
     fn temp(name: &str) -> PathBuf {
@@ -539,6 +795,9 @@ mod tests {
             lines: lines.iter().map(|s| s.to_string()).collect(),
             repairs: None,
             encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
         }
     }
 
@@ -549,6 +808,22 @@ mod tests {
             lines: Vec::new(),
             repairs: repairs.map(|r| r.iter().map(|s| s.to_string()).collect()),
             encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
+        }
+    }
+
+    fn folder_tags(path: &str, repairs: Option<&[&str]>, album: Option<&str>) -> Request {
+        Request {
+            kind: "tags".into(),
+            path: path.into(),
+            lines: Vec::new(),
+            repairs: repairs.map(|r| r.iter().map(|s| s.to_string()).collect()),
+            encoding: None,
+            album: album.map(str::to_string),
+            album_artist: None,
+            date: None,
         }
     }
 
@@ -609,20 +884,9 @@ mod tests {
         assert_eq!(p.place, "the share multimedia, folder Dune");
         assert!(prepare(&music, &shares, &d, 3, &request("../x", &["a"])).is_err());
         assert!(prepare(&music, &shares, &d, 3, &request("INTERNAL/Rock", &["a"])).is_err());
-        assert!(prepare(
-            &music,
-            &shares,
-            &d,
-            3,
-            &Request {
-                kind: "tags".into(),
-                path: "INTERNAL".into(),
-                lines: vec![],
-                repairs: None,
-                encoding: None,
-            }
-        )
-        .is_err());
+        let mut odd = request("INTERNAL", &[]);
+        odd.kind = "nothing".into();
+        assert!(prepare(&music, &shares, &d, 3, &odd).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -916,6 +1180,122 @@ mod tests {
         assert!(u.written);
         assert_eq!(fs::read(music.join("INTERNAL/Jazz/b.cue")).unwrap(), text);
         assert!(journal.load(&a.batch).unwrap().undone);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_tags_of_a_folder_are_written_file_by_file_journaled_and_set_back() {
+        let dir = temp("tags");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        fs::write(music.join("INTERNAL/Jazz/a.flac"), faulty_flac()).unwrap();
+        fs::write(
+            music.join("INTERNAL/Jazz/b.flac"),
+            real_flac(&[("ALBUM", "Two"), ("ARTIST", "A"), ("TITLE", "B")]),
+        )
+        .unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            1,
+            &folder_tags("INTERNAL/Jazz", None, Some("One")),
+        )
+        .unwrap();
+        assert_eq!(p.kind, "tags");
+        assert_eq!(p.op, "tags");
+        assert_eq!(p.path, "INTERNAL/Jazz");
+        assert_eq!(p.file, "INTERNAL/Jazz");
+        assert!(p.changed);
+        assert_eq!(p.files.len(), 2);
+        assert_eq!(p.album.as_deref(), Some("One"));
+        // Unify was not in the repairs: the value is echoed, not applied.
+        assert!(p.repairs.iter().any(|r| r.id == "unify" && !r.on));
+        assert!(p.files[1].changes.is_empty());
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            2,
+            &folder_tags(
+                "INTERNAL/Jazz",
+                Some(&["albumartist", "date", "text", "twice", "unify"]),
+                Some("One"),
+            ),
+        )
+        .unwrap();
+        assert_eq!(p.files[1].changes.len(), 1);
+        assert_eq!(p.files[1].changes[0].key, "ALBUM");
+        assert_eq!(p.files[1].changes[0].after, ["One"]);
+        let values = p.values.as_ref().unwrap();
+        assert_eq!(
+            values.album,
+            [("One".to_string(), 1), ("Two".to_string(), 1)]
+        );
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.count, 2);
+        assert_eq!(a.updated, Some(7));
+        assert_eq!(a.file, "INTERNAL/Jazz");
+        let batch = journal.load(&a.batch).unwrap();
+        assert_eq!(batch.kind, "tags");
+        assert_eq!(batch.entries.len(), 2);
+        assert_eq!(batch.entries[0].op, "tags");
+        assert_eq!(
+            batch.note,
+            "tags of 2 files in INTERNAL/Jazz: albumartist, date, text, twice, unify"
+        );
+        let seen = tags::view(&tags::read(&music.join("INTERNAL/Jazz/b.flac"), "flac"));
+        assert_eq!(seen.album, ["One"]);
+        let seen = tags::view(&tags::read(&music.join("INTERNAL/Jazz/a.flac"), "flac"));
+        assert_eq!(seen.album_artist, ["The Band"]);
+        assert_eq!(seen.title, ["Caf\u{e9} Society"]);
+        // The same preview again: the files moved on.
+        assert!(apply(&music, &shares, &mounter, &journal, &address, &p)
+            .unwrap_err()
+            .contains("changed since"));
+        // Nothing left: the folder reads clean.
+        let again = prepare(
+            &music,
+            &shares,
+            &d,
+            3,
+            &folder_tags("INTERNAL/Jazz", None, None),
+        )
+        .unwrap();
+        assert!(!again.changed, "{:?}", again.files);
+        // One file has an album artist now and the other falls back to its artist,
+        // so the folder still disagrees on that: unify stays on offer, nothing else.
+        assert!(
+            again.repairs.iter().all(|r| r.id == "unify" && !r.on),
+            "{:?}",
+            again.repairs
+        );
+        // A file changed since the batch stops the undo; set back, it goes through.
+        fs::write(
+            music.join("INTERNAL/Jazz/b.flac"),
+            real_flac(&[("ALBUM", "Three"), ("ARTIST", "A"), ("TITLE", "B")]),
+        )
+        .unwrap();
+        let err = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap_err();
+        assert!(err.contains("b.flac: ALBUM changed since"), "{err}");
+        fs::write(
+            music.join("INTERNAL/Jazz/b.flac"),
+            real_flac(&[("ALBUM", "One"), ("ARTIST", "A"), ("TITLE", "B")]),
+        )
+        .unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        assert_eq!(u.count, 2);
+        assert!(journal.load(&a.batch).unwrap().undone);
+        let seen = tags::view(&tags::read(&music.join("INTERNAL/Jazz/b.flac"), "flac"));
+        assert_eq!(seen.album, ["Two"]);
+        let seen = tags::view(&tags::read(&music.join("INTERNAL/Jazz/a.flac"), "flac"));
+        assert!(seen.album_artist.is_empty());
+        assert_eq!(seen.title, ["Caf\u{c3}\u{a9} Society"]);
+        assert_eq!(seen.artist, ["A", "B"]);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

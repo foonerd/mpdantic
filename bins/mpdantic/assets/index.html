@@ -104,6 +104,8 @@
   label.repair { display: flex; gap: 8px; align-items: baseline; font-size: 14px; cursor: pointer; }
   label.repair input { margin: 0; flex: none; position: relative; top: 2px; }
   label.repair select { padding: 2px 6px; font-size: 13px; }
+  label.repair.unify { flex-wrap: wrap; gap: 6px 10px; }
+  .files { margin-top: 8px; max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; background: var(--panel); }
   pre.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 8px 10px; border-radius: 6px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
   .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -188,6 +190,12 @@
     <div class="body">
       <div class="progress" id="progress-tags">Not checked yet.</div>
       <div id="report-tags"></div>
+      <div class="write">
+        <b>Repair tags in this folder</b>
+        <div class="help">The audio files of the folder in hand, not the folders under it. The album artist and the date written where MPD reads them, text that is UTF-8 read as Latin-1 decoded, a tag given twice kept once, an ID3v2 tag from ID3v1, and the Album, Album artist and Date every file gets where the files disagree. Each file is shown with its changes before anything is written. DSF and DFF files are read, not written.</div>
+        <div class="line"><button id="preview-tags">Preview</button></div>
+        <div id="preview-tags-box"></div>
+      </div>
     </div>
   </div>
 
@@ -306,7 +314,11 @@
         current.total = listing.total;
         current.more = listing.more;
       } else {
-        if (listing.path !== current.path) $('preview-box').textContent = '';
+        if (listing.path !== current.path) {
+          $('preview-box').textContent = '';
+          $('preview-tags-box').textContent = '';
+          $('preview-tags').disabled = false;
+        }
         current = { path: listing.path, entries: listing.entries, total: listing.total, more: listing.more };
       }
       render();
@@ -601,7 +613,7 @@
       if (s.findings.some((f) => REPAIRABLE.includes(f.code))) {
         const fix = el('button', '', 'Repair');
         const card = el('div');
-        fix.addEventListener('click', () => { fix.disabled = true; repairSheet(s.path, card, fix); });
+        fix.addEventListener('click', () => { fix.disabled = true; repairWith('cue', s.path, card, fix); });
         inner.appendChild(fix);
         inner.appendChild(card);
       }
@@ -633,7 +645,10 @@
       const d = el('div', 'sugg');
       const top = el('div', 'top');
       top.appendChild(el('span', 'tag warn', s.files + ' files'));
-      top.appendChild(el('span', 'path', s.dir || 'the root'));
+      const open = el('a', 'path', s.dir || 'the root');
+      open.href = toHash(s.dir);
+      open.title = 'Open the folder; the repair below applies to the folder in hand.';
+      top.appendChild(open);
       d.appendChild(top);
       const line = (label, values) => {
         if (values.length < 2) return;
@@ -714,13 +729,13 @@
     $('preview-ignore').disabled = false;
   }
 
-  // A sheet's repairs: the core says which the sheet allows, the user ticks, and the
-  // card follows every tick with the sheet as it would be.
-  function repairSheet(path, box, button) {
-    const again = async (repairs, encoding) => {
-      const body = { kind: 'cue', path };
+  // A sheet's repairs, or a folder's tags: the core says which repairs the sheet or
+  // the folder allows, the user ticks and picks, and the card follows every change
+  // with what would be written.
+  function repairWith(kind, path, box, button) {
+    const again = async (repairs, extra) => {
+      const body = Object.assign({ kind, path }, extra || {});
       if (repairs) body.repairs = repairs;
-      if (encoding) body.encoding = encoding;
       try {
         const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
         renderPreview(p, box, again, () => { button.disabled = false; });
@@ -755,10 +770,41 @@
     });
     if (p.repairs && p.repairs.length) {
       const list = el('div', 'repairs');
-      let select = null;
-      const chosen = () => again(Array.from(list.querySelectorAll('input:checked')).map((i) => i.value), select ? select.value : null);
+      // What goes back with the ticks: the encoding of a sheet, the values of a folder.
+      const extra = {};
+      const picked = () => Object.keys(extra).some((k) => extra[k]);
+      const chosen = () => {
+        const repairs = Array.from(list.querySelectorAll('input:checked')).map((i) => i.value);
+        if (p.kind === 'tags' && picked() && !repairs.includes('unify')) repairs.push('unify');
+        again(repairs, extra);
+      };
       p.repairs.forEach((r) => {
         const row = el('label', 'repair');
+        if (r.id === 'unify') {
+          // The values every file gets, one select per field that the files disagree on.
+          row.className = 'repair unify';
+          row.appendChild(text(r.what));
+          const fields = [['album', 'Album'], ['album_artist', 'Album artist'], ['date', 'Date']];
+          fields.forEach((f) => {
+            const values = (p.values && p.values[f[0]]) || [];
+            if (values.length < 2 && !p[f[0]]) return;
+            const pick = el('select');
+            const none = el('option', '', f[1] + ': leave as is');
+            none.value = '';
+            pick.appendChild(none);
+            values.forEach((v) => {
+              const o = el('option', '', f[1] + ': ' + v[0] + ' (' + v[1] + (v[1] === 1 ? ' file)' : ' files)'));
+              o.value = v[0] === '(none)' ? '' : v[0];
+              o.selected = p[f[0]] === v[0];
+              pick.appendChild(o);
+            });
+            if (p[f[0]]) extra[f[0]] = p[f[0]];
+            pick.addEventListener('change', () => { extra[f[0]] = pick.value || null; chosen(); });
+            row.appendChild(pick);
+          });
+          list.appendChild(row);
+          return;
+        }
         const tick = el('input');
         tick.type = 'checkbox';
         tick.value = r.id;
@@ -772,9 +818,10 @@
         row.appendChild(tick);
         row.appendChild(text(' ' + r.what));
         if (r.id === 'encoding' && p.encodings && p.encodings.length) {
-          select = el('select');
+          const select = el('select');
           p.encodings.forEach((name) => { const o = el('option', '', name); o.value = name; o.selected = name === p.encoding; select.appendChild(o); });
-          select.addEventListener('change', chosen);
+          extra.encoding = p.encoding;
+          select.addEventListener('change', () => { extra.encoding = select.value; chosen(); });
           row.appendChild(text(' '));
           row.appendChild(select);
         }
@@ -782,9 +829,33 @@
       });
       card.appendChild(list);
     }
+    if (p.kind === 'tags') {
+      const files = p.files || [];
+      const changing = files.filter((f) => f.changes.length);
+      card.appendChild(el('div', 'help', changing.length + ' of ' + files.length + (files.length === 1 ? ' file changes:' : ' files change:')));
+      const list = el('div', 'files');
+      files.forEach((f) => {
+        const row = el('div', 'sugg');
+        const top = el('div', 'top');
+        top.appendChild(el('code', '', f.name));
+        top.appendChild(el('span', 'tag' + (f.changes.length ? ' ok' : ''), f.format));
+        if (f.note) top.appendChild(el('span', 'help', f.note));
+        row.appendChild(top);
+        f.changes.forEach((c) => {
+          const line = el('div', 'ex');
+          line.appendChild(el('code', '', c.key));
+          line.appendChild(text(' ' + (c.before.length ? c.before.join(' | ') : '(none)') + '  ->  ' + (c.after.length ? c.after.join(' | ') : '(removed)')));
+          row.appendChild(line);
+        });
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+    }
     (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', n)));
     if (p.op === 'remove') {
       card.appendChild(el('div', 'help', 'The sheet is removed; the undo puts it back as it is now.'));
+    } else if (p.kind === 'tags') {
+      card.appendChild(el('div', 'help', 'Each file is written through lofty, the audio untouched; the undo sets every key back, when nothing else has changed it since.'));
     } else {
       if (p.kind === 'cue' && p.exists) {
         card.appendChild(el('div', 'help', 'As it is:'));
@@ -799,7 +870,11 @@
       }
     }
     const actions = el('div', 'actions');
-    const label = p.op === 'remove' ? 'Remove the sheet' : p.kind === 'cue' ? 'Write the sheet' : (p.added && p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
+    const changing = p.kind === 'tags' ? (p.files || []).filter((f) => f.changes.length).length : 0;
+    const label = p.op === 'remove' ? 'Remove the sheet'
+      : p.kind === 'cue' ? 'Write the sheet'
+      : p.kind === 'tags' ? 'Write ' + changing + (changing === 1 ? ' file' : ' files')
+      : (p.added && p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
     const write = el('button', 'primary', p.changed ? label : 'Nothing to write');
     write.disabled = !p.changed;
     write.addEventListener('click', () => applyBatch(p, write, box, closed));
@@ -828,6 +903,8 @@
       box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : 'written'));
       if (p.kind === 'cue') {
         box.appendChild(el('div', 'help', 'Check the folder again to see the sheet as it is now. The undo is on the Written tab.'));
+      } else if (p.kind === 'tags') {
+        box.appendChild(el('div', 'help', (a.count === 1 ? '1 file' : a.count + ' files') + ' written. Check the folder again to see the tags as they are now. The undo is on the Written tab.'));
       } else {
         box.appendChild(el('div', 'help', 'The undo is on the Written tab.'));
         setLines([]);
@@ -913,6 +990,7 @@
   TABS.forEach((t) => $('tab-' + t).addEventListener('click', () => showTab(t)));
   $('pref-video').addEventListener('change', savePrefs);
   $('preview-ignore').addEventListener('click', () => previewBatch(false));
+  $('preview-tags').addEventListener('click', () => { $('preview-tags').disabled = true; repairWith('tags', current.path, $('preview-tags-box'), $('preview-tags')); });
   $('lines').addEventListener('input', syncPicks);
   $('lines').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) previewBatch(false); });
   window.addEventListener('hashchange', () => load(fromHash(), false));

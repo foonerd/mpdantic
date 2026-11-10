@@ -374,6 +374,9 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         lines: strings("lines").unwrap_or_default(),
         repairs: strings("repairs"),
         encoding: request["encoding"].as_str().map(str::to_string),
+        album: request["album"].as_str().map(str::to_string),
+        album_artist: request["album_artist"].as_str().map(str::to_string),
+        date: request["date"].as_str().map(str::to_string),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -759,6 +762,63 @@ mod tests {
             out.starts_with("HTTP/1.0 200"),
             "a UTF-8 sheet needs no encoding: {out}"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_tags_of_a_folder_are_repaired_over_the_api_with_a_value_picked() {
+        let root = temp_library("serve-tags");
+        std::fs::write(root.join("USB/a.flac"), crate::tagfix::tests::faulty_flac()).unwrap();
+        std::fs::write(
+            root.join("USB/b.flac"),
+            crate::tagfix::tests::real_flac(&[("ALBUM", "Two"), ("ARTIST", "A")]),
+        )
+        .unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let post = |body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let out = post("{\"kind\":\"tags\",\"path\":\"USB\"}");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(p["op"], "tags");
+        assert_eq!(p["files"][0]["name"], "a.flac");
+        assert_eq!(p["files"][0]["changes"][0]["key"], "ALBUMARTIST");
+        assert_eq!(p["files"][1]["note"], "nothing to change");
+        assert_eq!(p["values"]["album"][0][0], "One");
+        assert!(p.get("after").is_some());
+        let out =
+            post("{\"kind\":\"tags\",\"path\":\"USB\",\"repairs\":[\"unify\"],\"album\":\"One\"}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(p["files"][0]["changes"].as_array().unwrap().len(), 0);
+        assert_eq!(p["files"][1]["changes"][0]["key"], "ALBUM");
+        assert_eq!(p["album"], "One");
+        let id = p["id"].as_u64().unwrap();
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let a: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(a["count"], 1);
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(list[0]["kind"], "tags");
+        assert_eq!(list[0]["note"], "tags of 1 file in USB: unify");
+        let batch = list[0]["id"].as_str().unwrap().to_string();
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let seen = crate::tags::view(&crate::tags::read(&root.join("USB/b.flac"), "flac"));
+        assert_eq!(seen.album, ["Two"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
