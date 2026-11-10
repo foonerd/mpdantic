@@ -131,6 +131,7 @@
     <button class="tab" id="tab-ignore">.mpdignore</button>
     <button class="tab" id="tab-cue">CUE sheets</button>
     <button class="tab" id="tab-tags">Tags</button>
+    <button class="tab" id="tab-playlists">Playlists</button>
     <button class="tab" id="tab-undo">Written</button>
     <a class="tab" href="/about">About</a>
   </nav>
@@ -196,6 +197,20 @@
         <div class="line"><button id="preview-tags">Preview</button></div>
         <div id="preview-tags-box"></div>
       </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-playlists" hidden>
+    <div class="head">
+      <b>Playlists</b>
+      <span class="sub">Every m3u, m3u8, pls and xspf under this folder read as MPD reads it, each entry resolved as a load would, and the repairs a playlist allows: its entries rebased to the files on this player, written on your say.</span>
+      <span class="grow"></span>
+      <button id="analyse-playlists">Check this folder</button>
+      <button id="cancel-playlists" hidden>Cancel</button>
+    </div>
+    <div class="body">
+      <div class="progress" id="progress-playlists">Not checked yet.</div>
+      <div id="report-playlists"></div>
     </div>
   </div>
 
@@ -292,6 +307,7 @@
     $('analyse-ignore').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
     $('analyse-cue').textContent = current.path ? 'Check this folder' : 'Check the whole library';
     $('analyse-tags').textContent = current.path ? 'Check this folder' : 'Check the whole library';
+    $('analyse-playlists').textContent = current.path ? 'Check this folder' : 'Check the whole library';
   }
 
   function failed(path, message) {
@@ -343,7 +359,7 @@
 
   // ------------------------------------------------------------------ the tabs
 
-  const TABS = ['ignore', 'cue', 'tags', 'undo'];
+  const TABS = ['ignore', 'cue', 'tags', 'playlists', 'undo'];
 
   function showTab(name) {
     if (!TABS.includes(name)) name = 'ignore';
@@ -394,7 +410,8 @@
   const panels = {
     ignore: { kind: 'ignore', job: null, verb: 'Walking', render: reportIgnore },
     cue: { kind: 'cue', job: null, verb: 'Reading', render: reportCue },
-    tags: { kind: 'tags', job: null, verb: 'Reading', render: reportTags }
+    tags: { kind: 'tags', job: null, verb: 'Reading', render: reportTags },
+    playlists: { kind: 'playlists', job: null, verb: 'Reading', render: reportPlaylists }
   };
 
   function progress(p, message, bad) {
@@ -677,6 +694,65 @@
     linesInForce(box, r.in_force);
   }
 
+  // --------------------------------------------------------- the playlist report
+
+  const ENTRY_STATES = { ok: 'found', missing: 'not found where MPD looks', not_decoded: 'found, no decoder claims it', foreign: 'a foreign path', stream: 'a stream' };
+  const REPAIRABLE_LISTS = ['P01', 'P02', 'P04', 'P05', 'P06', 'P07'];
+
+  function reportPlaylists(r) {
+    const box = $('report-playlists');
+    box.textContent = '';
+    if (!r) return;
+    const notes = [];
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.not_read) notes.push(r.not_read + ' asx or rss files are MPD\'s too and were not read.');
+    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
+    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
+    const totals = section(box, 'Playlists under ' + (r.path || 'the library'), notes.join(' '));
+    const rows = [['Playlists', String(r.playlists)], ['Clean', String(r.clean)], ['With findings', String(r.with_findings)]];
+    Object.keys(r.by_code).forEach((code) => { rows.push([code + '  ' + (r.codes[code] || ''), String(r.by_code[code])]); });
+    table(totals, rows);
+    if (!r.playlists) { totals.appendChild(el('div', 'help', 'No playlist under this folder.')); linesInForce(box, r.in_force); return; }
+    const list = section(box, 'Each playlist', 'Playlists with findings first. A finding says what MPD, and Volumio, do with the playlist as it is; Repair shows what it would be with its entries rebased to the files under the folder in hand, and writes it on your say.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' playlists are listed; the totals count every one.' : ''));
+    r.list.forEach((s) => {
+      const d = el('details', 'sheet');
+      const sum = el('summary');
+      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? s.findings.length + (s.findings.length === 1 ? ' finding' : ' findings') : 'clean'));
+      sum.appendChild(el('span', 'path', s.path));
+      sum.appendChild(el('span', 'help', s.format + ', ' + s.entries + (s.entries === 1 ? ' entry' : ' entries') + ', ' + s.found + ' found' + (s.streams ? ', ' + s.streams + ' streams' : '') + (s.encoding && s.encoding !== 'utf-8' ? ', ' + s.encoding : '')));
+      d.appendChild(sum);
+      const inner = el('div', 'inner');
+      s.findings.forEach((f) => {
+        const line = el('div', 'finding');
+        line.appendChild(el('code', '', f.code + (f.line ? ' line ' + f.line : '')));
+        line.appendChild(text(f.text));
+        inner.appendChild(line);
+      });
+      if (s.findings.some((f) => REPAIRABLE_LISTS.includes(f.code))) {
+        const fix = el('button', '', 'Repair');
+        const card = el('div');
+        fix.addEventListener('click', () => { fix.disabled = true; repairWith('playlist', s.path, card, fix, { base: current.path }); });
+        inner.appendChild(fix);
+        inner.appendChild(card);
+      }
+      if (s.entry_list.length) {
+        const rows = s.entry_list.map((e) => {
+          const cell = el('span');
+          cell.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' ? ' ok' : ' warn'), ENTRY_STATES[e.state] || e.state));
+          cell.appendChild(text(' '));
+          cell.appendChild(el('code', '', e.uri));
+          if (e.name) cell.appendChild(text('  ' + e.name));
+          return [cell, String(e.line)];
+        });
+        table(inner, rows);
+        if (s.entries_truncated) inner.appendChild(el('div', 'help', 'Only the first ' + s.entry_list.length + ' entries are listed.'));
+      }
+      d.appendChild(inner);
+      list.appendChild(d);
+    });
+    linesInForce(box, r.in_force);
+  }
+
   // ------------------------------------------------------------- the writes
 
   // The lines to write are the list in the box, one per line: the ticks above put
@@ -732,9 +808,9 @@
   // A sheet's repairs, or a folder's tags: the core says which repairs the sheet or
   // the folder allows, the user ticks and picks, and the card follows every change
   // with what would be written.
-  function repairWith(kind, path, box, button) {
+  function repairWith(kind, path, box, button, always) {
     const again = async (repairs, extra) => {
-      const body = Object.assign({ kind, path }, extra || {});
+      const body = Object.assign({ kind, path }, always || {}, extra || {});
       if (repairs) body.repairs = repairs;
       try {
         const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
@@ -852,16 +928,32 @@
       card.appendChild(list);
     }
     (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', n)));
+    if (p.kind === 'playlist' && p.entries && p.entries.length) {
+      const changed = p.entries.filter((e) => e.after).length;
+      card.appendChild(el('div', 'help', p.entries.length + (p.entries.length === 1 ? ' entry, ' : ' entries, ') + changed + ' rewritten' + (p.not_found ? ', ' + p.not_found + ' not found under the folder in hand' : '') + ':'));
+      const list = el('div', 'files');
+      p.entries.forEach((e) => {
+        const row = el('div', 'sugg');
+        const top = el('div', 'top');
+        top.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' || e.state === 'rebased' ? ' ok' : ' warn'), e.state.replace('_', ' ')));
+        top.appendChild(el('code', '', e.before));
+        if (e.after) { top.appendChild(text(' -> ')); top.appendChild(el('code', '', e.after)); }
+        if (e.candidates) top.appendChild(el('span', 'help', e.candidates + ' other ' + (e.candidates === 1 ? 'file matches' : 'files match') + ' as well'));
+        row.appendChild(top);
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+    }
     if (p.op === 'remove') {
       card.appendChild(el('div', 'help', 'The sheet is removed; the undo puts it back as it is now.'));
     } else if (p.kind === 'tags') {
       card.appendChild(el('div', 'help', 'Each file is written through lofty, the audio untouched; the undo sets every key back, when nothing else has changed it since.'));
     } else {
-      if (p.kind === 'cue' && p.exists) {
+      if ((p.kind === 'cue' || p.kind === 'playlist') && p.exists) {
         card.appendChild(el('div', 'help', 'As it is:'));
         card.appendChild(el('pre', 'file', p.before));
       }
-      card.appendChild(el('div', 'help', p.kind === 'cue' ? 'As it would be, ' + p.lines_changed + (p.lines_changed === 1 ? ' line changed:' : ' lines changed:') : 'The file as it would be:'));
+      card.appendChild(el('div', 'help', p.kind === 'cue' ? 'As it would be, ' + p.lines_changed + (p.lines_changed === 1 ? ' line changed:' : ' lines changed:') : p.kind === 'playlist' ? 'As it would be:' : 'The file as it would be:'));
       card.appendChild(el('pre', 'file', p.after || '(empty)'));
       if (p.kind === 'cue') {
         card.appendChild(el('div', 'help', p.remaining && p.remaining.length
@@ -873,6 +965,7 @@
     const changing = p.kind === 'tags' ? (p.files || []).filter((f) => f.changes.length).length : 0;
     const label = p.op === 'remove' ? 'Remove the sheet'
       : p.kind === 'cue' ? 'Write the sheet'
+      : p.kind === 'playlist' ? (p.exists ? 'Write the playlist' : 'Write ' + p.file.split('/').pop())
       : p.kind === 'tags' ? 'Write ' + changing + (changing === 1 ? ' file' : ' files')
       : (p.added && p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
     const write = el('button', 'primary', p.changed ? label : 'Nothing to write');
@@ -901,8 +994,8 @@
       const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
       box.textContent = '';
       box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : 'written'));
-      if (p.kind === 'cue') {
-        box.appendChild(el('div', 'help', 'Check the folder again to see the sheet as it is now. The undo is on the Written tab.'));
+      if (p.kind === 'cue' || p.kind === 'playlist') {
+        box.appendChild(el('div', 'help', 'Check the folder again to see it as it is now. The undo is on the Written tab.'));
       } else if (p.kind === 'tags') {
         box.appendChild(el('div', 'help', (a.count === 1 ? '1 file' : a.count + ' files') + ' written. Check the folder again to see the tags as they are now. The undo is on the Written tab.'));
       } else {

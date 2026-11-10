@@ -18,6 +18,9 @@ use crate::ignore::Pattern;
 use crate::library::Library;
 use crate::mount::{self, Mount, Mounter, Share, Where};
 use crate::mpd::{self, Decoders};
+use crate::playlist;
+use crate::plcheck;
+use crate::plfix::{self, EntryChange};
 use crate::tagfix::{self, FilePlan, KeyChange, Values};
 use crate::tags;
 use crate::undo::{Batch, Entry, Journal};
@@ -35,6 +38,9 @@ pub struct Request {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub date: Option<String>,
+    /// The folder a playlist's missing entries are looked for under (`playlist`);
+    /// the playlist's own folder when not given.
+    pub base: Option<String>,
 }
 
 /// The batch as it would be written, for the page to confirm.
@@ -88,6 +94,10 @@ pub struct Preview {
     pub album_artist: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
+    /// A playlist's entries as they are and as they would be (`playlist`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<EntryChange>,
+    pub not_found: usize,
 }
 
 /// What an apply or an undo did.
@@ -180,6 +190,8 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         album: None,
         album_artist: None,
         date: None,
+        entries: Vec::new(),
+        not_found: 0,
     }
 }
 
@@ -195,6 +207,7 @@ pub fn prepare(
         "mpdignore" => prepare_lines(music, shares, id, req),
         "cue" => prepare_cue(music, shares, decoders, id, req),
         "tags" => prepare_tags(music, shares, decoders, id, req),
+        "playlist" => prepare_playlist(music, shares, decoders, id, req),
         _ => Err("the kind is not one the core writes".to_string()),
     }
 }
@@ -375,6 +388,83 @@ fn prepare_tags(
     Ok(p)
 }
 
+/// A playlist's repair: the entries MPD cannot find looked for under the base
+/// folder and written relative to the playlist's folder, the mark, the encoding, a
+/// PLS's count, a `.m3u` beside an m3u8 or an xspf.
+fn prepare_playlist(
+    music: &Path,
+    shares: &[Share],
+    decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, String> {
+    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+    let suffix = classify::suffix(&path).unwrap_or_default();
+    if !playlist::SUFFIXES.contains(&suffix.as_str()) {
+        return Err("not a playlist MPDantic reads".to_string());
+    }
+    let full = music.join(&path);
+    if !full.is_file() {
+        return Err("no such playlist".to_string());
+    }
+    let folder = path
+        .rsplit_once('/')
+        .map(|(f, _)| f.to_string())
+        .unwrap_or_default();
+    let place = place_text(shares, &folder)?;
+    let (_, size, _) = stat(&full);
+    if size > plcheck::MAX_PLAYLIST {
+        return Err(format!("the playlist is {size} bytes; not read"));
+    }
+    let bytes = fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+    let base = match &req.base {
+        Some(b) => Library::check(b).ok_or_else(|| "the base is not a library path".to_string())?,
+        None => folder.clone(),
+    };
+    if !folder_dir(music, &base).is_dir() {
+        return Err("no such base folder".to_string());
+    }
+    let choice = plfix::Choice {
+        repairs: req.repairs.as_deref(),
+        encoding: req.encoding.as_deref(),
+        base: &base,
+    };
+    let fixed = plfix::plan(music, &path, &bytes, decoders, &choice)?;
+    let target_full = music.join(&fixed.target);
+    let (exists, tsize, tmtime) = stat(&target_full);
+    let current = if exists {
+        fs::read(&target_full).map_err(|e| format!("{}: {e}", target_full.display()))?
+    } else {
+        Vec::new()
+    };
+    let changed = if exists {
+        fixed.after.as_bytes() != current.as_slice()
+    } else {
+        !fixed.after.is_empty()
+    };
+    let mut p = empty(
+        id,
+        "playlist",
+        folder,
+        fixed.target.clone(),
+        "write_text",
+        place,
+    );
+    p.exists = exists;
+    p.before = display(&current);
+    p.after = fixed.after;
+    p.changed = changed;
+    p.size = tsize;
+    p.mtime = tmtime;
+    p.repairs = fixed.repairs;
+    p.encoding = fixed.encoding;
+    p.encodings = fixed.encodings;
+    p.notes = fixed.notes;
+    p.entries = fixed.entries;
+    p.not_found = fixed.not_found;
+    Ok(p)
+}
+
 /// Where the folder is written: the folder itself for a local root, the mount's
 /// target for a share, with the mount to take down after.
 fn writable(
@@ -442,6 +532,7 @@ fn note_for(preview: &Preview, written: usize) -> String {
     match preview.kind.as_str() {
         "cue" if preview.op == "remove" => format!("sheet {} removed", preview.file),
         "cue" => format!("sheet {} repaired: {}", preview.file, on()),
+        "playlist" => format!("playlist {} written: {}", preview.file, on()),
         "tags" => format!(
             "tags of {} in {}: {}",
             files_word(written),
@@ -798,6 +889,7 @@ mod tests {
             album: None,
             album_artist: None,
             date: None,
+            base: None,
         }
     }
 
@@ -811,6 +903,7 @@ mod tests {
             album: None,
             album_artist: None,
             date: None,
+            base: None,
         }
     }
 
@@ -824,6 +917,7 @@ mod tests {
             album: album.map(str::to_string),
             album_artist: None,
             date: None,
+            base: None,
         }
     }
 

@@ -19,6 +19,7 @@ use crate::jobs::Jobs;
 use crate::library::{self, Library, ListError};
 use crate::mount;
 use crate::mpd::{self, Address, Decoders};
+use crate::plcheck;
 use crate::prefs;
 use crate::status::Status;
 use crate::tagcheck;
@@ -310,7 +311,7 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     };
     let kind = request["kind"].as_str().unwrap_or("").to_string();
     let path = request["path"].as_str().unwrap_or("").to_string();
-    if kind != "ignore" && kind != "cue" && kind != "tags" {
+    if kind != "ignore" && kind != "cue" && kind != "tags" && kind != "playlists" {
         return (400, error("the kind is not one the core knows"));
     }
     if Library::check(&path).is_none() {
@@ -328,6 +329,9 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let started = shared.jobs.start(&kind, &path, move |progress, cancel| {
         if job_kind == "cue" {
             cuecheck::check(&music, &job_path, &decoders, note, progress, cancel)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        } else if job_kind == "playlists" {
+            plcheck::check(&music, &job_path, &decoders, note, progress, cancel)
                 .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         } else if job_kind == "tags" {
             tagcheck::check(&music, &job_path, &decoders, note, progress, cancel)
@@ -377,6 +381,7 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         album: request["album"].as_str().map(str::to_string),
         album_artist: request["album_artist"].as_str().map(str::to_string),
         date: request["date"].as_str().map(str::to_string),
+        base: request["base"].as_str().map(str::to_string),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
