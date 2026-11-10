@@ -27,6 +27,8 @@ use crate::write;
 
 /// The page, whole.
 const PAGE: &str = include_str!("../assets/index.html");
+/// The About page: what MPDantic is, where it comes from, what it is built of.
+const ABOUT: &str = include_str!("../assets/about.html");
 /// Connections answered at once; the rest wait in the listen queue, and past that are
 /// told to come back.
 const AT_ONCE: usize = 8;
@@ -186,6 +188,7 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         .and_then(|s| s.parse::<u64>().ok());
     match (r.method.as_str(), r.path.as_str()) {
         (_, "/") | (_, "/index.html") if get => (200, "text/html; charset=utf-8", PAGE.to_string()),
+        (_, "/about") if get => (200, "text/html; charset=utf-8", ABOUT.to_string()),
         (_, "/api/status") if get => {
             let body = shared
                 .status
@@ -291,6 +294,7 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         }
         (_, "/")
         | (_, "/index.html")
+        | (_, "/about")
         | (_, "/api/status")
         | (_, "/api/preferences")
         | (_, "/api/list")
@@ -824,6 +828,18 @@ mod tests {
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         assert_eq!(body(&out), "");
         assert!(out.contains(&format!("Content-Length: {}", PAGE.len())));
+        // The About page beside it, with its codes; a POST to it is not allowed.
+        let out = talk(server.port, "GET /about HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
+        assert!(out.contains("Content-Type: text/html; charset=utf-8"));
+        assert!(body(&out).contains("<title>MPDantic - About</title>"));
+        assert!(body(&out).contains("github.com/foonerd/mpdantic"));
+        assert_eq!(body(&out).matches("<svg class=\"qr\"").count(), 8);
+        let out = talk(
+            server.port,
+            "POST /about HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 405"), "{out}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
