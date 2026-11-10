@@ -80,6 +80,21 @@
   details.sheet .inner { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
   .finding { font-size: 13px; margin: 3px 0; }
   .finding code { margin-right: 4px; }
+  .sugg input.pick { width: 16px; height: 16px; margin: 0; cursor: pointer; align-self: center; }
+  .write { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .write .line { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .write input[type=text] { flex: 1; min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+  .write input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .preview { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .preview .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .preview .top b { overflow-wrap: anywhere; }
+  .preview .ex { margin-top: 6px; }
+  pre.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 8px 10px; border-radius: 6px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { border-color: var(--text); }
+  .help.bad, .done.bad { color: var(--danger); }
+  .done { margin-top: 10px; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -97,7 +112,7 @@
   <div class="panel" id="panel-ignore">
     <div class="head">
       <b>.mpdignore</b>
-      <span class="sub">What MPD's update would meet under this folder, and the lines that would keep the junk out. Read-only.</span>
+      <span class="sub">What MPD's update would meet under this folder, the lines that would keep the junk out, and those lines written on your say.</span>
       <span class="grow"></span>
       <label class="pref" title="Glass plays video from the library; with video in use, video containers are counted and never suggested.">Video here:
         <select id="pref-video">
@@ -112,6 +127,16 @@
     <div class="body">
       <div class="progress" id="progress-ignore">Not analysed yet.</div>
       <div id="report-ignore"></div>
+      <div class="write">
+        <b>Write lines</b>
+        <div class="help">Into the .mpdignore of the folder in hand: the suggestions ticked above and a line typed here. The file is shown whole before anything is written, and every write can be undone below.</div>
+        <div class="line">
+          <input type="text" id="line-typed" placeholder="a pattern, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off">
+          <button id="preview-ignore">Preview</button>
+        </div>
+        <div id="preview-box"></div>
+      </div>
+      <div class="section" id="undo-box"></div>
     </div>
   </div>
 
@@ -243,6 +268,7 @@
         current.total = listing.total;
         current.more = listing.more;
       } else {
+        if (listing.path !== current.path) $('preview-box').textContent = '';
         current = { path: listing.path, entries: listing.entries, total: listing.total, more: listing.more };
       }
       render();
@@ -394,13 +420,18 @@
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
     if (r.too_deep) notes.push(r.too_deep + ' folders were nested too deep to walk.');
     if (r.cancelled) notes.push('The walk was cancelled: the counts are partial.');
-    const s = section(box, 'Suggested lines', 'Each would go into .mpdignore at ' + (r.path || 'the library root') + ' and cover everything under it. Nothing is written from this page.');
+    const s = section(box, 'Suggested lines', 'Each would go into .mpdignore at ' + (r.path || 'the library root') + ' and cover everything under it. Tick the ones to write, then Preview below.');
     if (!r.suggestions.length) {
       s.appendChild(el('div', 'help', 'Nothing to keep out: MPD meets only music, playlists, sheets and pictures here.'));
     } else {
       r.suggestions.forEach((g) => {
         const d = el('div', 'sugg');
         const top = el('div', 'top');
+        const pick = el('input', 'pick');
+        pick.type = 'checkbox';
+        pick.value = g.pattern;
+        pick.title = 'Write ' + g.pattern;
+        top.appendChild(pick);
         top.appendChild(el('code', '', g.pattern));
         top.appendChild(el('span', 'tag' + (g.class === 'video' ? ' warn' : ''), CLASSES[g.class] || g.class));
         top.appendChild(el('span', '', g.count + (g.count === 1 ? ' entry' : ' entries') + (g.bytes ? ', ' + size(g.bytes) : '')));
@@ -549,6 +580,136 @@
     linesInForce(box, r.in_force);
   }
 
+  // ------------------------------------------------------------- the writes
+
+  const JSON_BODY = { 'Content-Type': 'application/json' };
+  const text = (s) => document.createTextNode(s);
+  const when = (seconds) => new Date(seconds * 1000).toLocaleString();
+
+  // The lines to write: the suggestions ticked, then the line typed.
+  function chosenLines() {
+    const lines = Array.from(document.querySelectorAll('#report-ignore input.pick:checked')).map((i) => i.value);
+    const typed = $('line-typed').value.trim();
+    if (typed) lines.push(typed);
+    return lines;
+  }
+
+  function codes(parent, lead, lines) {
+    const row = el('div', 'ex');
+    row.appendChild(text(lead));
+    lines.forEach((l, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', l)); });
+    parent.appendChild(row);
+  }
+
+  // The batch prepared by the core and shown whole; nothing is written until Write.
+  async function previewBatch() {
+    const box = $('preview-box');
+    box.textContent = '';
+    const lines = chosenLines();
+    if (!lines.length) { box.appendChild(el('div', 'help bad', 'Nothing chosen: tick a suggestion or type a line.')); return; }
+    $('preview-ignore').disabled = true;
+    try {
+      showPreview(await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'mpdignore', path: current.path, lines }) }));
+    } catch (e) {
+      box.appendChild(el('div', 'help bad', String(e.message || e)));
+    }
+    $('preview-ignore').disabled = false;
+  }
+
+  function showPreview(p) {
+    const box = $('preview-box');
+    box.textContent = '';
+    const card = el('div', 'preview');
+    const top = el('div', 'top');
+    top.appendChild(el('b', '', (p.exists ? 'Change ' : 'Create ') + p.file));
+    top.appendChild(el('span', 'help', p.place === 'local' ? 'on a local root, written in place.' : 'on ' + p.place + ': mounted read-write for the write and released after.'));
+    card.appendChild(top);
+    if (p.added.length) codes(card, 'Lines to add: ', p.added);
+    if (p.already.length) codes(card, 'Already there: ', p.already);
+    p.refused.forEach((pair) => {
+      const why = el('div', 'why');
+      why.appendChild(el('span', 'tag bad', 'not written'));
+      why.appendChild(text(' '));
+      why.appendChild(el('code', '', pair[0]));
+      why.appendChild(text(': ' + pair[1] + '.'));
+      card.appendChild(why);
+    });
+    card.appendChild(el('div', 'help', 'The file as it would be:'));
+    card.appendChild(el('pre', 'file', p.after || '(empty)'));
+    const actions = el('div', 'actions');
+    const write = el('button', 'primary', p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
+    write.disabled = !p.added.length;
+    write.addEventListener('click', () => applyBatch(p, write));
+    const drop = el('button', '', 'Cancel');
+    drop.addEventListener('click', () => { box.textContent = ''; });
+    actions.appendChild(write);
+    actions.appendChild(drop);
+    card.appendChild(actions);
+    box.appendChild(card);
+  }
+
+  function outcome(a, verb) {
+    const done = el('div', 'done');
+    done.appendChild(el('span', 'tag ok', verb));
+    done.appendChild(text(' ' + a.file + '. ' + (a.updated !== null && a.updated !== undefined
+      ? 'MPD is updating the folder (job ' + a.updated + '); Volumio rebuilds its album list after every update, which takes a while on a large library.'
+      : 'MPD was not told to update the folder: ' + a.update_error + '.')));
+    return done;
+  }
+
+  async function applyBatch(p, button) {
+    const box = $('preview-box');
+    button.disabled = true;
+    try {
+      const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
+      box.textContent = '';
+      box.appendChild(outcome(a, 'written'));
+      $('line-typed').value = '';
+      document.querySelectorAll('#report-ignore input.pick:checked').forEach((i) => { i.checked = false; });
+      loadUndo();
+    } catch (e) {
+      const bad = el('div', 'done bad', String(e.message || e));
+      box.appendChild(bad);
+      button.disabled = false;
+    }
+  }
+
+  // Every write the core made, newest first; an undo puts the file back as it was.
+  async function loadUndo() {
+    const box = $('undo-box');
+    let list;
+    try { list = await api('/api/undo'); } catch (e) { return; }
+    box.textContent = '';
+    if (!list.length) return;
+    box.appendChild(el('h3', '', 'Written by MPDantic'));
+    box.appendChild(el('div', 'help', 'Every write, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.'));
+    list.forEach((b) => {
+      const row = el('div', 'sugg');
+      const top = el('div', 'top');
+      top.appendChild(el('span', 'tag' + (b.undone ? '' : ' ok'), b.undone ? 'undone' : 'in place'));
+      top.appendChild(el('span', '', when(b.when) + ': ' + b.note));
+      if (!b.undone) {
+        const u = el('button', '', 'Undo');
+        u.addEventListener('click', () => undoBatch(b.id, row, u));
+        top.appendChild(u);
+      }
+      row.appendChild(top);
+      box.appendChild(row);
+    });
+  }
+
+  async function undoBatch(id, row, button) {
+    button.disabled = true;
+    try {
+      const a = await api('/api/undo/' + encodeURIComponent(id), { method: 'POST' });
+      row.appendChild(outcome(a, 'undone'));
+      loadUndo();
+    } catch (e) {
+      row.appendChild(el('div', 'done bad', String(e.message || e)));
+      button.disabled = false;
+    }
+  }
+
   // The job already there when the page opens, from this device or another: followed
   // while it runs, shown when it is done, on the panel of its kind.
   async function resume() {
@@ -565,9 +726,12 @@
     $('cancel-' + p.kind).addEventListener('click', () => cancel(p));
   });
   $('pref-video').addEventListener('change', savePrefs);
+  $('preview-ignore').addEventListener('click', previewBatch);
+  $('line-typed').addEventListener('keydown', (e) => { if (e.key === 'Enter') previewBatch(); });
   window.addEventListener('hashchange', () => load(fromHash(), false));
   load(fromHash(), false);
   loadPrefs();
+  loadUndo();
   resume();
   status();
   setInterval(status, 5000);

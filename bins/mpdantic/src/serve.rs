@@ -17,10 +17,13 @@ use crate::analyse::{self, DecoderNote};
 use crate::cuecheck;
 use crate::jobs::Jobs;
 use crate::library::{self, Library, ListError};
+use crate::mount;
 use crate::mpd::{self, Address, Decoders};
 use crate::prefs;
 use crate::status::Status;
 use crate::tagcheck;
+use crate::undo;
+use crate::write;
 
 /// The page, whole.
 const PAGE: &str = include_str!("../assets/index.html");
@@ -41,6 +44,13 @@ pub struct Shared {
     pub decoders: Mutex<Option<(DecoderNote, Decoders)>>,
     /// What the owner knows about the library.
     pub prefs: Mutex<prefs::Store>,
+    /// Volumio's shares, read when a write needs them.
+    pub networkfs: std::path::PathBuf,
+    pub mounter: mount::Mounter,
+    pub journal: undo::Journal,
+    /// The previews prepared and not yet applied, by id.
+    pub previews: Mutex<std::collections::HashMap<u64, write::Preview>>,
+    pub next_preview: std::sync::atomic::AtomicU64,
 }
 
 impl Shared {
@@ -203,6 +213,45 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = start_job(shared, &r.body);
             (code, json, body)
         }
+        ("POST", "/api/batches") => {
+            let (code, body) = prepare_batch(shared, &r.body);
+            (code, json, body)
+        }
+        (_, _) if get && r.path.starts_with("/api/batches/") => {
+            let id: Option<u64> = r.path["/api/batches/".len()..].parse().ok();
+            let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
+            match id.and_then(|id| previews.get(&id)) {
+                Some(p) => (200, json, json_of(p)),
+                None => (404, json, error("no such preview")),
+            }
+        }
+        ("POST", _) if r.path.starts_with("/api/batches/") && r.path.ends_with("/apply") => {
+            let id: Option<u64> = r.path["/api/batches/".len()..r.path.len() - "/apply".len()]
+                .parse()
+                .ok();
+            let (code, body) = apply_batch(shared, id);
+            (code, json, body)
+        }
+        (_, "/api/undo") if get => {
+            let list: Vec<serde_json::Value> = shared
+                .journal
+                .list()
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "id": b.id, "kind": b.kind, "path": b.path, "when": b.when,
+                        "note": b.note, "undone": b.undone,
+                        "files": b.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            (200, json, serde_json::Value::Array(list).to_string() + "\n")
+        }
+        ("POST", _) if r.path.starts_with("/api/undo/") => {
+            let id = r.path["/api/undo/".len()..].to_string();
+            let (code, body) = undo_batch(shared, &id);
+            (code, json, body)
+        }
         (_, "/api/preferences") if get => {
             let body = shared
                 .prefs
@@ -295,6 +344,103 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     match started {
         Ok(id) => (202, serde_json::json!({ "id": id }).to_string() + "\n"),
         Err(_) => (409, error("a job is running; wait for it or cancel it")),
+    }
+}
+
+fn json_of<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()) + "\n"
+}
+
+/// `POST /api/batches` with `{ "kind": "mpdignore", "path": "NAS/Jazz", "lines": [...] }`:
+/// the preview, nothing written.
+fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (400, error("the body is not JSON"));
+    };
+    let req = write::Request {
+        kind: request["kind"].as_str().unwrap_or("").to_string(),
+        path: request["path"].as_str().unwrap_or("").to_string(),
+        lines: request["lines"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let shares = match mount::shares(&shared.networkfs) {
+        Ok(s) => s,
+        Err(e) => {
+            // No configuration is no shares: local roots still write.
+            if shared.networkfs.exists() {
+                return (500, error(&e));
+            }
+            Vec::new()
+        }
+    };
+    let id = shared.next_preview.fetch_add(1, Ordering::Relaxed) + 1;
+    match write::prepare(shared.library.music(), &shares, id, &req) {
+        Ok(preview) => {
+            let body = json_of(&preview);
+            shared
+                .previews
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id, preview);
+            (200, body)
+        }
+        Err(e) => (400, error(&e)),
+    }
+}
+
+/// `POST /api/batches/<id>/apply`: the preview written, journaled, MPD told.
+fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
+    let preview = {
+        let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
+        match id.and_then(|id| previews.get(&id).cloned()) {
+            Some(p) => p,
+            None => return (404, error("no such preview")),
+        }
+    };
+    let shares = mount::shares(&shared.networkfs).unwrap_or_default();
+    match write::apply(
+        shared.library.music(),
+        &shares,
+        &shared.mounter,
+        &shared.journal,
+        &shared.mpd,
+        &preview,
+    ) {
+        Ok(applied) => {
+            shared
+                .previews
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&preview.id);
+            (200, json_of(&applied))
+        }
+        Err(e) if e.contains("changed since") => (409, error(&e)),
+        Err(e) if e.contains("nothing to write") => (400, error(&e)),
+        Err(e) => (500, error(&e)),
+    }
+}
+
+/// `POST /api/undo/<id>`: the batch undone, MPD told.
+fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
+    let shares = mount::shares(&shared.networkfs).unwrap_or_default();
+    match write::undo(
+        shared.library.music(),
+        &shares,
+        &shared.mounter,
+        &shared.journal,
+        &shared.mpd,
+        id,
+    ) {
+        Ok(applied) => (200, json_of(&applied)),
+        Err(e) if e.contains("no such") => (404, error(&e)),
+        Err(e) if e.contains("changed since") || e.contains("already") => (409, error(&e)),
+        Err(e) => (500, error(&e)),
     }
 }
 
@@ -448,15 +594,100 @@ mod tests {
     fn make_server(root: PathBuf, mpd: Address) -> Server {
         let data = root.join(".mpdantic-data");
         let glass = root.join(".no-glass");
+        // Under the data folder, which is made when first written to, so a listing of
+        // the root sees nothing of it.
+        let run = data.join("run");
         let shared = Arc::new(Shared {
             status: Arc::new(Mutex::new(Status::new())),
-            library: Library::new(root),
+            library: Library::new(root.clone()),
             jobs: Arc::new(Jobs::new()),
             mpd,
             decoders: Mutex::new(None),
             prefs: Mutex::new(prefs::Store::open(&data, &glass)),
+            networkfs: root.join(".no-networkfs.json"),
+            mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
+            journal: undo::Journal::new(&data.join("undo")),
+            previews: Mutex::new(std::collections::HashMap::new()),
+            next_preview: std::sync::atomic::AtomicU64::new(0),
         });
         start(0, shared).unwrap()
+    }
+
+    #[test]
+    fn a_batch_is_previewed_applied_listed_and_undone_over_the_api() {
+        let root = temp_library("serve-batch");
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        // A folder under NAS with no share of that name in Volumio's configuration (none
+        // at all here) is refused, not written.
+        let req = "{\"kind\":\"mpdignore\",\"path\":\"NAS/Jazz\",\"lines\":[\"*.iso\"]}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{req}",
+                req.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        assert!(body(&out).contains("no share named Jazz"), "{out}");
+        let req = "{\"kind\":\"mpdignore\",\"path\":\"USB\",\"lines\":[\"*.iso\",\"#bad\"]}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{req}",
+                req.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let preview: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        let id = preview["id"].as_u64().unwrap();
+        assert_eq!(preview["file"], "USB/.mpdignore");
+        assert_eq!(preview["exists"], false);
+        assert_eq!(preview["added"][0], "*.iso");
+        assert_eq!(preview["refused"][0][0], "#bad");
+        assert_eq!(preview["place"], "local");
+        let out = talk(
+            server.port,
+            &format!("GET /api/batches/{id} HTTP/1.0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let applied: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(applied["updated"], 7);
+        let batch = applied["batch"].as_str().unwrap().to_string();
+        assert_eq!(
+            std::fs::read_to_string(root.join("USB/.mpdignore")).unwrap(),
+            "*.iso\n"
+        );
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(list[0]["id"], batch);
+        assert_eq!(list[0]["undone"], false);
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert!(!root.join("USB/.mpdignore").exists());
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 409"), "{out}");
+        let out = talk(
+            server.port,
+            "POST /api/undo/nothing HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

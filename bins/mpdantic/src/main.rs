@@ -14,7 +14,10 @@
 //! a socket path or host:port (`/run/mpd/socket` unless given); `--data` is the
 //! folder the preferences are kept in (`/data/INTERNAL/mpdantic` unless given);
 //! `--glass` is the Glass plugin's folder, whose presence says video in the
-//! library is wanted (`/data/plugins/user_interface/glass` unless given).
+//! library is wanted (`/data/plugins/user_interface/glass` unless given);
+//! `--networkfs` is Volumio's configuration of the shares, read when a write on a
+//! share needs its credentials
+//! (`/data/configuration/system_controller/networkfs/config.json` unless given).
 
 mod analyse;
 mod classify;
@@ -23,13 +26,16 @@ mod cuecheck;
 mod ignore;
 mod jobs;
 mod library;
+mod mount;
 mod mpd;
 mod prefs;
 mod serve;
 mod status;
 mod tagcheck;
 mod tags;
+mod undo;
 mod walk;
+mod write;
 
 use std::fs;
 use std::io::ErrorKind;
@@ -56,10 +62,11 @@ struct Args {
     mpd: mpd::Address,
     data: PathBuf,
     glass: PathBuf,
+    networkfs: PathBuf,
 }
 
 fn usage() -> ! {
-    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--version]");
+    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--networkfs FILE] [--version]");
     process::exit(64);
 }
 
@@ -71,6 +78,7 @@ fn args() -> Args {
         mpd: mpd::Address::parse("/run/mpd/socket"),
         data: PathBuf::from("/data/INTERNAL/mpdantic"),
         glass: PathBuf::from(prefs::GLASS_PLUGIN),
+        networkfs: PathBuf::from("/data/configuration/system_controller/networkfs/config.json"),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -80,6 +88,9 @@ fn args() -> Args {
             "--music" => out.music = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--data" => out.data = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--glass" => out.glass = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
+            "--networkfs" => {
+                out.networkfs = it.next().map(PathBuf::from).unwrap_or_else(|| usage())
+            }
             "--mpd" => {
                 out.mpd = it
                     .next()
@@ -145,6 +156,11 @@ fn main() {
         mpd: args.mpd.clone(),
         decoders: Mutex::new(None),
         prefs: Mutex::new(prefs::Store::open(&args.data, &args.glass)),
+        networkfs: args.networkfs.clone(),
+        mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
+        journal: undo::Journal::new(&args.data.join("undo")),
+        previews: Mutex::new(std::collections::HashMap::new()),
+        next_preview: std::sync::atomic::AtomicU64::new(0),
     });
     // The pages. A port that cannot be taken is said in the status, and the core stays
     // up so the plugin's button can say it too; the unit is not restarted in a loop.

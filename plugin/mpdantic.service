@@ -10,7 +10,7 @@ User=volumio
 Group=volumio
 RuntimeDirectory=mpdantic
 RuntimeDirectoryMode=0755
-ExecStart=/data/plugins/system_controller/mpdantic/bin/mpdantic --run /run/mpdantic --settings /data/configuration/system_controller/mpdantic/settings.json --music /var/lib/mpd/music --mpd /run/mpd/socket --data /data/INTERNAL/mpdantic --glass /data/plugins/user_interface/glass
+ExecStart=/data/plugins/system_controller/mpdantic/bin/mpdantic --run /run/mpdantic --settings /data/configuration/system_controller/mpdantic/settings.json --music /var/lib/mpd/music --mpd /run/mpd/socket --data /data/INTERNAL/mpdantic --glass /data/plugins/user_interface/glass --networkfs /data/configuration/system_controller/networkfs/config.json
 # Well behind the player's audio thread, which is real-time; a library walk never
 # starves it.
 Nice=10
@@ -18,7 +18,10 @@ Restart=always
 RestartSec=3
 KillSignal=SIGTERM
 TimeoutStopSec=5
-NoNewPrivileges=yes
+# No NoNewPrivileges: the core mounts a share's folder read-write for a write through
+# the volumio user's own passwordless mount and umount, and NoNewPrivileges would
+# block every setuid, mount.cifs included. The mounts live in this unit's own mount
+# namespace and never reach the host.
 # full, not strict: /usr, /boot and /etc read-only; the library under /mnt, the data
 # folder and the temporary mounts under /run/mpdantic stay reachable.
 ProtectSystem=full

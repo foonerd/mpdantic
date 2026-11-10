@@ -164,6 +164,18 @@ pub fn decoders(address: &Address) -> Result<Decoders, String> {
     Ok(Decoders::from_plugins(c.version.clone(), plugins))
 }
 
+/// MPD told to update one folder, nothing wider; the job number it answers with.
+pub fn update(address: &Address, path: &str) -> Result<u64, String> {
+    let mut c = connect(address)?;
+    let quoted = format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""));
+    let lines = c.command(&format!("update {quoted}"))?;
+    lines
+        .iter()
+        .find(|(k, _)| k == "updating_db")
+        .and_then(|(_, v)| v.parse().ok())
+        .ok_or_else(|| "MPD answered without a job number".to_string())
+}
+
 /// When MPD cannot be asked: the suffixes Volumio's MPD build commonly claims, so the
 /// analysis still tells audio from the rest. The report says they are assumed.
 pub fn assumed() -> Decoders {
@@ -198,6 +210,7 @@ pub mod tests {
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     let answer = match line.trim() {
                         "decoders" => "plugin: mad\nsuffix: mp3\nsuffix: mp2\nmime_type: audio/mpeg\nplugin: flac\nsuffix: flac\nplugin: ffmpeg\nsuffix: FLAC\nsuffix: mkv\nsuffix: txt\nOK\n".to_string(),
+                        l if l.starts_with("update \"") && l.ends_with('"') => "updating_db: 7\nOK\n".to_string(),
                         other => format!("ACK [5@0] {{}} unknown command \"{other}\"\n"),
                     };
                     let _ = stream.write_all(answer.as_bytes());
@@ -271,6 +284,13 @@ pub mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn an_update_of_one_folder_answers_with_the_job_number() {
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        assert_eq!(update(&address, "NAS/Jazz/Live \"at\" 9").unwrap(), 7);
+        assert!(update(&Address::Tcp("127.0.0.1:1".to_string()), "NAS").is_err());
     }
 
     #[test]
