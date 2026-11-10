@@ -28,6 +28,15 @@ ProtectSystem=full
 ProtectHome=yes
 ReadWritePaths=/run/mpdantic /data/INTERNAL/mpdantic
 PrivateTmp=yes
+# The library's files are mostly another user's: Volumio's Samba share takes guest
+# writes, so music copied over the network is nobody's, and a USB disk's files are
+# whoever wrote them. The core, still the volumio user, writes them with these three
+# capabilities and nothing more: past the mode bits, and each file it rewrites kept
+# as its owner's with its mode (a new file takes its folder's owner). No root and no
+# helper; the core's own checks confine every write to the library, its data folder
+# and Volumio's playlist folder, and ProtectSystem keeps the system read-only whatever
+# the capability. The bounding set is left whole: sudo's mount needs root's own.
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target

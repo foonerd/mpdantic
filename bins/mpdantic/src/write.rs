@@ -607,11 +607,33 @@ fn writable(
     }
 }
 
-/// A file written whole and moved into place.
+/// A file written whole and moved into place, as its owner's and with its mode: the
+/// library's files are mostly another user's (Volumio's Samba share takes guest
+/// writes, so music copied over the network is nobody's), and the core writes them
+/// through the capabilities its unit grants, leaving each file that user's. A new file
+/// takes its folder's owner and the folder's mode without the search bits.
 fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let part = dir.join(format!("{name}.part"));
     let file = dir.join(name);
+    let owner = match fs::metadata(&file).or_else(|_| fs::metadata(dir)) {
+        Ok(m) if m.is_file() => Some((m.mode() & 0o7777, m.uid(), m.gid())),
+        Ok(m) => Some((m.mode() & 0o666, m.uid(), m.gid())),
+        Err(_) => None,
+    };
     fs::write(&part, bytes).map_err(|e| format!("{}: {e}", part.display()))?;
+    if let Some((mode, uid, gid)) = owner {
+        let kept = fs::set_permissions(&part, fs::Permissions::from_mode(mode))
+            .and_then(|_| std::os::unix::fs::chown(&part, Some(uid), Some(gid)));
+        if let Err(e) = kept {
+            // Said, not fatal: the content is what the write is for, and the core run
+            // by hand has no capability to give a file to another user.
+            eprintln!(
+                "mpdantic: {}: the owner or the mode not kept: {e}",
+                file.display()
+            );
+        }
+    }
     fs::rename(&part, &file).map_err(|e| {
         let _ = fs::remove_file(&part);
         format!("{}: {e}", file.display())
@@ -1453,6 +1475,50 @@ mod tests {
         assert!(u.written);
         assert_eq!(fs::read(music.join("INTERNAL/Jazz/b.cue")).unwrap(), text);
         assert!(journal.load(&a.batch).unwrap().undone);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_whole_write_keeps_the_files_mode_and_a_new_file_takes_its_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("whole");
+        let folder = dir.join("folder");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "one\n").unwrap();
+        fs::set_permissions(folder.join("a.txt"), fs::Permissions::from_mode(0o600)).unwrap();
+        write_whole(&folder, "a.txt", b"two\n").unwrap();
+        assert_eq!(fs::read_to_string(folder.join("a.txt")).unwrap(), "two\n");
+        assert_eq!(
+            fs::metadata(folder.join("a.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o600,
+            "the file's own mode kept"
+        );
+        assert!(!folder.join("a.txt.part").exists());
+        // A new file: the folder's mode without the search bits.
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o775)).unwrap();
+        write_whole(&folder, "b.txt", b"new\n").unwrap();
+        assert_eq!(
+            fs::metadata(folder.join("b.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o664
+        );
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        write_whole(&folder, "c.txt", b"new\n").unwrap();
+        assert_eq!(
+            fs::metadata(folder.join("c.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o644
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
