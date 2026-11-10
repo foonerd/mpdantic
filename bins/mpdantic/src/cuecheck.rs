@@ -16,7 +16,7 @@ use crate::mpd::Decoders;
 use crate::walk::{self, InForceLines, Progress, Visit};
 
 /// A sheet larger than this is not read; a finding says so.
-const MAX_SHEET: u64 = 1024 * 1024;
+pub const MAX_SHEET: u64 = 1024 * 1024;
 /// Sheets listed in the report; the totals count every one.
 const SHEETS_LISTED: usize = 500;
 /// Tracks listed per sheet.
@@ -87,6 +87,115 @@ pub fn code_text(code: &str) -> &'static str {
     }
 }
 
+/// The file names of one directory, for a sheet's `FILE` names to be looked up:
+/// exact, in another case, with another suffix.
+pub struct Beside {
+    names: Vec<String>,
+    by_lower: HashMap<String, String>,
+    by_stem: HashMap<String, Vec<String>>,
+}
+
+impl Beside {
+    pub fn new(names: Vec<String>) -> Beside {
+        let by_lower = names
+            .iter()
+            .map(|n| (n.to_lowercase(), n.clone()))
+            .collect();
+        let by_stem =
+            names
+                .iter()
+                .fold(HashMap::new(), |mut m: HashMap<String, Vec<String>>, n| {
+                    let stem = n
+                        .rsplit_once('.')
+                        .map(|(s, _)| s)
+                        .unwrap_or(n)
+                        .to_lowercase();
+                    m.entry(stem).or_default().push(n.clone());
+                    m
+                });
+        Beside {
+            names,
+            by_lower,
+            by_stem,
+        }
+    }
+
+    /// The names of the files in `dir`, the folders left out.
+    pub fn read(dir: &Path) -> Beside {
+        let names = fs::read_dir(dir)
+            .map(|read| {
+                read.flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Beside::new(names)
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// The names a decoder of this MPD claims.
+    pub fn audio(&self, decoders: &Decoders) -> Vec<&str> {
+        self.names
+            .iter()
+            .filter(|n| {
+                classify::suffix(n)
+                    .map(|s| decoders.suffixes.contains(&s))
+                    .unwrap_or(false)
+            })
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// Where a `FILE` name stands beside the sheet: `ok`; `not_decoded` (there, but
+    /// no decoder claims it); `case` and `suffix` (there under the name said); `foreign`
+    /// (what kind of path); `missing`.
+    pub fn locate(
+        &self,
+        name: &str,
+        dir: &Path,
+        decoders: &Decoders,
+    ) -> (&'static str, Option<String>) {
+        let claimed = |n: &str| {
+            classify::suffix(n)
+                .map(|s| decoders.suffixes.contains(&s))
+                .unwrap_or(false)
+        };
+        if let Some(what) = cue::foreign_path(name) {
+            return ("foreign", Some(what.to_string()));
+        }
+        if self.names.iter().any(|n| n == name) || dir.join(name).is_file() {
+            return if claimed(name) {
+                ("ok", None)
+            } else {
+                ("not_decoded", None)
+            };
+        }
+        if let Some(n) = self.by_lower.get(&name.to_lowercase()) {
+            return ("case", Some(n.clone()));
+        }
+        // The same stem with another suffix: an audio file first, never a sheet.
+        if let Some(candidates) = name
+            .rsplit_once('.')
+            .map(|(s, _)| s.to_lowercase())
+            .and_then(|stem| self.by_stem.get(&stem))
+        {
+            let found = candidates.iter().find(|n| claimed(n)).or_else(|| {
+                candidates
+                    .iter()
+                    .find(|n| classify::suffix(n).as_deref() != Some(classify::CUE_SUFFIX))
+            });
+            if let Some(n) = found {
+                return ("suffix", Some(n.clone()));
+            }
+        }
+        ("missing", None)
+    }
+}
+
 /// The CUE check of `path` (MPD's form) under the music directory.
 pub fn check(
     music: &Path,
@@ -151,34 +260,15 @@ pub fn check(
 /// The sheets of one directory, each against the names beside it.
 fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
     // The names beside the sheets: exact, by lowercase, by stem.
-    let names: Vec<String> = visit
-        .entries
-        .iter()
-        .filter(|e| !e.is_dir)
-        .map(|e| e.name.to_string_lossy().into_owned())
-        .collect();
-    let by_lower: HashMap<String, &str> = names
-        .iter()
-        .map(|n| (n.to_lowercase(), n.as_str()))
-        .collect();
-    let by_stem: HashMap<String, Vec<&str>> = names.iter().fold(HashMap::new(), |mut m, n| {
-        let stem = n
-            .rsplit_once('.')
-            .map(|(s, _)| s)
-            .unwrap_or(n)
-            .to_lowercase();
-        m.entry(stem).or_default().push(n.as_str());
-        m
-    });
-    let audio: Vec<&str> = names
-        .iter()
-        .filter(|n| {
-            classify::suffix(n)
-                .map(|s| decoders.suffixes.contains(&s))
-                .unwrap_or(false)
-        })
-        .map(String::as_str)
-        .collect();
+    let beside = Beside::new(
+        visit
+            .entries
+            .iter()
+            .filter(|e| !e.is_dir)
+            .map(|e| e.name.to_string_lossy().into_owned())
+            .collect(),
+    );
+    let audio = beside.audio(decoders);
     let sheets: Vec<&walk::Entry> = visit
         .entries
         .iter()
@@ -241,29 +331,7 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
         let sheet = cue::parse(&bytes);
         let mut files = Vec::new();
         for f in &sheet.files {
-            let (state, found) = if let Some(what) = cue::foreign_path(&f.name) {
-                ("foreign", Some(what.to_string()))
-            } else if names.iter().any(|n| n == &f.name) || visit.dir.join(&f.name).is_file() {
-                if classify::suffix(&f.name)
-                    .map(|s| decoders.suffixes.contains(&s))
-                    .unwrap_or(false)
-                {
-                    ("ok", None)
-                } else {
-                    ("not_decoded", None)
-                }
-            } else if let Some(n) = by_lower.get(&f.name.to_lowercase()) {
-                ("case", Some(n.to_string()))
-            } else if let Some(candidates) = f
-                .name
-                .rsplit_once('.')
-                .map(|(s, _)| s.to_lowercase())
-                .and_then(|stem| by_stem.get(&stem))
-            {
-                ("suffix", candidates.first().map(|n| n.to_string()))
-            } else {
-                ("missing", None)
-            };
+            let (state, found) = beside.locate(&f.name, visit.dir, decoders);
             if f.accepted {
                 referenced
                     .entry(f.name.clone())

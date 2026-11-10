@@ -19,10 +19,10 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.4; }
-  .header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: baseline; gap: 12px; }
-  .header h1 { font-size: 18px; font-weight: 600; }
+  .header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 18px; font-weight: 600; white-space: nowrap; }
   .header .sub { color: var(--muted); font-size: 13px; }
-  .grow { flex: 1; }
+  .grow { flex: 1; min-width: 0; }
   .badge { font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 2px 8px; border-radius: 10px; background: var(--line); color: var(--muted); text-transform: uppercase; }
   .badge.ok { background: var(--accent); color: #fff; }
   .badge.bad { background: var(--danger); color: #fff; }
@@ -46,10 +46,15 @@
   button, select { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
   button:hover, select:hover { border-color: var(--accent); }
   button:disabled { opacity: .5; cursor: default; }
+  button.small { padding: 4px 10px; font-size: 13px; }
   label.pref { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
   .empty, .error { padding: 18px 12px; color: var(--muted); }
   .error { color: var(--danger); }
-  .panel { margin-top: 18px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 18px; overflow-x: auto; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 10px 18px; white-space: nowrap; font-size: 15px; }
+  .tab:hover { background: none; color: var(--text); border-color: transparent; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .panel { margin-top: 12px; }
   .panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   .panel .head b { font-size: 15px; }
   .panel .head .sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
@@ -59,6 +64,7 @@
   .section { margin-top: 14px; }
   .section h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
   .section .help { color: var(--muted); font-size: 13px; }
+  .help { color: var(--muted); font-size: 13px; }
   table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }
   table.kv td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.kv tr:last-child td { border-bottom: 0; }
@@ -78,18 +84,26 @@
   details.sheet summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   details.sheet summary .path { overflow-wrap: anywhere; }
   details.sheet .inner { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
+  details.sheet .inner > button { margin: 6px 0; }
   .finding { font-size: 13px; margin: 3px 0; }
   .finding code { margin-right: 4px; }
-  .sugg input.pick { width: 16px; height: 16px; margin: 0; cursor: pointer; align-self: center; }
+  input.pick { width: 16px; height: 16px; margin: 0; cursor: pointer; align-self: center; }
+  label.pickrow { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
   .write { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
   .write .line { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-  .write input[type=text] { flex: 1; min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
-  .write input[type=text]:focus { outline: none; border-color: var(--accent); }
+  .write textarea { flex: 1; min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 1.5; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); resize: vertical; }
+  .write textarea:focus { outline: none; border-color: var(--accent); }
+  .write .line button { align-self: flex-start; }
   .preview { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
   .preview .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
   .preview .top b { overflow-wrap: anywhere; }
   .preview .ex { margin-top: 6px; }
-  pre.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 8px 10px; border-radius: 6px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+  .preview .help { margin-top: 8px; }
+  .repairs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  label.repair { display: flex; gap: 8px; align-items: baseline; font-size: 14px; cursor: pointer; }
+  label.repair input { margin: 0; flex: none; position: relative; top: 2px; }
+  label.repair select { padding: 2px 6px; font-size: 13px; }
+  pre.file { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 8px 10px; border-radius: 6px; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
   .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.primary:hover { border-color: var(--text); }
@@ -103,13 +117,21 @@
   <span class="sub" id="version"></span>
   <span class="grow"></span>
   <span class="badge" id="state">...</span>
+  <button class="small" id="close" hidden>Close</button>
 </div>
 <div class="container">
   <div class="crumbs" id="crumbs"></div>
   <div class="list" id="list"></div>
   <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden>More</button></div>
 
-  <div class="panel" id="panel-ignore">
+  <nav class="tabs">
+    <button class="tab" id="tab-ignore">.mpdignore</button>
+    <button class="tab" id="tab-cue">CUE sheets</button>
+    <button class="tab" id="tab-tags">Tags</button>
+    <button class="tab" id="tab-undo">Written</button>
+  </nav>
+
+  <div class="panel" id="panel-ignore" hidden>
     <div class="head">
       <b>.mpdignore</b>
       <span class="sub">What MPD's update would meet under this folder, the lines that would keep the junk out, and those lines written on your say.</span>
@@ -129,21 +151,20 @@
       <div id="report-ignore"></div>
       <div class="write">
         <b>Write lines</b>
-        <div class="help">Into the .mpdignore of the folder in hand: the suggestions ticked above and a line typed here. The file is shown whole before anything is written, and every write can be undone below.</div>
+        <div class="help">Into the .mpdignore of the folder in hand. A line ticked above lands here; type or edit lines as you like, one pattern per line. The file is shown whole before anything is written, and every write can be undone from the Written tab.</div>
         <div class="line">
-          <input type="text" id="line-typed" placeholder="a pattern, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off">
+          <textarea id="lines" rows="3" placeholder="one pattern per line, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off"></textarea>
           <button id="preview-ignore">Preview</button>
         </div>
         <div id="preview-box"></div>
       </div>
-      <div class="section" id="undo-box"></div>
     </div>
   </div>
 
-  <div class="panel" id="panel-cue">
+  <div class="panel" id="panel-cue" hidden>
     <div class="head">
       <b>CUE sheets</b>
-      <span class="sub">Every sheet under this folder read as MPD reads it, and what MPD makes of it. Read-only.</span>
+      <span class="sub">Every sheet under this folder read as MPD reads it, what MPD makes of it, and the repairs each sheet allows, written on your say.</span>
       <span class="grow"></span>
       <button id="analyse-cue">Check this folder</button>
       <button id="cancel-cue" hidden>Cancel</button>
@@ -154,7 +175,7 @@
     </div>
   </div>
 
-  <div class="panel" id="panel-tags">
+  <div class="panel" id="panel-tags" hidden>
     <div class="head">
       <b>Tags</b>
       <span class="sub">Every audio file under this folder read for its tags, what MPD takes of them, and whether a folder shows as one album or several. Read-only; every file is opened, so a large folder takes a while.</span>
@@ -165,6 +186,17 @@
     <div class="body">
       <div class="progress" id="progress-tags">Not checked yet.</div>
       <div id="report-tags"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-undo" hidden>
+    <div class="head">
+      <b>Written</b>
+      <span class="sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.</span>
+    </div>
+    <div class="body">
+      <div class="done" id="undo-note" hidden></div>
+      <div class="progress" id="undo-box">Nothing written yet.</div>
     </div>
   </div>
 </div>
@@ -192,11 +224,14 @@
     if (text !== undefined) node.textContent = text;
     return node;
   };
+  const text = (s) => document.createTextNode(s);
   const ms = (n) => {
     if (n === null || n === undefined) return '';
     const s = Math.floor(n / 1000);
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   };
+  const when = (seconds) => new Date(seconds * 1000).toLocaleString();
+  const JSON_BODY = { 'Content-Type': 'application/json' };
 
   async function api(url, options) {
     const r = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
@@ -212,9 +247,9 @@
     const box = $('crumbs');
     box.textContent = '';
     const parts = path ? path.split('/') : [];
-    const add = (text, target, here) => {
-      if (here) { box.appendChild(el('span', 'here', text)); return; }
-      const a = el('a', '', text);
+    const add = (label, target, here) => {
+      if (here) { box.appendChild(el('span', 'here', label)); return; }
+      const a = el('a', '', label);
       a.href = toHash(target);
       box.appendChild(a);
     };
@@ -246,6 +281,7 @@
     $('more').hidden = !current.more;
     $('analyse-ignore').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
     $('analyse-cue').textContent = current.path ? 'Check this folder' : 'Check the whole library';
+    $('analyse-tags').textContent = current.path ? 'Check this folder' : 'Check the whole library';
   }
 
   function failed(path, message) {
@@ -291,6 +327,27 @@
     }
   }
 
+  // ------------------------------------------------------------------ the tabs
+
+  const TABS = ['ignore', 'cue', 'tags', 'undo'];
+
+  function showTab(name) {
+    if (!TABS.includes(name)) name = 'ignore';
+    TABS.forEach((t) => {
+      $('panel-' + t).hidden = t !== name;
+      $('tab-' + t).className = 'tab' + (t === name ? ' active' : '');
+    });
+    try { localStorage.setItem('mpdantic.tab', name); } catch (e) { /* no storage here */ }
+    if (name === 'undo') loadUndo();
+  }
+
+  // The tab to open: `?tab=cue` in the address, else the one open last time here.
+  function savedTab() {
+    const asked = new URLSearchParams(window.location.search).get('tab');
+    if (asked) return asked;
+    try { return localStorage.getItem('mpdantic.tab') || 'ignore'; } catch (e) { return 'ignore'; }
+  }
+
   // ---------------------------------------------------------- the preferences
 
   function showPrefs(p) {
@@ -306,7 +363,7 @@
 
   async function savePrefs() {
     try {
-      showPrefs(await api('/api/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ video: $('pref-video').value }) }));
+      showPrefs(await api('/api/preferences', { method: 'PUT', headers: JSON_BODY, body: JSON.stringify({ video: $('pref-video').value }) }));
     } catch (e) {
       $('pref-video').title = String(e.message || e);
     }
@@ -326,9 +383,9 @@
     tags: { kind: 'tags', job: null, verb: 'Reading', render: reportTags }
   };
 
-  function progress(p, text, bad) {
+  function progress(p, message, bad) {
     const node = $('progress-' + p.kind);
-    node.textContent = text;
+    node.textContent = message;
     node.className = 'progress' + (bad ? ' bad' : '');
   }
 
@@ -340,7 +397,7 @@
   async function analyse(p) {
     $('report-' + p.kind).textContent = '';
     try {
-      const started = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: p.kind, path: current.path }) });
+      const started = await api('/api/jobs', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: p.kind, path: current.path }) });
       follow(p, started.id);
     } catch (e) {
       progress(p, String(e.message || e), true);
@@ -427,11 +484,7 @@
       r.suggestions.forEach((g) => {
         const d = el('div', 'sugg');
         const top = el('div', 'top');
-        const pick = el('input', 'pick');
-        pick.type = 'checkbox';
-        pick.value = g.pattern;
-        pick.title = 'Write ' + g.pattern;
-        top.appendChild(pick);
+        top.appendChild(pickBox(g.pattern));
         top.appendChild(el('code', '', g.pattern));
         top.appendChild(el('span', 'tag' + (g.class === 'video' ? ' warn' : ''), CLASSES[g.class] || g.class));
         top.appendChild(el('span', '', g.count + (g.count === 1 ? ' entry' : ' entries') + (g.bytes ? ', ' + size(g.bytes) : '')));
@@ -451,11 +504,29 @@
     linesInForce(box, r.in_force);
     const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
     if (audio.length) table(section(box, 'Audio by suffix'), audio);
-    const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => ['.' + k, String(r.ffmpeg_suffixes[k])]);
-    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; the rest is counted here.'), ffmpeg);
+    const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => [pickRow('*.' + k), String(r.ffmpeg_suffixes[k])]);
+    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; tick any other suffix to keep it out too.'), ffmpeg);
     if (r.other_suffixes.length) {
-      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. A line by hand would spare the stat.'), r.other_suffixes.map((p) => [p[0].startsWith('(') ? p[0] : '.' + p[0], String(p[1])]));
+      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. Tick a suffix to spare the stat with a line.'), r.other_suffixes.map((p) => [p[0].startsWith('(') || p[0] === 'mpdignore' ? (p[0].startsWith('(') ? p[0] : '.' + p[0]) : pickRow('*.' + p[0]), String(p[1])]));
     }
+    syncPicks();
+  }
+
+  // A tick that puts a line into the list below, or takes it out.
+  function pickBox(pattern) {
+    const pick = el('input', 'pick');
+    pick.type = 'checkbox';
+    pick.value = pattern;
+    pick.title = 'Write ' + pattern;
+    pick.addEventListener('change', () => toggleLine(pattern, pick.checked));
+    return pick;
+  }
+
+  function pickRow(pattern) {
+    const row = el('label', 'pickrow');
+    row.appendChild(pickBox(pattern));
+    row.appendChild(el('code', '', pattern));
+    return row;
   }
 
   function linesInForce(box, inForce) {
@@ -464,7 +535,7 @@
       const row = el('div', 'sugg');
       row.appendChild(el('div', 'top', (l.dir || 'the root') + '/.mpdignore'));
       const lines = el('div', 'ex');
-      l.lines.forEach((line, i) => { if (i) lines.appendChild(document.createTextNode('  |  ')); lines.appendChild(el('code', '', line)); });
+      l.lines.forEach((line, i) => { if (i) lines.appendChild(text('  |  ')); lines.appendChild(el('code', '', line)); });
       if (!l.lines.length) lines.textContent = 'no pattern in it';
       row.appendChild(lines);
       // A line starting with # is a comment to MPD; one that looks like a name did
@@ -472,11 +543,11 @@
       l.dead.forEach((line) => {
         const why = el('div', 'why');
         why.appendChild(el('span', 'tag warn', 'dead line'));
-        why.appendChild(document.createTextNode(' '));
+        why.appendChild(text(' '));
         why.appendChild(el('code', '', line));
-        why.appendChild(document.createTextNode(' is a comment to MPD, so it keeps nothing out. For a name starting with a hash, the line that works is '));
+        why.appendChild(text(' is a comment to MPD, so it keeps nothing out. For a name starting with a hash, the line that works is '));
         why.appendChild(el('code', '', '[#]' + line.slice(1)));
-        why.appendChild(document.createTextNode('.'));
+        why.appendChild(text('.'));
         row.appendChild(why);
       });
       f.appendChild(row);
@@ -486,6 +557,8 @@
   // -------------------------------------------------------------- the CUE report
 
   const FILE_STATES = { ok: 'beside the sheet', missing: 'not beside the sheet', case: 'there in another case', suffix: 'there with another suffix', not_decoded: 'there, but no decoder claims it', foreign: 'a foreign path' };
+  // The findings a repair of the sheet's text, or its removal, answers.
+  const REPAIRABLE = ['C01', 'C02', 'C04', 'C05', 'C06', 'C07', 'C11', 'C12'];
 
   function reportCue(r) {
     const box = $('report-cue');
@@ -500,7 +573,7 @@
     Object.keys(r.by_code).forEach((code) => { rows.push([code + '  ' + (r.codes[code] || ''), String(r.by_code[code])]); });
     table(totals, rows);
     if (!r.sheets) { totals.appendChild(el('div', 'help', 'No CUE sheet under this folder.')); linesInForce(box, r.in_force); return; }
-    const list = section(box, 'Each sheet', 'Sheets with findings first. A finding says what MPD does with the sheet as it is.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' sheets are listed; the totals count every one.' : ''));
+    const list = section(box, 'Each sheet', 'Sheets with findings first. A finding says what MPD does with the sheet as it is; Repair shows what the sheet would be with the repairs it allows, and writes it on your say.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' sheets are listed; the totals count every one.' : ''));
     r.list.forEach((s) => {
       const d = el('details', 'sheet');
       const sum = el('summary');
@@ -512,17 +585,24 @@
       s.findings.forEach((f) => {
         const line = el('div', 'finding');
         line.appendChild(el('code', '', f.code + (f.line ? ' line ' + f.line : '')));
-        line.appendChild(document.createTextNode(f.text));
+        line.appendChild(text(f.text));
         inner.appendChild(line);
       });
       s.files.forEach((f) => {
         const line = el('div', 'finding');
         line.appendChild(el('span', 'tag ' + (f.state === 'ok' ? 'ok' : 'warn'), f.accepted ? f.kind : f.kind + ' (dropped)'));
-        line.appendChild(document.createTextNode(' '));
+        line.appendChild(text(' '));
         line.appendChild(el('code', '', f.name));
-        line.appendChild(document.createTextNode(' ' + (FILE_STATES[f.state] || f.state) + (f.found ? ': ' + f.found : '')));
+        line.appendChild(text(' ' + (FILE_STATES[f.state] || f.state) + (f.found ? ': ' + f.found : '')));
         inner.appendChild(line);
       });
+      if (s.findings.some((f) => REPAIRABLE.includes(f.code))) {
+        const fix = el('button', '', 'Repair');
+        const card = el('div');
+        fix.addEventListener('click', () => { fix.disabled = true; repairSheet(s.path, card, fix); });
+        inner.appendChild(fix);
+        inner.appendChild(card);
+      }
       if (s.track_list.length) {
         const rows = s.track_list.map((t) => [t.number + '  ' + (t.title || '') + (t.performer ? '  (' + t.performer + ')' : ''), ms(t.start_ms) + (t.end_ms !== null && t.end_ms !== undefined ? ' to ' + ms(t.end_ms) : ''), t.file]);
         table(inner, rows);
@@ -556,8 +636,8 @@
       const line = (label, values) => {
         if (values.length < 2) return;
         const row = el('div', 'ex');
-        row.appendChild(document.createTextNode(label + ': '));
-        values.forEach((v, i) => { if (i) row.appendChild(document.createTextNode('  |  ')); row.appendChild(el('code', '', v[0])); row.appendChild(document.createTextNode(' ' + v[1])); });
+        row.appendChild(text(label + ': '));
+        values.forEach((v, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', v[0])); row.appendChild(text(' ' + v[1])); });
         d.appendChild(row);
       };
       line('Album', s.albums);
@@ -582,51 +662,88 @@
 
   // ------------------------------------------------------------- the writes
 
-  const JSON_BODY = { 'Content-Type': 'application/json' };
-  const text = (s) => document.createTextNode(s);
-  const when = (seconds) => new Date(seconds * 1000).toLocaleString();
-
-  // The lines to write: the suggestions ticked, then the line typed.
-  function chosenLines() {
-    const lines = Array.from(document.querySelectorAll('#report-ignore input.pick:checked')).map((i) => i.value);
-    const typed = $('line-typed').value.trim();
-    if (typed) lines.push(typed);
-    return lines;
+  // The lines to write are the list in the box, one per line: the ticks above put
+  // lines in and take them out, and the box is edited freely.
+  function lineList() {
+    return $('lines').value.split('\n').map((s) => s.trim()).filter(Boolean);
   }
 
-  function codes(parent, lead, lines) {
+  function setLines(lines) {
+    $('lines').value = lines.length ? lines.join('\n') + '\n' : '';
+  }
+
+  function toggleLine(pattern, on) {
+    const lines = lineList();
+    const at = lines.indexOf(pattern);
+    if (on && at < 0) lines.push(pattern);
+    if (!on && at >= 0) lines.splice(at, 1);
+    setLines(lines);
+    syncPicks();
+    previewBatch(true);
+  }
+
+  // The ticks follow the list, whichever way it changed.
+  function syncPicks() {
+    const lines = lineList();
+    document.querySelectorAll('#report-ignore input.pick').forEach((i) => { i.checked = lines.includes(i.value); });
+  }
+
+  function codeList(parent, lead, lines) {
     const row = el('div', 'ex');
     row.appendChild(text(lead));
     lines.forEach((l, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', l)); });
     parent.appendChild(row);
   }
 
-  // The batch prepared by the core and shown whole; nothing is written until Write.
-  async function previewBatch() {
+  // The batch of lines prepared by the core and shown whole; nothing is written
+  // until Write. From a tick, an empty list clears the card without a word.
+  async function previewBatch(fromTick) {
     const box = $('preview-box');
     box.textContent = '';
-    const lines = chosenLines();
-    if (!lines.length) { box.appendChild(el('div', 'help bad', 'Nothing chosen: tick a suggestion or type a line.')); return; }
+    const lines = lineList();
+    if (!lines.length) { if (fromTick !== true) box.appendChild(el('div', 'help bad', 'Nothing to write: tick a line above or type one.')); return; }
     $('preview-ignore').disabled = true;
     try {
-      showPreview(await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'mpdignore', path: current.path, lines }) }));
+      const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'mpdignore', path: current.path, lines }) });
+      renderPreview(p, box, null, null);
     } catch (e) {
       box.appendChild(el('div', 'help bad', String(e.message || e)));
     }
     $('preview-ignore').disabled = false;
   }
 
-  function showPreview(p) {
-    const box = $('preview-box');
+  // A sheet's repairs: the core says which the sheet allows, the user ticks, and the
+  // card follows every tick with the sheet as it would be.
+  function repairSheet(path, box, button) {
+    const again = async (repairs, encoding) => {
+      const body = { kind: 'cue', path };
+      if (repairs) body.repairs = repairs;
+      if (encoding) body.encoding = encoding;
+      try {
+        const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
+        renderPreview(p, box, again, () => { button.disabled = false; });
+      } catch (e) {
+        box.textContent = '';
+        box.appendChild(el('div', 'help bad', String(e.message || e)));
+        button.disabled = false;
+      }
+    };
+    again(null, null);
+  }
+
+  // The card for a preview of any kind: what would change, the file as it would be,
+  // one Write button. `again` re-previews a sheet with the repairs ticked; `closed`
+  // runs when the card goes.
+  function renderPreview(p, box, again, closed) {
     box.textContent = '';
     const card = el('div', 'preview');
     const top = el('div', 'top');
-    top.appendChild(el('b', '', (p.exists ? 'Change ' : 'Create ') + p.file));
+    top.appendChild(el('b', '', (p.op === 'remove' ? 'Remove ' : p.exists ? 'Change ' : 'Create ') + p.file));
     top.appendChild(el('span', 'help', p.place === 'local' ? 'on a local root, written in place.' : 'on ' + p.place + ': mounted read-write for the write and released after.'));
     card.appendChild(top);
-    if (p.added.length) codes(card, 'Lines to add: ', p.added);
-    if (p.already.length) codes(card, 'Already there: ', p.already);
-    p.refused.forEach((pair) => {
+    if (p.added && p.added.length) codeList(card, 'Lines to add: ', p.added);
+    if (p.already && p.already.length) codeList(card, 'Already there: ', p.already);
+    (p.refused || []).forEach((pair) => {
       const why = el('div', 'why');
       why.appendChild(el('span', 'tag bad', 'not written'));
       why.appendChild(text(' '));
@@ -634,14 +751,58 @@
       why.appendChild(text(': ' + pair[1] + '.'));
       card.appendChild(why);
     });
-    card.appendChild(el('div', 'help', 'The file as it would be:'));
-    card.appendChild(el('pre', 'file', p.after || '(empty)'));
+    if (p.repairs && p.repairs.length) {
+      const list = el('div', 'repairs');
+      let select = null;
+      const chosen = () => again(Array.from(list.querySelectorAll('input:checked')).map((i) => i.value), select ? select.value : null);
+      p.repairs.forEach((r) => {
+        const row = el('label', 'repair');
+        const tick = el('input');
+        tick.type = 'checkbox';
+        tick.value = r.id;
+        tick.checked = r.on;
+        if (r.id === 'encoding') {
+          tick.disabled = true;
+          tick.title = 'The sheet is written as UTF-8 with any change.';
+        } else {
+          tick.addEventListener('change', chosen);
+        }
+        row.appendChild(tick);
+        row.appendChild(text(' ' + r.what));
+        if (r.id === 'encoding' && p.encodings && p.encodings.length) {
+          select = el('select');
+          p.encodings.forEach((name) => { const o = el('option', '', name); o.value = name; o.selected = name === p.encoding; select.appendChild(o); });
+          select.addEventListener('change', chosen);
+          row.appendChild(text(' '));
+          row.appendChild(select);
+        }
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+    }
+    (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', n)));
+    if (p.op === 'remove') {
+      card.appendChild(el('div', 'help', 'The sheet is removed; the undo puts it back as it is now.'));
+    } else {
+      if (p.kind === 'cue' && p.exists) {
+        card.appendChild(el('div', 'help', 'As it is:'));
+        card.appendChild(el('pre', 'file', p.before));
+      }
+      card.appendChild(el('div', 'help', p.kind === 'cue' ? 'As it would be, ' + p.lines_changed + (p.lines_changed === 1 ? ' line changed:' : ' lines changed:') : 'The file as it would be:'));
+      card.appendChild(el('pre', 'file', p.after || '(empty)'));
+      if (p.kind === 'cue') {
+        card.appendChild(el('div', 'help', p.remaining && p.remaining.length
+          ? 'MPD would still find in the text: ' + p.remaining.map((f) => f.code + (f.line ? ' line ' + f.line : '') + ', ' + f.text).join(' ')
+          : 'MPD finds nothing more in the text. Whether the files are beside the sheet is the check\'s to say.'));
+      }
+    }
     const actions = el('div', 'actions');
-    const write = el('button', 'primary', p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
-    write.disabled = !p.added.length;
-    write.addEventListener('click', () => applyBatch(p, write));
+    const label = p.op === 'remove' ? 'Remove the sheet' : p.kind === 'cue' ? 'Write the sheet' : (p.added && p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
+    const write = el('button', 'primary', p.changed ? label : 'Nothing to write');
+    write.disabled = !p.changed;
+    write.addEventListener('click', () => applyBatch(p, write, box, closed));
     const drop = el('button', '', 'Cancel');
-    drop.addEventListener('click', () => { box.textContent = ''; });
+    drop.addEventListener('click', () => { box.textContent = ''; if (closed) closed(); });
     actions.appendChild(write);
     actions.appendChild(drop);
     card.appendChild(actions);
@@ -657,19 +818,23 @@
     return done;
   }
 
-  async function applyBatch(p, button) {
-    const box = $('preview-box');
+  async function applyBatch(p, button, box, closed) {
     button.disabled = true;
     try {
       const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
       box.textContent = '';
-      box.appendChild(outcome(a, 'written'));
-      $('line-typed').value = '';
-      document.querySelectorAll('#report-ignore input.pick:checked').forEach((i) => { i.checked = false; });
+      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : 'written'));
+      if (p.kind === 'cue') {
+        box.appendChild(el('div', 'help', 'Check the folder again to see the sheet as it is now. The undo is on the Written tab.'));
+      } else {
+        box.appendChild(el('div', 'help', 'The undo is on the Written tab.'));
+        setLines([]);
+        syncPicks();
+      }
+      if (closed) closed();
       loadUndo();
     } catch (e) {
-      const bad = el('div', 'done bad', String(e.message || e));
-      box.appendChild(bad);
+      box.appendChild(el('div', 'done bad', String(e.message || e)));
       button.disabled = false;
     }
   }
@@ -680,9 +845,8 @@
     let list;
     try { list = await api('/api/undo'); } catch (e) { return; }
     box.textContent = '';
-    if (!list.length) return;
-    box.appendChild(el('h3', '', 'Written by MPDantic'));
-    box.appendChild(el('div', 'help', 'Every write, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.'));
+    box.className = list.length ? '' : 'progress';
+    if (!list.length) { box.textContent = 'Nothing written yet.'; return; }
     list.forEach((b) => {
       const row = el('div', 'sugg');
       const top = el('div', 'top');
@@ -698,11 +862,15 @@
     });
   }
 
+  // The outcome goes above the list, which is read again and would wipe it.
   async function undoBatch(id, row, button) {
     button.disabled = true;
+    const note = $('undo-note');
     try {
       const a = await api('/api/undo/' + encodeURIComponent(id), { method: 'POST' });
-      row.appendChild(outcome(a, 'undone'));
+      note.textContent = '';
+      note.appendChild(outcome(a, 'undone'));
+      note.hidden = false;
       loadUndo();
     } catch (e) {
       row.appendChild(el('div', 'done bad', String(e.message || e)));
@@ -711,13 +879,28 @@
   }
 
   // The job already there when the page opens, from this device or another: followed
-  // while it runs, shown when it is done, on the panel of its kind.
+  // while it runs, shown when it is done, on the tab of its kind.
   async function resume() {
     try {
       const j = await api('/api/jobs');
       const p = panels[j.kind] || panels.ignore;
-      if (j.state === 'running') follow(p, j.id); else ended(p, j);
+      if (j.state === 'running') { follow(p, j.id); showTab(p.kind); } else ended(p, j);
     } catch (e) { /* no job yet */ }
+  }
+
+  // Close: only when this page is the window itself. Inside Volumio's own iframe page
+  // its arrow back is the way out. The window closes where the browser allows (one the
+  // UI opened), else the page steps back, else it goes to the player's own page.
+  if (window.parent === window) {
+    $('close').hidden = false;
+    $('close').addEventListener('click', () => {
+      window.close();
+      setTimeout(() => {
+        if (window.closed) return;
+        if (window.history.length > 1) window.history.back();
+        else window.location.href = 'http://' + window.location.hostname + '/';
+      }, 100);
+    });
   }
 
   $('more').addEventListener('click', () => load(current.path, true));
@@ -725,10 +908,13 @@
     $('analyse-' + p.kind).addEventListener('click', () => analyse(p));
     $('cancel-' + p.kind).addEventListener('click', () => cancel(p));
   });
+  TABS.forEach((t) => $('tab-' + t).addEventListener('click', () => showTab(t)));
   $('pref-video').addEventListener('change', savePrefs);
-  $('preview-ignore').addEventListener('click', previewBatch);
-  $('line-typed').addEventListener('keydown', (e) => { if (e.key === 'Enter') previewBatch(); });
+  $('preview-ignore').addEventListener('click', () => previewBatch(false));
+  $('lines').addEventListener('input', syncPicks);
+  $('lines').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) previewBatch(false); });
   window.addEventListener('hashchange', () => load(fromHash(), false));
+  showTab(savedTab());
   load(fromHash(), false);
   loadPrefs();
   loadUndo();

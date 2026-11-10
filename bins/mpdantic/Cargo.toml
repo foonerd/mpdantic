@@ -16,6 +16,8 @@ libc = "0.2"
 # The tags and the audio properties of every format MPD reads on Volumio, with the
 # raw keys as written, so MPD's own rules can be applied to them here.
 lofty = "0.25"
+# The encodings a CUE sheet that is not UTF-8 is read as; pure Rust, the WHATWG tables.
+encoding_rs = "0.8"
 
 [lints]
 workspace = true

@@ -13,9 +13,16 @@ use serde::{Deserialize, Serialize};
 pub struct Entry {
     /// The library path, MPD's form.
     pub path: String,
-    /// `write_text`: a text file written whole (created when `before` is none).
+    /// `write_text`: a text file written whole (created when `before` is none);
+    /// `remove`: a file removed, `before` what it held.
     pub op: String,
+    /// The file before, as text for the page (bytes that are not UTF-8 shown as
+    /// Latin-1); none when the file was not there.
     pub before: Option<String>,
+    /// The file before, byte for byte, kept beside the manifest under this name;
+    /// what the undo writes back when it is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_bytes: Option<String>,
     pub after: String,
 }
 
@@ -74,6 +81,24 @@ impl Journal {
         fs::rename(&part, dir.join("manifest.json")).map_err(|e| e.to_string())
     }
 
+    /// A file's bytes kept beside the batch's manifest, under `name`.
+    pub fn keep(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
+        let dir = self.dir.join(id);
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let file = dir.join(name);
+        fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+        Ok(name.to_string())
+    }
+
+    /// The bytes kept under `name` beside the batch's manifest.
+    pub fn kept(&self, id: &str, name: &str) -> Result<Vec<u8>, String> {
+        if name.is_empty() || name.contains('/') || name.contains("..") {
+            return Err("not a name the journal keeps".to_string());
+        }
+        let file = self.dir.join(id).join(name);
+        fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+    }
+
     pub fn load(&self, id: &str) -> Option<Batch> {
         if id.is_empty() || id.contains('/') || id.contains("..") {
             return None;
@@ -129,6 +154,7 @@ mod tests {
                 path: "NAS/Jazz/.mpdignore".into(),
                 op: "write_text".into(),
                 before: None,
+                before_bytes: None,
                 after: "*.iso\n".into(),
             }],
             undone: false,
@@ -153,6 +179,16 @@ mod tests {
         assert!(j.mark_undone("300").is_err());
         let id = j.new_id();
         assert!(!dir.join(&id).exists());
+        // Bytes kept beside a manifest come back as they were; a name with a path in
+        // it is refused; a manifest without the field reads as none.
+        assert_eq!(
+            j.keep("100", "0.before", b"\xEF\xBB\xBFx").unwrap(),
+            "0.before"
+        );
+        assert_eq!(j.kept("100", "0.before").unwrap(), b"\xEF\xBB\xBFx");
+        assert!(j.kept("100", "../manifest.json").is_err());
+        assert!(j.kept("100", "nothing").is_err());
+        assert_eq!(j.load("100").unwrap().entries[0].before_bytes, None);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

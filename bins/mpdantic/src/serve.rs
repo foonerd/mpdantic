@@ -357,17 +357,19 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
         return (400, error("the body is not JSON"));
     };
+    let strings = |key: &str| -> Option<Vec<String>> {
+        request[key].as_array().map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+    };
     let req = write::Request {
         kind: request["kind"].as_str().unwrap_or("").to_string(),
         path: request["path"].as_str().unwrap_or("").to_string(),
-        lines: request["lines"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        lines: strings("lines").unwrap_or_default(),
+        repairs: strings("repairs"),
+        encoding: request["encoding"].as_str().map(str::to_string),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -380,7 +382,8 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         }
     };
     let id = shared.next_preview.fetch_add(1, Ordering::Relaxed) + 1;
-    match write::prepare(shared.library.music(), &shares, id, &req) {
+    let (_, decoders) = shared.decoders();
+    match write::prepare(shared.library.music(), &shares, &decoders, id, &req) {
         Ok(preview) => {
             let body = json_of(&preview);
             shared
@@ -687,6 +690,71 @@ mod tests {
             "POST /api/undo/nothing HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
         );
         assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_sheet_is_repaired_over_the_api_with_the_repairs_chosen() {
+        let root = temp_library("serve-cue");
+        std::fs::write(root.join("USB/b.flac"), b"x").unwrap();
+        std::fs::write(
+            root.join("USB/a.cue"),
+            "FILE \"b.FLAC\" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let post = |body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let out = post("{\"kind\":\"cue\",\"path\":\"USB\"}");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = post("{\"kind\":\"cue\",\"path\":\"USB/a.cue\"}");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(p["path"], "USB");
+        assert_eq!(p["file"], "USB/a.cue");
+        assert_eq!(p["op"], "write_text");
+        assert_eq!(p["repairs"][0]["id"], "type");
+        assert_eq!(p["repairs"][1]["id"], "name");
+        assert_eq!(
+            p["after"],
+            "FILE \"b.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n"
+        );
+        assert!(p.get("added").is_none());
+        // The name alone: the type stays as written.
+        let out = post("{\"kind\":\"cue\",\"path\":\"USB/a.cue\",\"repairs\":[\"name\"]}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(
+            p["after"],
+            "FILE \"b.flac\" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n"
+        );
+        assert_eq!(p["repairs"][0]["on"], false);
+        let id = p["id"].as_u64().unwrap();
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("USB/a.cue")).unwrap(),
+            "FILE \"b.flac\" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n"
+        );
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(list[0]["kind"], "cue");
+        assert_eq!(list[0]["note"], "sheet USB/a.cue repaired: name");
+        // A bad encoding label is refused before anything is read into a preview.
+        let out = post("{\"kind\":\"cue\",\"path\":\"USB/a.cue\",\"encoding\":\"utf-7\"}");
+        assert!(
+            out.starts_with("HTTP/1.0 200"),
+            "a UTF-8 sheet needs no encoding: {out}"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

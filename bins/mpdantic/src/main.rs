@@ -23,6 +23,7 @@ mod analyse;
 mod classify;
 mod cue;
 mod cuecheck;
+mod cuefix;
 mod ignore;
 mod jobs;
 mod library;
