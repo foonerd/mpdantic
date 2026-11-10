@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["bins/mpdantic"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# One set of lints for every crate; check.sh denies warnings.
+[workspace.lints.rust]
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+
+# A daemon: one unit, linked whole, aborts on panic and lets systemd start it again.
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

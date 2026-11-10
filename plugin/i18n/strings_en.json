@@ -1,0 +1,20 @@
+{
+  "MPDANTIC": {
+    "PLUGIN_NAME": "MPDantic",
+    "PAGE_TITLE": "MPDantic",
+    "SAVE": "Save",
+    "SAVED": "Saved. The core is being restarted.",
+    "MGMT_SECTION": "Management interface",
+    "MGMT_SECTION_DESC": "Where MPDantic's own pages are served on this player. Nothing is served yet: this version carries the plugin's skeleton.",
+    "MGMT_PORT": "Port",
+    "MGMT_PORT_DESC": "The port of the management interface, 1024 to 65535.",
+    "STATUS_SECTION": "Status",
+    "STATUS_SECTION_DESC": "What the core says.",
+    "STATUS_BUTTON": "Show status",
+    "STATUS_TITLE": "MPDantic status",
+    "STATUS_UP": "Core {{version}}, {{state}}.",
+    "STATUS_DOWN": "The core is not running.",
+    "ERR_CORE": "The core could not be started: {{error}}",
+    "ERR_PORT": "Not a port: {{value}}. Use a number from 1024 to 65535."
+  }
+}

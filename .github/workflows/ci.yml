@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# The check and the builds run in Glass's builder image (scripts/builder/Dockerfile in
+# foonerd/glass, named here by its digest): the cross compilers and Node are in it, and
+# a job installs no system package while it runs. Build caches are written from main
+# only and read by the release. The shell lint runs on the bare runner, which has
+# shellcheck.
+jobs:
+  check:
+    name: format, lints, tests, docs, plugin
+    runs-on: ubuntu-24.04
+    container: ghcr.io/foonerd/glass-builder@sha256:1d6d085cbf23ff53628402be14e87a5ffe996416894684e596956143365800da
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain from rust-toolchain.toml, in the image unless the file has moved on
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: scripts/check.sh
+
+  shell:
+    name: shell lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -S warning -s sh plugin/install.sh plugin/uninstall.sh
+      - run: shellcheck -S warning scripts/*.sh
+
+  ship:
+    name: cross builds, the plugin zip
+    runs-on: ubuntu-24.04
+    container: ghcr.io/foonerd/glass-builder@sha256:1d6d085cbf23ff53628402be14e87a5ffe996416894684e596956143365800da
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ship
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: scripts/ship.sh
+      - run: scripts/package.sh
+      - name: The zip names the commit it was built from
+        run: |
+          unzip -p dist/mpdantic-*.zip build.json | grep -F "\"commit\": \"$(git rev-parse --short HEAD)\""
+      - name: The zip carries the core for every architecture, and the modules
+        run: |
+          for arch in arm armv7 armv8 x64; do
+            unzip -l dist/mpdantic-*.zip | grep -q " bin/$arch/mpdantic\$" || { echo "no bin/$arch/mpdantic in the zip" >&2; exit 1; }
+          done
+          for module in kew v-conf; do
+            unzip -l dist/mpdantic-*.zip | grep -q " node_modules/$module/package.json\$" || { echo "no module $module in the zip" >&2; exit 1; }
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mpdantic-plugin
+          path: dist/mpdantic-*.zip
+          if-no-files-found: error

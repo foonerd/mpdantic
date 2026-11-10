@@ -1,0 +1,29 @@
+{
+  "name": "mpdantic",
+  "version": "0.1.0",
+  "description": "Audits and repairs a music library for MPD: output buffer sizing by RAM, .mpdignore management, CUE sheet repair, playlist rebasing, tag validation. Rust core, thin Node shell.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "author": "Just a Nerd",
+  "license": "MIT",
+  "repository": "https://github.com/foonerd/mpdantic",
+  "engines": {
+    "node": ">=20",
+    "volumio": ">=4"
+  },
+  "volumio_info": {
+    "prettyName": "MPDantic",
+    "icon": "fa-stethoscope",
+    "plugin_type": "system_controller",
+    "os": ["bookworm"],
+    "architectures": ["armhf", "amd64"],
+    "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management page.",
+    "changelog": "0.1.0 The skeleton: the core, the shell, the build and the signed release pipeline. Nothing to use yet."
+  },
+  "dependencies": {
+    "kew": "^0.7.0",
+    "v-conf": "^1.4.3"
+  }
+}

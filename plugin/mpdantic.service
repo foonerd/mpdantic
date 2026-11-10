@@ -1,0 +1,30 @@
+[Unit]
+Description=MPDantic core (mpdantic plugin)
+Documentation=https://github.com/foonerd/mpdantic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=volumio
+Group=volumio
+RuntimeDirectory=mpdantic
+RuntimeDirectoryMode=0755
+ExecStart=/data/plugins/system_controller/mpdantic/bin/mpdantic --run /run/mpdantic
+# Well behind the player's audio thread, which is real-time; a library walk never
+# starves it.
+Nice=10
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=5
+NoNewPrivileges=yes
+# full, not strict: /usr, /boot and /etc read-only; the library under /mnt, the data
+# folder and the temporary mounts under /run/mpdantic stay reachable.
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/run/mpdantic /data/INTERNAL/mpdantic
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

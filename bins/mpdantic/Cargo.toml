@@ -1,0 +1,12 @@
+[package]
+name = "mpdantic"
+description = "The core of MPDantic: audits and repairs a music library for MPD, and serves the management interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

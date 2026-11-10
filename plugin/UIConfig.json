@@ -1,0 +1,32 @@
+{
+  "page": {
+    "label": "TRANSLATE.MPDANTIC.PAGE_TITLE"
+  },
+  "sections": [
+    {
+      "id": "management_section",
+      "element": "section",
+      "label": "TRANSLATE.MPDANTIC.MGMT_SECTION",
+      "icon": "fa-stethoscope",
+      "description": "TRANSLATE.MPDANTIC.MGMT_SECTION_DESC",
+      "onSave": { "type": "controller", "endpoint": "system_controller/mpdantic", "method": "updateManagement" },
+      "saveButton": {
+        "label": "TRANSLATE.MPDANTIC.SAVE",
+        "data": ["port"]
+      },
+      "content": [
+        { "id": "port", "element": "input", "label": "TRANSLATE.MPDANTIC.MGMT_PORT", "doc": "TRANSLATE.MPDANTIC.MGMT_PORT_DESC", "value": "8030" }
+      ]
+    },
+    {
+      "id": "status_section",
+      "element": "section",
+      "label": "TRANSLATE.MPDANTIC.STATUS_SECTION",
+      "icon": "fa-info-circle",
+      "description": "TRANSLATE.MPDANTIC.STATUS_SECTION_DESC",
+      "onSave": { "type": "controller", "endpoint": "system_controller/mpdantic", "method": "showStatus" },
+      "saveButton": { "label": "TRANSLATE.MPDANTIC.STATUS_BUTTON", "data": [] },
+      "content": []
+    }
+  ]
+}
