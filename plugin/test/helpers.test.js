@@ -69,9 +69,87 @@ test('the Avahi service names the player, HTTP on the port, the path', () => {
 });
 
 test('the status summary says the port when up, the error when not, or that the core is down', () => {
-    assert.equal(h.summarize({ version: '0.1.0', state: 'idle', port: 8030 }, t), 'STATUS_UP {"version":"0.1.0","port":"8030"}');
+    assert.equal(h.summarize({ version: '0.1.0', state: 'idle', port: 8030 }, t, 'the buffer'), 'STATUS_UP {"version":"0.1.0","port":"8030","buffer":"the buffer"}');
     assert.equal(h.summarize({ version: '0.1.0', state: 'error', error: 'port 8030: in use' }, t), 'STATUS_ERROR {"version":"0.1.0","error":"port 8030: in use"}');
-    assert.equal(h.summarize({}, t), 'STATUS_UP {"version":"?","port":"?"}');
+    assert.equal(h.summarize({}, t), 'STATUS_UP {"version":"?","port":"?","buffer":""}');
     assert.equal(h.summarize(null, t), 'STATUS_DOWN');
     assert.equal(h.summarize('text', t), 'STATUS_DOWN');
+});
+
+const MIB = 1048576;
+const GIB = 1024 * MIB;
+
+test('the MPD version is read from its banner, and a second value counts from 0.21.19', () => {
+    assert.deepEqual(h.parseMpdVersion('Music Player Daemon 0.24.6 (b6f106b+)\n'), [0, 24, 6]);
+    assert.deepEqual(h.parseMpdVersion('Music Player Daemon 0.21'), [0, 21, 0]);
+    assert.equal(h.parseMpdVersion('nothing'), null);
+    assert.equal(h.parseMpdVersion(undefined), null);
+    assert.equal(h.mpdOverrides([0, 24, 6]), true);
+    assert.equal(h.mpdOverrides([0, 21, 19]), true);
+    assert.equal(h.mpdOverrides([0, 21, 18]), false);
+    assert.equal(h.mpdOverrides([0, 20, 23]), false);
+    assert.equal(h.mpdOverrides([1, 0, 0]), true);
+    assert.equal(h.mpdOverrides(null), false);
+});
+
+test('the buffer is the smallest bound, never below the floor; the Pi family stays at the floor', () => {
+    const mpd = [0, 24, 6];
+    // The VM: x86, 3914 MiB, a 2005 MiB heap. The time bound holds at 128 MiB.
+    const vm = h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005.3 * MIB, arch: 'x64', mpdVersion: mpd });
+    assert.deepEqual(vm.bounds, { heap: 156, memory: 243, time: 128 });
+    assert.equal(vm.limiting, 'time');
+    assert.deepEqual([vm.reason, vm.raised, vm.mib, vm.kib], ['raised', true, 128, 131072]);
+    assert.deepEqual(vm.inputs, { memTotalGb: 3.8, heapLimitMib: 2005, arch: 'x64', mpdVersion: '0.24.6' });
+    // The hanger: a Pi 5 with 16 GB on a 32-bit userland, whose heap is 1 GiB whatever
+    // the memory. The heap bound holds below the floor.
+    const pi5 = h.bufferPlan({ memTotal: 16003 * MIB, heapLimit: 1048 * MIB, arch: 'arm', mpdVersion: mpd });
+    assert.deepEqual(pi5.bounds, { heap: 76, memory: 1106, time: 86 });
+    assert.deepEqual([pi5.limiting, pi5.reason, pi5.raised, pi5.mib, pi5.kib], ['heap', 'floor', false, 80, 81920]);
+    // A 512 MB board: nothing beyond the reserves.
+    const zero2 = h.bufferPlan({ memTotal: 512 * MIB, heapLimit: 129.5 * MIB, arch: 'arm', mpdVersion: mpd });
+    assert.deepEqual(zero2.bounds, { heap: 0, memory: 0, time: 86 });
+    assert.deepEqual([zero2.reason, zero2.mib], ['floor', 80]);
+    // x86 with plenty: the time bound, well under the ceiling.
+    const big = h.bufferPlan({ memTotal: 64 * GIB, heapLimit: 4144 * MIB, arch: 'x64', mpdVersion: mpd });
+    assert.deepEqual([big.limiting, big.mib], ['time', 128]);
+    // The ceiling holds when every bound is past it.
+    const huge = h.bufferPlan({ memTotal: 64 * GIB, heapLimit: 40 * GIB, arch: 'x64', mpdVersion: mpd });
+    assert.ok(huge.bounds.heap > 1024 && huge.bounds.memory > 1024);
+    assert.ok(huge.mib <= 1024);
+    // An architecture not measured takes the Pi's constant.
+    assert.equal(h.bufferPlan({ memTotal: 4 * GIB, heapLimit: 2 * GIB, arch: 'riscv64', mpdVersion: mpd }).bounds.time, 86);
+    // Off, or MPD unknown or too old: said, and nothing appended.
+    assert.equal(h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005 * MIB, arch: 'x64', mpdVersion: mpd, enabled: false }).reason, 'off');
+    assert.equal(h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005 * MIB, arch: 'x64', mpdVersion: null }).reason, 'mpd_unknown');
+    assert.equal(h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005 * MIB, arch: 'x64', mpdVersion: [0, 21, 5] }).reason, 'mpd_old');
+    assert.equal(h.bufferPlan({}).reason, 'mpd_unknown');
+});
+
+test('the hook appends the line under its marker only when the buffer is raised', () => {
+    const mpd = [0, 24, 6];
+    const raised = h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005.3 * MIB, arch: 'x64', mpdVersion: mpd });
+    const text = h.mpdConfigText(raised);
+    assert.equal(text, '\n# MPDantic: the output buffer sized to this player: 128 MiB\nmax_output_buffer_size "131072"\n');
+    assert.ok(text.includes(h.MPD_MARKER));
+    assert.equal(h.mpdConfigText(h.bufferPlan({ memTotal: 16003 * MIB, heapLimit: 1048 * MIB, arch: 'arm', mpdVersion: mpd })), '');
+    assert.equal(h.mpdConfigText(Object.assign({}, raised, { enabled: false })), '');
+    assert.equal(h.mpdConfigText(Object.assign({}, raised, { supported: false })), '');
+    assert.equal(h.mpdConfigText(null), '');
+    // mpd.conf is current when it carries the text, or no marker when there is none.
+    const template = 'max_output_buffer_size\t\t"81920"\n';
+    assert.equal(h.mpdConfCurrent(template + text, text), true);
+    assert.equal(h.mpdConfCurrent(template, text), false);
+    assert.equal(h.mpdConfCurrent(template + text.replace('131072', '98304'), text), false);
+    assert.equal(h.mpdConfCurrent(template, ''), true);
+    assert.equal(h.mpdConfCurrent(template + text, ''), false);
+});
+
+test('the buffer summary names the reason, the bound and the inputs', () => {
+    const mpd = [0, 24, 6];
+    const vm = h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005.3 * MIB, arch: 'x64', mpdVersion: mpd });
+    assert.equal(h.bufferSummary(vm, t), 'BUFFER_RAISED {"mib":"128","floor":"80","mem":"3.8","heap":"2005","version":"0.24.6","limit":"LIMIT_TIME"}');
+    const pi5 = h.bufferPlan({ memTotal: 16003 * MIB, heapLimit: 1048 * MIB, arch: 'arm', mpdVersion: mpd });
+    assert.match(h.bufferSummary(pi5, t), /^BUFFER_FLOOR .*"limit":"LIMIT_HEAP"/);
+    assert.match(h.bufferSummary(h.bufferPlan({ memTotal: 1, heapLimit: 1, arch: 'arm', mpdVersion: [0, 20, 0] }), t), /^BUFFER_MPD_OLD .*"version":"0.20.0"/);
+    assert.match(h.bufferSummary(h.bufferPlan({ enabled: false }), t), /^BUFFER_OFF /);
 });

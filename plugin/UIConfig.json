@@ -22,6 +22,21 @@
       ]
     },
     {
+      "id": "buffer_section",
+      "element": "section",
+      "label": "TRANSLATE.MPDANTIC.BUFFER_SECTION",
+      "icon": "fa-database",
+      "description": "TRANSLATE.MPDANTIC.BUFFER_SECTION_DESC",
+      "onSave": { "type": "controller", "endpoint": "system_controller/mpdantic", "method": "updateBuffer" },
+      "saveButton": {
+        "label": "TRANSLATE.MPDANTIC.SAVE",
+        "data": ["buffer_auto"]
+      },
+      "content": [
+        { "id": "buffer_auto", "element": "switch", "label": "TRANSLATE.MPDANTIC.BUFFER_AUTO", "doc": "TRANSLATE.MPDANTIC.BUFFER_AUTO_DESC", "value": true }
+      ]
+    },
+    {
       "id": "status_section",
       "element": "section",
       "label": "TRANSLATE.MPDANTIC.STATUS_SECTION",

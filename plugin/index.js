@@ -8,7 +8,8 @@ const libQ = require('kew');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const v8 = require('v8');
+const { execFile, execFileSync } = require('child_process');
 const VConf = require('v-conf');
 const h = require('./helpers');
 
@@ -19,6 +20,10 @@ const STATUS_FILE = RUN_DIR + '/status.json';
 // The pages announced on the network, as Volumio announces its own page: a service
 // file Avahi watches for.
 const AVAHI_FILE = '/etc/avahi/services/mpdantic.service';
+// What Volumio's MPD plugin writes from its template and the registered hooks.
+const MPD_CONF = '/etc/mpd.conf';
+const PLUGIN_TYPE = 'system_controller';
+const PLUGIN_NAME = 'mpdantic';
 
 const msg = (e) => (e && e.message ? e.message : String(e));
 
@@ -29,6 +34,7 @@ function Mpdantic(context) {
     this.config = new VConf();
     this.active = false;
     this.settingsFile = null;
+    this.mpdVersionRead = undefined;
 }
 
 // ----------------------------------------------------------------- lifecycle
@@ -38,6 +44,9 @@ Mpdantic.prototype.onVolumioStart = function () {
     this.config.loadFile(this.configFile);
     // The settings as the core reads them, beside the configuration.
     this.settingsFile = path.join(path.dirname(this.configFile), 'settings.json');
+    // Every plugin's onVolumioStart runs before any onStart, so the MPD plugin sees the
+    // hook when it writes mpd.conf at boot.
+    this.registerMpdHook();
     return libQ.resolve();
 };
 
@@ -45,8 +54,19 @@ Mpdantic.prototype.onStart = function () {
     const self = this;
     self.active = true;
     self.commandRouter.loadI18nStrings();
+    self.registerMpdHook();
     // The core reads the settings at its start: the file is written first.
     try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
+    // At boot the MPD plugin writes mpd.conf itself, with the hook in it, and restarts
+    // MPD; a check before that write has landed would restart MPD a second time, so
+    // the check waits for the boot to complete. Enabled at runtime, it runs at once.
+    self.whenBootCompleted().then(() => {
+        if (!self.active || self.mpdConfIsCurrent()) return;
+        self.rewriteMpdConf().fail((e) => {
+            self.logger.error(LOG + 'mpd.conf: ' + msg(e));
+            self.toast('error', 'ERR_MPD', { error: msg(e) });
+        });
+    });
     return self.announce()
         .fail((e) => { self.logger.warn(LOG + 'announce: ' + msg(e)); })
         .then(() => self.startCore())
@@ -60,10 +80,14 @@ Mpdantic.prototype.onStart = function () {
 Mpdantic.prototype.onStop = function () {
     const self = this;
     self.active = false;
+    self.unregisterMpdHook();
     return self.unannounce()
         .fail((e) => { self.logger.warn(LOG + 'unannounce: ' + msg(e)); })
         .then(() => self.stopCore())
         .fail((e) => { self.logger.warn(LOG + 'stop: ' + msg(e)); })
+        // The line the plugin appended goes with it.
+        .then(() => (self.mpdConfIsCurrent() ? libQ.resolve() : self.rewriteMpdConf()))
+        .fail((e) => { self.logger.error(LOG + 'mpd.conf: ' + msg(e)); })
         .then(() => 'OK');
 };
 
@@ -115,6 +139,124 @@ Mpdantic.prototype.writeSettings = function () {
     const part = self.settingsFile + '.part';
     fs.writeFileSync(part, text);
     fs.renameSync(part, self.settingsFile);
+};
+
+// ---------------------------------------------------------- the output buffer
+
+// MPD's output buffer sized to the player, through the MPD plugin's own hook: its
+// createMPDFile appends what every registered plugin method returns to mpd.conf,
+// and MPD takes the later of two values for a top-level setting.
+
+Mpdantic.prototype.mpdPlugin = function () {
+    return this.commandRouter.pluginManager.getPlugin('music_service', 'mpd');
+};
+
+Mpdantic.prototype.registerMpdHook = function () {
+    const mpd = this.mpdPlugin();
+    if (!mpd || typeof mpd.registerConfigCallback !== 'function') {
+        this.logger.warn(LOG + 'the MPD plugin has no registerConfigCallback; the output buffer is not sized');
+        return false;
+    }
+    const list = Array.isArray(mpd.registeredCallbacks) ? mpd.registeredCallbacks : [];
+    if (!list.some((c) => c && c.type === PLUGIN_TYPE && c.plugin === PLUGIN_NAME)) {
+        mpd.registerConfigCallback({ type: PLUGIN_TYPE, plugin: PLUGIN_NAME, data: 'getMpdConfig' });
+    }
+    return true;
+};
+
+// The backend has no unregister; a stale entry would make createMPDFile append the
+// word "undefined" to mpd.conf.
+Mpdantic.prototype.unregisterMpdHook = function () {
+    const mpd = this.mpdPlugin();
+    if (mpd && Array.isArray(mpd.registeredCallbacks)) {
+        mpd.registeredCallbacks = mpd.registeredCallbacks.filter((c) => !(c && c.type === PLUGIN_TYPE && c.plugin === PLUGIN_NAME));
+    }
+};
+
+// MPD's version, read once: it says whether a second value for a setting counts.
+Mpdantic.prototype.mpdVersion = function () {
+    if (this.mpdVersionRead === undefined) {
+        try {
+            this.mpdVersionRead = h.parseMpdVersion(execFileSync('/usr/bin/mpd', ['--version'], { timeout: 5000, encoding: 'utf8' }));
+        } catch (e) {
+            this.logger.warn(LOG + 'mpd --version: ' + msg(e));
+            this.mpdVersionRead = null;
+        }
+    }
+    return this.mpdVersionRead;
+};
+
+// The buffer this player gets, from what is read on it now. The shell runs inside the
+// backend, so the heap limit is the backend's own.
+Mpdantic.prototype.bufferPlan = function () {
+    return h.bufferPlan({
+        memTotal: os.totalmem(),
+        heapLimit: v8.getHeapStatistics().heap_size_limit,
+        arch: process.arch,
+        mpdVersion: this.mpdVersion(),
+        enabled: this.config.get('buffer_auto', true) === true
+    });
+};
+
+// What the hook gives the MPD plugin for mpd.conf.
+Mpdantic.prototype.getMpdConfig = function () {
+    if (!this.active) return '';
+    return h.mpdConfigText(this.bufferPlan());
+};
+
+Mpdantic.prototype.mpdConfIsCurrent = function () {
+    let current = '';
+    try { current = fs.readFileSync(MPD_CONF, 'utf8'); } catch (e) { return false; }
+    return h.mpdConfCurrent(current, this.getMpdConfig());
+};
+
+// Volumio's own writer, then its own restart, which also reconnects the backend's MPD
+// client. createMPDFile calls back before its asynchronous write lands; the backend's
+// own callers restart at once, and a short pause keeps the restart behind the write.
+Mpdantic.prototype.rewriteMpdConf = function () {
+    const defer = libQ.defer();
+    const mpd = this.mpdPlugin();
+    if (!mpd || typeof mpd.createMPDFile !== 'function') return libQ.reject(new Error('the MPD plugin is not available'));
+    try {
+        mpd.createMPDFile((err) => {
+            if (err) { defer.reject(err); return; }
+            setTimeout(() => {
+                try { mpd.restartMpd(); defer.resolve(); } catch (e) { defer.reject(e); }
+            }, 500);
+        });
+    } catch (e) {
+        defer.reject(e);
+    }
+    return defer.promise;
+};
+
+Mpdantic.prototype.whenBootCompleted = function () {
+    const defer = libQ.defer();
+    let waited = 0;
+    const tick = () => {
+        if (process.env.VOLUMIO_SYSTEM_STATUS === 'ready' || waited >= 120000) defer.resolve();
+        else { waited += 2000; setTimeout(tick, 2000); }
+    };
+    tick();
+    return defer.promise;
+};
+
+// The buffer section saved: the switch stored, mpd.conf rewritten when what the hook
+// gives has changed.
+Mpdantic.prototype.updateBuffer = function (data) {
+    const self = this;
+    self.config.set('buffer_auto', !!(data && data.buffer_auto === true));
+    if (self.mpdConfIsCurrent()) {
+        self.toast('success', 'SAVED_BUFFER', { line: h.bufferSummary(self.bufferPlan(), (k, v) => self.i18n(k, v)) });
+        return libQ.resolve();
+    }
+    return self.rewriteMpdConf()
+        .then(() => { self.toast('success', 'BUFFER_APPLIED'); })
+        .fail((e) => {
+            self.logger.error(LOG + 'mpd.conf: ' + msg(e));
+            self.toast('error', 'ERR_MPD', { error: msg(e) });
+        })
+        .then(() => libQ.resolve());
 };
 
 // ------------------------------------------------------------ the announcement
@@ -196,6 +338,12 @@ Mpdantic.prototype.getUIConfig = function () {
                 if (here) here.hidden = true;
                 if (tab) tab.hidden = true;
             }
+            // The buffer section: the switch as set, its text the value this player gets.
+            const buffer = section('buffer_section');
+            const plan = self.bufferPlan();
+            setValue(buffer, 'buffer_auto', plan.enabled);
+            const auto = buffer.find((x) => x.id === 'buffer_auto');
+            if (auto) auto.doc = h.bufferSummary(plan, (k, v) => self.i18n(k, v));
             defer.resolve(uiconf);
         })
         .fail((e) => {
@@ -236,7 +384,8 @@ Mpdantic.prototype.updateManagement = function (data) {
 // The status button: what the core says, as one toast.
 Mpdantic.prototype.showStatus = function () {
     const self = this;
-    const line = h.summarize(self.readStatus(), (key, vars) => self.i18n(key, vars));
+    const t = (key, vars) => self.i18n(key, vars);
+    const line = h.summarize(self.readStatus(), t, h.bufferSummary(self.bufferPlan(), t));
     self.commandRouter.pushToastMessage('info', self.i18n('STATUS_TITLE'), line);
     return libQ.resolve();
 };

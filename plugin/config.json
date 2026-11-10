@@ -1,4 +1,5 @@
 {
   "port": { "type": "string", "value": "6218" },
-  "address": { "type": "string", "value": "" }
+  "address": { "type": "string", "value": "" },
+  "buffer_auto": { "type": "boolean", "value": true }
 }

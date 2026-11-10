@@ -76,12 +76,144 @@ function avahiService(port) {
     ].join('\n');
 }
 
-// The core's status as one line for a toast; t translates a key with its variables.
-function summarize(status, t) {
+// The core's status as one line for a toast; t translates a key with its variables;
+// the buffer line, when given, goes after the port.
+function summarize(status, t, buffer) {
     if (!status || typeof status !== 'object') return t('STATUS_DOWN');
     const version = String(status.version || '?');
     if (status.state === 'error') return t('STATUS_ERROR', { version, error: String(status.error || '?') });
-    return t('STATUS_UP', { version, port: String(status.port || '?') });
+    return t('STATUS_UP', { version, port: String(status.port || '?'), buffer: buffer || '' });
 }
 
-module.exports = { DEFAULT_PORT, validatePort, validateAddress, settingsFrom, lanAddress, pageLinks, avahiService, summarize };
+// ------------------------------------------------------- the output buffer
+
+const MIB = 1048576;
+
+// The output buffer of MPD (max_output_buffer_size) sized to the player: MPD holds a
+// client's pending reply in a buffer of at most that size and closes the client past
+// it, which is how the album list of a large library comes up empty; the reply must
+// then fit the backend, which holds it as one string and parses it. The rule and its
+// constants, each measured or taken from Volumio's own values; see the README.
+const BUFFER = {
+    // Volumio's own template value; never below it, and at it nothing is appended.
+    floorKib: 81920,
+    // A reply of that size is a library no player holds.
+    ceilingKib: 1048576,
+    // Large replies in flight at once.
+    concurrent: 2,
+    // What a reply costs the backend's heap: four times retained (the string, two
+    // bytes a character, and the parsed objects), twice more while it is flattened.
+    nodeFactor: 6,
+    // MPD's peak buffer holds the reply once.
+    mpdFactor: 1,
+    // The backend's heap at rest, with margin.
+    heapBaseline: 128 * MIB,
+    // Volumio, the kiosk browser, MPD, the core.
+    memoryReserve: 512 * MIB,
+    // The longest the album list may take the backend to take in: its client re-scans
+    // its buffer on every chunk, so the time grows with the square of the reply, by
+    // these seconds per MiB squared (measured on x86 and on a Pi 5; older Pis are
+    // slower, and their heap bounds them first).
+    seconds: 120,
+    quadratic: { x64: 0.0073, arm: 0.016, arm64: 0.016 },
+    // MPD takes the later of two top-level values since this version.
+    mpdSince: [0, 21, 19]
+};
+
+// The marker every line the plugin appends to mpd.conf is under.
+const MPD_MARKER = '# MPDantic: the output buffer';
+
+// "Music Player Daemon 0.24.6 (b6f106b+)" as [0, 24, 6]; null when not read.
+function parseMpdVersion(text) {
+    const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text || ''));
+    return m ? [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3] || '0', 10)] : null;
+}
+
+function mpdOverrides(version) {
+    if (!version) return false;
+    const s = BUFFER.mpdSince;
+    for (let i = 0; i < 3; i++) {
+        if (version[i] > s[i]) return true;
+        if (version[i] < s[i]) return false;
+    }
+    return true;
+}
+
+// The buffer the player gets, from what is read on it: the memory (bytes), the
+// backend's heap limit (bytes), the architecture and MPD's version.
+function bufferPlan(input) {
+    const b = BUFFER;
+    const memTotal = Number(input.memTotal) || 0;
+    const heapLimit = Number(input.heapLimit) || 0;
+    const arch = String(input.arch || '');
+    const k = b.quadratic[arch] || b.quadratic.arm;
+    const floorMib = b.floorKib / 1024;
+    const ceilingMib = b.ceilingKib / 1024;
+    const heapMib = Math.max(0, Math.floor((heapLimit - b.heapBaseline) / (b.concurrent * b.nodeFactor) / MIB));
+    const memoryMib = Math.max(0, Math.floor((memTotal - b.memoryReserve) / (b.concurrent * (b.nodeFactor + b.mpdFactor)) / MIB));
+    const timeMib = Math.floor(Math.sqrt(b.seconds / k));
+    const bounds = { heap: heapMib, memory: memoryMib, time: timeMib };
+    let limiting = 'heap';
+    Object.keys(bounds).forEach((name) => { if (bounds[name] < bounds[limiting]) limiting = name; });
+    const wanted = Math.min(ceilingMib, bounds[limiting]);
+    const mib = Math.max(floorMib, wanted);
+    const enabled = input.enabled !== false;
+    const version = input.mpdVersion || null;
+    const supported = mpdOverrides(version);
+    const raised = mib > floorMib;
+    let reason;
+    if (!enabled) reason = 'off';
+    else if (!version) reason = 'mpd_unknown';
+    else if (!supported) reason = 'mpd_old';
+    else reason = raised ? 'raised' : 'floor';
+    return {
+        enabled,
+        supported,
+        reason,
+        raised,
+        mib,
+        kib: mib * 1024,
+        floorMib,
+        bounds,
+        limiting,
+        inputs: {
+            memTotalGb: Math.round(memTotal / (1024 * MIB) * 10) / 10,
+            heapLimitMib: Math.round(heapLimit / MIB),
+            arch,
+            mpdVersion: version ? version.join('.') : null
+        }
+    };
+}
+
+// What the hook appends to mpd.conf: the line under its marker when the buffer is
+// raised, else nothing (the template's value stands).
+function mpdConfigText(plan) {
+    if (!plan || !plan.enabled || !plan.supported || !plan.raised) return '';
+    return '\n' + MPD_MARKER + ' sized to this player: ' + plan.mib + ' MiB\n' +
+        'max_output_buffer_size "' + plan.kib + '"\n';
+}
+
+// Whether mpd.conf carries what the hook would give now: the text when there is one,
+// no marker when there is none.
+function mpdConfCurrent(conf, text) {
+    const current = String(conf || '');
+    return text === '' ? !current.includes(MPD_MARKER) : current.includes(text);
+}
+
+// The plan as one line for the settings page and the status toast; t translates.
+function bufferSummary(plan, t) {
+    const vars = {
+        mib: String(plan.mib),
+        floor: String(plan.floorMib),
+        mem: String(plan.inputs.memTotalGb),
+        heap: String(plan.inputs.heapLimitMib),
+        version: String(plan.inputs.mpdVersion || '?'),
+        limit: t('LIMIT_' + plan.limiting.toUpperCase())
+    };
+    return t('BUFFER_' + plan.reason.toUpperCase(), vars);
+}
+
+module.exports = {
+    DEFAULT_PORT, validatePort, validateAddress, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
+    BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary
+};
