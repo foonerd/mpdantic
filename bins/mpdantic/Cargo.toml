@@ -13,6 +13,9 @@ serde_json = "1"
 # fnmatch, the matcher MPD uses for .mpdignore, so a pattern matches here what it
 # matches there.
 libc = "0.2"
+# The tags and the audio properties of every format MPD reads on Volumio, with the
+# raw keys as written, so MPD's own rules can be applied to them here.
+lofty = "0.25"
 
 [lints]
 workspace = true

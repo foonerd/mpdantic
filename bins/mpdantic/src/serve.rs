@@ -20,6 +20,7 @@ use crate::library::{self, Library, ListError};
 use crate::mpd::{self, Address, Decoders};
 use crate::prefs;
 use crate::status::Status;
+use crate::tagcheck;
 
 /// The page, whole.
 const PAGE: &str = include_str!("../assets/index.html");
@@ -256,7 +257,7 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     };
     let kind = request["kind"].as_str().unwrap_or("").to_string();
     let path = request["path"].as_str().unwrap_or("").to_string();
-    if kind != "ignore" && kind != "cue" {
+    if kind != "ignore" && kind != "cue" && kind != "tags" {
         return (400, error("the kind is not one the core knows"));
     }
     if Library::check(&path).is_none() {
@@ -274,6 +275,9 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let started = shared.jobs.start(&kind, &path, move |progress, cancel| {
         if job_kind == "cue" {
             cuecheck::check(&music, &job_path, &decoders, note, progress, cancel)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        } else if job_kind == "tags" {
+            tagcheck::check(&music, &job_path, &decoders, note, progress, cancel)
                 .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
         } else {
             analyse::analyse(
@@ -673,7 +677,7 @@ mod tests {
             ),
         );
         assert!(out.starts_with("HTTP/1.0 400"), "{out}");
-        let bad = "{\"kind\":\"tags\",\"path\":\"NAS\"}";
+        let bad = "{\"kind\":\"nothing\",\"path\":\"NAS\"}";
         let out = talk(
             server.port,
             &format!(
@@ -707,6 +711,33 @@ mod tests {
         assert_eq!(job["state"], "done", "{job}");
         assert_eq!(job["kind"], "cue");
         assert_eq!(job["result"]["sheets"], 0);
+        // The tag check is the third kind.
+        let tags = "{\"kind\":\"tags\",\"path\":\"NAS\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/jobs HTTP/1.0\r\nContent-Length: {}\r\n\r\n{tags}",
+                tags.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 202"), "{out}");
+        let id = serde_json::from_str::<serde_json::Value>(body(&out)).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let mut job = serde_json::Value::Null;
+        for _ in 0..200 {
+            let out = talk(server.port, &format!("GET /api/jobs/{id} HTTP/1.0\r\n\r\n"));
+            job = serde_json::from_str(body(&out)).unwrap();
+            if job["state"] != "running" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(job["state"], "done", "{job}");
+        assert_eq!(job["kind"], "tags");
+        // The sample library's flac files are not real: read, not readable.
+        assert_eq!(job["result"]["read"], 2);
+        assert_eq!(job["result"]["findings"]["T12"]["count"], 2);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

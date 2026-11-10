@@ -128,6 +128,20 @@
       <div id="report-cue"></div>
     </div>
   </div>
+
+  <div class="panel" id="panel-tags">
+    <div class="head">
+      <b>Tags</b>
+      <span class="sub">Every audio file under this folder read for its tags, what MPD takes of them, and whether a folder shows as one album or several. Read-only; every file is opened, so a large folder takes a while.</span>
+      <span class="grow"></span>
+      <button id="analyse-tags">Check this folder</button>
+      <button id="cancel-tags" hidden>Cancel</button>
+    </div>
+    <div class="body">
+      <div class="progress" id="progress-tags">Not checked yet.</div>
+      <div id="report-tags"></div>
+    </div>
+  </div>
 </div>
 <script>
 'use strict';
@@ -282,7 +296,8 @@
   // One job at a time in the core; each panel follows its own kind.
   const panels = {
     ignore: { kind: 'ignore', job: null, verb: 'Walking', render: reportIgnore },
-    cue: { kind: 'cue', job: null, verb: 'Reading', render: reportCue }
+    cue: { kind: 'cue', job: null, verb: 'Reading', render: reportCue },
+    tags: { kind: 'tags', job: null, verb: 'Reading', render: reportTags }
   };
 
   function progress(p, text, bad) {
@@ -484,6 +499,52 @@
       }
       d.appendChild(inner);
       list.appendChild(d);
+    });
+    linesInForce(box, r.in_force);
+  }
+
+  // -------------------------------------------------------------- the tag report
+
+  function reportTags(r) {
+    const box = $('report-tags');
+    box.textContent = '';
+    if (!r) return;
+    const notes = [r.read + ' audio files read' + (Object.keys(r.by_format).length ? ' (' + Object.keys(r.by_format).map((k) => k + ' ' + r.by_format[k]).join(', ') + ')' : '') + '.'];
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
+    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
+    const splits = section(box, 'Folders that show as several albums', r.splits.length
+      ? 'Volumio groups an album by Album and AlbumArtist, falling back to Artist. In these folders the files disagree, so the Albums view shows the folder as more than one album, or spreads an album over several.' + (r.splits_truncated ? ' Only the first ' + r.splits.length + ' folders are listed; the totals count every one.' : '')
+      : 'Every folder under ' + (r.path || 'the library') + ' with music in it reads as one album. ' + notes.join(' '));
+    r.splits.forEach((s) => {
+      const d = el('div', 'sugg');
+      const top = el('div', 'top');
+      top.appendChild(el('span', 'tag warn', s.files + ' files'));
+      top.appendChild(el('span', 'path', s.dir || 'the root'));
+      d.appendChild(top);
+      const line = (label, values) => {
+        if (values.length < 2) return;
+        const row = el('div', 'ex');
+        row.appendChild(document.createTextNode(label + ': '));
+        values.forEach((v, i) => { if (i) row.appendChild(document.createTextNode('  |  ')); row.appendChild(el('code', '', v[0])); row.appendChild(document.createTextNode(' ' + v[1])); });
+        d.appendChild(row);
+      };
+      line('Album', s.albums);
+      line('Album artist', s.album_artists);
+      line('Date', s.dates);
+      splits.appendChild(d);
+    });
+    const codes = Object.keys(r.findings);
+    const f = section(box, 'What MPD would see', codes.length ? notes.join(' ') : notes.join(' ') + ' Nothing to say about the tags.');
+    codes.forEach((code) => {
+      const g = r.findings[code];
+      const d = el('div', 'sugg');
+      const top = el('div', 'top');
+      top.appendChild(el('code', '', code));
+      top.appendChild(el('span', '', (r.codes[code] || code) + ': ' + g.count + (g.count === 1 ? ' file' : ' files')));
+      d.appendChild(top);
+      if (g.examples.length) d.appendChild(el('div', 'ex', g.examples.join('  |  ')));
+      f.appendChild(d);
     });
     linesInForce(box, r.in_force);
   }

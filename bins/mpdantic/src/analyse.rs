@@ -28,7 +28,7 @@ pub struct Count {
 }
 
 impl Count {
-    fn add(&mut self, path: &str, bytes: u64) {
+    pub(crate) fn add(&mut self, path: &str, bytes: u64) {
         self.count += 1;
         self.bytes += bytes;
         if self.examples.len() < EXAMPLES {

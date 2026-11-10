@@ -82,6 +82,7 @@ pub fn code_text(code: &str) -> &'static str {
         "C11" => "two sheets name the same FILE",
         "C12" => "a sheet beside split tracks",
         "C13" => "sheet too large to read",
+        "C14" => "an INDEX beyond the file's length",
         _ => "",
     }
 }
@@ -318,6 +319,34 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                 }
             }
         }
+        // The last track's start against the file's length, where the file can be read.
+        for f in files.iter().filter(|f| f.accepted && f.state == "ok") {
+            let last_start = sheet
+                .tracks
+                .iter()
+                .filter(|t| t.file == f.name)
+                .filter_map(|t| t.start_ms)
+                .max();
+            let (Some(start), Some(suffix)) = (last_start, classify::suffix(&f.name)) else {
+                continue;
+            };
+            if let Some(length) = crate::tags::duration_ms(&visit.dir.join(&f.name), &suffix) {
+                if length > 0 && u64::from(start) > length {
+                    sheet.findings.push(Finding {
+                        code: "C14",
+                        line: 0,
+                        text: format!(
+                            "The last INDEX in \"{}\" is at {}:{:02}, past the file's length of {}:{:02}: MPD makes a track it cannot play.",
+                            f.name,
+                            start / 60_000,
+                            (start / 1000) % 60,
+                            length / 60_000,
+                            (length / 1000) % 60
+                        ),
+                    });
+                }
+            }
+        }
         // One file in the sheet, and several audio files beside it that no sheet names.
         let accepted: Vec<&FileState> = files
             .iter()
@@ -379,8 +408,18 @@ mod tests {
         let mk = |p: &str| fs::create_dir_all(root.join(p)).unwrap();
         let put = |p: &str, b: &[u8]| fs::write(root.join(p), b).unwrap();
         mk("NAS/Clean");
-        put("NAS/Clean/album.flac", b"x");
+        // A real FLAC header of four minutes, so the sheet's indexes are within it.
+        put(
+            "NAS/Clean/album.flac",
+            &crate::tags::tests::flac_bytes(44100, 44100 * 240, &[]),
+        );
         put("NAS/Clean/album.cue", b"TITLE \"A\"\nFILE \"album.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 03:00:00\n");
+        mk("NAS/Short");
+        put(
+            "NAS/Short/album.flac",
+            &crate::tags::tests::flac_bytes(44100, 44100 * 100, &[]),
+        );
+        put("NAS/Short/album.cue", b"FILE \"album.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nINDEX 01 03:00:00\n");
         mk("NAS/Box/1");
         put("NAS/Box/1/Disc One.flac", b"x");
         put(
@@ -447,13 +486,29 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert_eq!(r.sheets, 8);
+        assert_eq!(r.sheets, 9);
         assert_eq!(r.clean, 1);
-        assert_eq!(r.with_findings, 7);
-        // NAS, Clean, Box, Box/1, Twice; Skipped is kept out by the line in force.
-        assert_eq!(r.directories, 5);
+        assert_eq!(r.with_findings, 8);
+        // NAS, Clean, Box, Box/1, Short, Twice; Skipped is kept out by the line in force.
+        assert_eq!(r.directories, 6);
+        let short = r
+            .list
+            .iter()
+            .find(|s| s.path == "NAS/Short/album.cue")
+            .unwrap();
+        assert_eq!(short.findings[0].code, "C14");
+        assert!(
+            short.findings[0].text.contains("3:00"),
+            "{}",
+            short.findings[0].text
+        );
+        assert!(short.findings[0].text.contains("1:40"));
         let by = |p: &str| r.list.iter().find(|s| s.path == p).unwrap();
-        assert!(by("NAS/Clean/album.cue").findings.is_empty());
+        assert!(
+            by("NAS/Clean/album.cue").findings.is_empty(),
+            "{:?}",
+            by("NAS/Clean/album.cue").findings
+        );
         assert_eq!(by("NAS/Clean/album.cue").tracks, 2);
         assert_eq!(
             by("NAS/Clean/album.cue").track_list[0].end_ms,

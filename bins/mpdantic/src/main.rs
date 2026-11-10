@@ -1,8 +1,8 @@
 //! The core of MPDantic: one daemon, started by the plugin as its own systemd
 //! unit, that audits and repairs the library and serves the management
 //! interface. At this version it serves the pages, the library one folder at a
-//! time, the `.mpdignore` analysis and the CUE check of a folder as jobs, and its
-//! status.
+//! time, the `.mpdignore` analysis, the CUE check and the tag check of a folder as
+//! jobs, and its status.
 //!
 //! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--version]`
 //!
@@ -27,6 +27,8 @@ mod mpd;
 mod prefs;
 mod serve;
 mod status;
+mod tagcheck;
+mod tags;
 mod walk;
 
 use std::fs;
