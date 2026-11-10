@@ -56,10 +56,16 @@ systemctl daemon-reload
 # SETUP: sudo for what the plugin runs as the volumio user: the core's service, and
 # nothing wider. Named volumio-user-* so it sorts after Volumio's own rules.
 # =============================================================================
+# Self-contained, as the family's plugins are: every command the plugin runs through
+# sudo is here, whatever Volumio's own rule for the volumio user lists. The name sorts
+# after /etc/sudoers.d/volumio-user, as the convention has it.
 cat > "$SUDOERS" <<'EOF'
-# mpdantic plugin: the core's service
+# mpdantic plugin: the core's service; the mounts the core makes under /run/mpdantic
+# for a write on a share; the announcement file where the Avahi folder is closed
 volumio ALL=(ALL) NOPASSWD: /bin/systemctl start mpdantic.service, /bin/systemctl stop mpdantic.service, /bin/systemctl restart mpdantic.service, /bin/systemctl is-active mpdantic.service
 volumio ALL=(ALL) NOPASSWD: /usr/bin/systemctl start mpdantic.service, /usr/bin/systemctl stop mpdantic.service, /usr/bin/systemctl restart mpdantic.service, /usr/bin/systemctl is-active mpdantic.service
+volumio ALL=(ALL) NOPASSWD: /bin/mount, /usr/bin/mount, /bin/umount, /usr/bin/umount
+volumio ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/avahi/services/mpdantic.service, /bin/rm -f /etc/avahi/services/mpdantic.service, /usr/bin/rm -f /etc/avahi/services/mpdantic.service
 EOF
 chmod 0440 "$SUDOERS"
 if ! visudo -c -f "$SUDOERS" >/dev/null 2>&1; then

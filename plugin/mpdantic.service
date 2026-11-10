@@ -19,7 +19,7 @@ RestartSec=3
 KillSignal=SIGTERM
 TimeoutStopSec=5
 # No NoNewPrivileges: the core mounts a share's folder read-write for a write through
-# the volumio user's own passwordless mount and umount, and NoNewPrivileges would
+# the plugin's own sudoers entry for mount and umount, and NoNewPrivileges would
 # block every setuid, mount.cifs included. The mounts live in this unit's own mount
 # namespace and never reach the host.
 # full, not strict: /usr, /boot and /etc read-only; the library under /mnt, the data
