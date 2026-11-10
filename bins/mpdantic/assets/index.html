@@ -728,13 +728,20 @@
         line.appendChild(text(f.text));
         inner.appendChild(line);
       });
+      const actions = el('div', 'actions');
+      const card = el('div');
       if (s.findings.some((f) => REPAIRABLE_LISTS.includes(f.code))) {
         const fix = el('button', '', 'Repair');
-        const card = el('div');
         fix.addEventListener('click', () => { fix.disabled = true; repairWith('playlist', s.path, card, fix, { base: current.path }); });
-        inner.appendChild(fix);
-        inner.appendChild(card);
+        actions.appendChild(fix);
       }
+      if (s.found || s.streams) {
+        const imp = el('button', '', 'Import into Volumio');
+        imp.title = 'Written as one of Volumio\'s own playlists, under its Playlists, with the entries MPD can load.';
+        imp.addEventListener('click', () => { imp.disabled = true; repairWith('volumio_playlist', s.path, card, imp); });
+        actions.appendChild(imp);
+      }
+      if (actions.childNodes.length) { inner.appendChild(actions); inner.appendChild(card); }
       if (s.entry_list.length) {
         const rows = s.entry_list.map((e) => {
           const cell = el('span');
@@ -831,9 +838,25 @@
     box.textContent = '';
     const card = el('div', 'preview');
     const top = el('div', 'top');
-    top.appendChild(el('b', '', (p.op === 'remove' ? 'Remove ' : p.exists ? 'Change ' : 'Create ') + p.file));
-    top.appendChild(el('span', 'help', p.place === 'local' ? 'on a local root, written in place.' : 'on ' + p.place + ': mounted read-write for the write and released after.'));
-    card.appendChild(top);
+    if (p.kind === 'volumio_playlist') {
+      top.appendChild(el('b', '', (p.exists ? 'Change ' : 'Create ') + 'the Volumio playlist ' + p.name));
+      top.appendChild(el('span', 'help', 'from ' + p.from + ', under Volumio\'s own Playlists.'));
+      card.appendChild(top);
+      const row = el('div', 'line');
+      const label = el('label', 'pref', 'Name: ');
+      const input = el('input');
+      input.type = 'text';
+      input.value = p.name;
+      input.spellcheck = false;
+      input.addEventListener('change', () => { if (input.value.trim() && input.value.trim() !== p.name) again(null, { name: input.value.trim() }); });
+      label.appendChild(input);
+      row.appendChild(label);
+      card.appendChild(row);
+    } else {
+      top.appendChild(el('b', '', (p.op === 'remove' ? 'Remove ' : p.exists ? 'Change ' : 'Create ') + p.file));
+      top.appendChild(el('span', 'help', p.place === 'local' ? 'on a local root, written in place.' : 'on ' + p.place + ': mounted read-write for the write and released after.'));
+      card.appendChild(top);
+    }
     if (p.added && p.added.length) codeList(card, 'Lines to add: ', p.added);
     if (p.already && p.already.length) codeList(card, 'Already there: ', p.already);
     (p.refused || []).forEach((pair) => {
@@ -944,8 +967,33 @@
       });
       card.appendChild(list);
     }
+    if (p.kind === 'volumio_playlist' && p.imported && p.imported.length) {
+      const kept = p.imported.filter((e) => e.state !== 'left_out').length;
+      card.appendChild(el('div', 'help', kept + ' of ' + p.imported.length + (p.imported.length === 1 ? ' entry' : ' entries') + ' imported' + (p.left_out ? ', ' + p.left_out + ' left out' : '') + ':'));
+      const list = el('div', 'files');
+      p.imported.forEach((e) => {
+        const row = el('div', 'sugg');
+        const top2 = el('div', 'top');
+        top2.appendChild(el('span', 'tag' + (e.state === 'left_out' ? ' warn' : ' ok'), e.state.replace('_', ' ')));
+        if (e.state === 'left_out') {
+          top2.appendChild(el('code', '', e.uri));
+          top2.appendChild(el('span', 'help', e.why || ''));
+        } else {
+          top2.appendChild(text(e.title || e.uri));
+          const by = [e.artist, e.album].filter(Boolean).join(', ');
+          if (by) top2.appendChild(el('span', 'help', by));
+          top2.appendChild(el('code', '', e.uri));
+        }
+        row.appendChild(top2);
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+    }
     if (p.op === 'remove') {
       card.appendChild(el('div', 'help', 'The sheet is removed; the undo puts it back as it is now.'));
+    } else if (p.kind === 'volumio_playlist') {
+      card.appendChild(el('div', 'help', 'The file Volumio keeps, as it would be:'));
+      card.appendChild(el('pre', 'file', p.after || '(empty)'));
     } else if (p.kind === 'tags') {
       card.appendChild(el('div', 'help', 'Each file is written through lofty, the audio untouched; the undo sets every key back, when nothing else has changed it since.'));
     } else {
@@ -966,6 +1014,7 @@
     const label = p.op === 'remove' ? 'Remove the sheet'
       : p.kind === 'cue' ? 'Write the sheet'
       : p.kind === 'playlist' ? (p.exists ? 'Write the playlist' : 'Write ' + p.file.split('/').pop())
+      : p.kind === 'volumio_playlist' ? 'Write the Volumio playlist'
       : p.kind === 'tags' ? 'Write ' + changing + (changing === 1 ? ' file' : ' files')
       : (p.added && p.added.length ? 'Write ' + p.added.length + (p.added.length === 1 ? ' line' : ' lines') : 'Nothing to write');
     const write = el('button', 'primary', p.changed ? label : 'Nothing to write');
@@ -982,9 +1031,12 @@
   function outcome(a, verb) {
     const done = el('div', 'done');
     done.appendChild(el('span', 'tag ok', verb));
-    done.appendChild(text(' ' + a.file + '. ' + (a.updated !== null && a.updated !== undefined
+    const update = a.updated !== null && a.updated !== undefined
       ? 'MPD is updating the folder (job ' + a.updated + '); Volumio rebuilds its album list after every update, which takes a while on a large library.'
-      : 'MPD was not told to update the folder: ' + a.update_error + '.')));
+      : a.update_error ? 'MPD was not told to update the folder: ' + a.update_error + '.'
+      : verb === 'undone' ? 'Volumio\'s Playlists are as they were.'
+      : 'Volumio lists it under its Playlists now.';
+    done.appendChild(text(' ' + a.file + '. ' + update));
     return done;
   }
 

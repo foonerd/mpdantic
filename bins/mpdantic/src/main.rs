@@ -17,7 +17,9 @@
 //! library is wanted (`/data/plugins/user_interface/glass` unless given);
 //! `--networkfs` is Volumio's configuration of the shares, read when a write on a
 //! share needs its credentials
-//! (`/data/configuration/system_controller/networkfs/config.json` unless given).
+//! (`/data/configuration/system_controller/networkfs/config.json` unless given);
+//! `--volumio-playlists` is the folder Volumio keeps its own playlists in
+//! (`/data/playlist` unless given).
 
 mod analyse;
 mod classify;
@@ -32,6 +34,7 @@ mod mpd;
 mod playlist;
 mod plcheck;
 mod plfix;
+mod plimport;
 mod prefs;
 mod serve;
 mod status;
@@ -68,10 +71,11 @@ struct Args {
     data: PathBuf,
     glass: PathBuf,
     networkfs: PathBuf,
+    volumio_playlists: PathBuf,
 }
 
 fn usage() -> ! {
-    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--networkfs FILE] [--version]");
+    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--networkfs FILE] [--volumio-playlists DIR] [--version]");
     process::exit(64);
 }
 
@@ -84,6 +88,7 @@ fn args() -> Args {
         data: PathBuf::from("/data/INTERNAL/mpdantic"),
         glass: PathBuf::from(prefs::GLASS_PLUGIN),
         networkfs: PathBuf::from("/data/configuration/system_controller/networkfs/config.json"),
+        volumio_playlists: PathBuf::from("/data/playlist"),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -95,6 +100,9 @@ fn args() -> Args {
             "--glass" => out.glass = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--networkfs" => {
                 out.networkfs = it.next().map(PathBuf::from).unwrap_or_else(|| usage())
+            }
+            "--volumio-playlists" => {
+                out.volumio_playlists = it.next().map(PathBuf::from).unwrap_or_else(|| usage())
             }
             "--mpd" => {
                 out.mpd = it
@@ -162,6 +170,7 @@ fn main() {
         decoders: Mutex::new(None),
         prefs: Mutex::new(prefs::Store::open(&args.data, &args.glass)),
         networkfs: args.networkfs.clone(),
+        volumio_playlists: args.volumio_playlists.clone(),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
         journal: undo::Journal::new(&args.data.join("undo")),
         previews: Mutex::new(std::collections::HashMap::new()),

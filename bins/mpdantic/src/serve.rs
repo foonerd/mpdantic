@@ -49,6 +49,8 @@ pub struct Shared {
     pub prefs: Mutex<prefs::Store>,
     /// Volumio's shares, read when a write needs them.
     pub networkfs: std::path::PathBuf,
+    /// Where Volumio keeps its own playlists.
+    pub volumio_playlists: std::path::PathBuf,
     pub mounter: mount::Mounter,
     pub journal: undo::Journal,
     /// The previews prepared and not yet applied, by id.
@@ -382,6 +384,7 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         album_artist: request["album_artist"].as_str().map(str::to_string),
         date: request["date"].as_str().map(str::to_string),
         base: request["base"].as_str().map(str::to_string),
+        name: request["name"].as_str().map(str::to_string),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -395,7 +398,14 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
     };
     let id = shared.next_preview.fetch_add(1, Ordering::Relaxed) + 1;
     let (_, decoders) = shared.decoders();
-    match write::prepare(shared.library.music(), &shares, &decoders, id, &req) {
+    match write::prepare(
+        shared.library.music(),
+        &shares,
+        &decoders,
+        &shared.volumio_playlists,
+        id,
+        &req,
+    ) {
         Ok(preview) => {
             let body = json_of(&preview);
             shared
@@ -620,6 +630,7 @@ mod tests {
             decoders: Mutex::new(None),
             prefs: Mutex::new(prefs::Store::open(&data, &glass)),
             networkfs: root.join(".no-networkfs.json"),
+            volumio_playlists: data.join("volumio-playlists"),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
             journal: undo::Journal::new(&data.join("undo")),
             previews: Mutex::new(std::collections::HashMap::new()),
@@ -824,6 +835,94 @@ mod tests {
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         let seen = crate::tags::view(&crate::tags::read(&root.join("USB/b.flac"), "flac"));
         assert_eq!(seen.album, ["Two"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_playlist_is_imported_into_volumios_over_the_api_and_taken_back() {
+        let root = temp_library("serve-import");
+        std::fs::write(
+            root.join("USB/a.flac"),
+            crate::tagfix::tests::real_flac(&[
+                ("TITLE", "A"),
+                ("ARTIST", "Ann"),
+                ("ALBUM", "Live"),
+            ]),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("USB/mix.m3u"),
+            "a.flac\ngone.flac\nhttp://radio.example/live\n",
+        )
+        .unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let post = |body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let out = post("{\"kind\":\"volumio_playlist\",\"path\":\"USB\"}");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = post("{\"kind\":\"volumio_playlist\",\"path\":\"USB/mix.m3u\"}");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        let folder = root.join(".mpdantic-data/volumio-playlists");
+        assert_eq!(p["kind"], "volumio_playlist");
+        assert_eq!(p["name"], "mix");
+        assert_eq!(p["from"], "USB/mix.m3u");
+        assert_eq!(p["path"], folder.display().to_string());
+        assert_eq!(p["file"], folder.join("mix").display().to_string());
+        assert_eq!(p["exists"], false);
+        assert_eq!(p["changed"], true);
+        assert_eq!(p["place"], "local");
+        assert_eq!(p["imported"].as_array().unwrap().len(), 3);
+        assert_eq!(p["imported"][0]["state"], "song");
+        assert_eq!(p["imported"][0]["title"], "A");
+        assert_eq!(p["imported"][1]["state"], "left_out");
+        assert_eq!(p["imported"][2]["state"], "stream");
+        assert_eq!(p["left_out"], 1);
+        let id = p["id"].as_u64().unwrap();
+        // A name of the user's; a name that would be a path is refused.
+        let out =
+            post("{\"kind\":\"volumio_playlist\",\"path\":\"USB/mix.m3u\",\"name\":\"My mix\"}");
+        let named: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(named["name"], "My mix");
+        assert_eq!(named["file"], folder.join("My mix").display().to_string());
+        let out = post("{\"kind\":\"volumio_playlist\",\"path\":\"USB/mix.m3u\",\"name\":\"a/b\"}");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let a: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert!(a["updated"].is_null(), "nothing for MPD: {a}");
+        assert!(a["update_error"].is_null(), "{a}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(folder.join("mix")).unwrap()).unwrap();
+        assert_eq!(written.as_array().unwrap().len(), 2);
+        assert_eq!(written[0]["service"], "mpd");
+        assert_eq!(written[0]["uri"], "mnt/USB/a.flac");
+        assert_eq!(written[0]["title"], "A");
+        assert_eq!(written[1]["service"], "webradio");
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(list[0]["kind"], "volumio_playlist");
+        assert_eq!(
+            list[0]["note"],
+            "Volumio playlist \"mix\" written from USB/mix.m3u"
+        );
+        let batch = list[0]["id"].as_str().unwrap().to_string();
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert!(!folder.join("mix").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

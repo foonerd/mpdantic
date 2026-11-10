@@ -21,6 +21,7 @@ use crate::mpd::{self, Decoders};
 use crate::playlist;
 use crate::plcheck;
 use crate::plfix::{self, EntryChange};
+use crate::plimport::{self, ImportEntry};
 use crate::tagfix::{self, FilePlan, KeyChange, Values};
 use crate::tags;
 use crate::undo::{Batch, Entry, Journal};
@@ -41,6 +42,8 @@ pub struct Request {
     /// The folder a playlist's missing entries are looked for under (`playlist`);
     /// the playlist's own folder when not given.
     pub base: Option<String>,
+    /// The Volumio playlist's name (`volumio_playlist`); the file's stem when not given.
+    pub name: Option<String>,
 }
 
 /// The batch as it would be written, for the page to confirm.
@@ -98,6 +101,15 @@ pub struct Preview {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<EntryChange>,
     pub not_found: usize,
+    /// A library playlist's entries as Volumio's items (`volumio_playlist`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub imported: Vec<ImportEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The library playlist the import comes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub left_out: usize,
 }
 
 /// What an apply or an undo did.
@@ -192,6 +204,10 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         date: None,
         entries: Vec::new(),
         not_found: 0,
+        imported: Vec::new(),
+        name: None,
+        from: None,
+        left_out: 0,
     }
 }
 
@@ -200,6 +216,7 @@ pub fn prepare(
     music: &Path,
     shares: &[Share],
     decoders: &Decoders,
+    volumio_playlists: &Path,
     id: u64,
     req: &Request,
 ) -> Result<Preview, String> {
@@ -208,8 +225,69 @@ pub fn prepare(
         "cue" => prepare_cue(music, shares, decoders, id, req),
         "tags" => prepare_tags(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
+        "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         _ => Err("the kind is not one the core writes".to_string()),
     }
+}
+
+/// A library playlist imported as one of Volumio's own: the JSON file Volumio reads,
+/// under its playlist folder, written whole; outside the library, so no mount and no
+/// update of MPD.
+fn prepare_volumio(
+    music: &Path,
+    decoders: &Decoders,
+    volumio_playlists: &Path,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, String> {
+    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+    let suffix = classify::suffix(&path).unwrap_or_default();
+    if !playlist::SUFFIXES.contains(&suffix.as_str()) {
+        return Err("not a playlist MPDantic reads".to_string());
+    }
+    let full = music.join(&path);
+    if !full.is_file() {
+        return Err("no such playlist".to_string());
+    }
+    let (_, size, _) = stat(&full);
+    if size > plcheck::MAX_PLAYLIST {
+        return Err(format!("the playlist is {size} bytes; not read"));
+    }
+    let bytes = fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+    let imported = plimport::plan(music, &path, &bytes, decoders, req.name.as_deref())?;
+    let folder = volumio_playlists.display().to_string();
+    let target = volumio_playlists.join(&imported.name);
+    let (exists, tsize, tmtime) = stat(&target);
+    let current = if exists {
+        fs::read(&target).map_err(|e| format!("{}: {e}", target.display()))?
+    } else {
+        Vec::new()
+    };
+    let changed = imported.after.as_bytes() != current.as_slice()
+        && (imported.songs + imported.streams > 0 || exists);
+    let mut p = empty(
+        id,
+        "volumio_playlist",
+        folder,
+        target.display().to_string(),
+        "write_text",
+        "local".to_string(),
+    );
+    p.exists = exists;
+    p.before = display(&current);
+    p.after = imported.after;
+    p.changed = changed;
+    p.size = tsize;
+    p.mtime = tmtime;
+    p.imported = imported.entries;
+    p.name = Some(imported.name);
+    p.from = Some(path);
+    p.left_out = imported.left_out;
+    if imported.songs + imported.streams == 0 {
+        p.notes
+            .push("no entry MPD can load: nothing to import".to_string());
+    }
+    Ok(p)
 }
 
 /// `.mpdignore` lines into the folder in hand, against the file as it is.
@@ -465,6 +543,40 @@ fn prepare_playlist(
     Ok(p)
 }
 
+/// Whether the batch's file is outside the library: a Volumio playlist, under
+/// Volumio's own folder, whose paths are absolute.
+fn outside(kind: &str) -> bool {
+    kind == "volumio_playlist"
+}
+
+/// The batch's file on disk: the library path joined to the music directory, or the
+/// absolute path as it is for a file outside the library.
+fn file_on_disk(music: &Path, kind: &str, file: &str) -> PathBuf {
+    if outside(kind) {
+        PathBuf::from(file)
+    } else {
+        music.join(file)
+    }
+}
+
+/// Where the batch's folder is written: the library folder (see `writable`), or the
+/// absolute folder of a file outside the library, made when it is not there.
+fn target(
+    music: &Path,
+    shares: &[Share],
+    mounter: &Mounter,
+    kind: &str,
+    path: &str,
+) -> Result<(PathBuf, Option<Mount>), String> {
+    if !outside(kind) {
+        return writable(music, shares, mounter, path);
+    }
+    let dir = PathBuf::from(path);
+    fs::create_dir_all(&dir).map_err(|e| format!("{path}: {e}"))?;
+    mount::write_test(&dir).map_err(|e| format!("{path}: cannot write there: {e}"))?;
+    Ok((dir, None))
+}
+
 /// Where the folder is written: the folder itself for a local root, the mount's
 /// target for a share, with the mount to take down after.
 fn writable(
@@ -533,6 +645,11 @@ fn note_for(preview: &Preview, written: usize) -> String {
         "cue" if preview.op == "remove" => format!("sheet {} removed", preview.file),
         "cue" => format!("sheet {} repaired: {}", preview.file, on()),
         "playlist" => format!("playlist {} written: {}", preview.file, on()),
+        "volumio_playlist" => format!(
+            "Volumio playlist \"{}\" written from {}",
+            preview.name.as_deref().unwrap_or(""),
+            preview.from.as_deref().unwrap_or("")
+        ),
         "tags" => format!(
             "tags of {} in {}: {}",
             files_word(written),
@@ -580,7 +697,7 @@ pub fn apply(
     if preview.kind == "tags" {
         return apply_tags(music, shares, mounter, journal, mpd_address, preview);
     }
-    let ro = music.join(&preview.file);
+    let ro = file_on_disk(music, &preview.kind, &preview.file);
     let (exists, size, mtime) = stat(&ro);
     if exists != preview.exists || size != preview.size || mtime != preview.mtime {
         return Err("the file changed since the preview; preview it again".to_string());
@@ -591,7 +708,7 @@ pub fn apply(
         None
     };
     let name = file_name(&preview.file);
-    let (dir, mount) = writable(music, shares, mounter, &preview.path)?;
+    let (dir, mount) = target(music, shares, mounter, &preview.kind, &preview.path)?;
     let result = if preview.op == "remove" {
         fs::remove_file(dir.join(name)).map_err(|e| format!("{}: {e}", preview.file))
     } else {
@@ -628,7 +745,12 @@ pub fn apply(
         mounter.unmount(&mut m);
     }
     let batch = journaled?;
-    let (updated, update_error) = update_after(mpd_address, &preview.path);
+    // A write outside the library is nothing to MPD.
+    let (updated, update_error) = if preview.kind == "volumio_playlist" {
+        (None, None)
+    } else {
+        update_after(mpd_address, &preview.path)
+    };
     Ok(Applied {
         batch,
         file: preview.file.clone(),
@@ -747,7 +869,7 @@ pub fn undo(
     let Some(entry) = batch.entries.first() else {
         return Err("an empty batch".to_string());
     };
-    let current = fs::read(music.join(&entry.path)).ok();
+    let current = fs::read(file_on_disk(music, &batch.kind, &entry.path)).ok();
     if entry.op == "remove" {
         if current.is_some() {
             return Err(
@@ -761,7 +883,7 @@ pub fn undo(
         Some(name) => Some(journal.kept(&batch.id, name)?),
         None => entry.before.as_ref().map(|s| s.as_bytes().to_vec()),
     };
-    let (dir, mount) = writable(music, shares, mounter, &batch.path)?;
+    let (dir, mount) = target(music, shares, mounter, &batch.kind, &batch.path)?;
     let name = file_name(&entry.path);
     let result = match before {
         Some(bytes) => write_whole(&dir, name, &bytes),
@@ -772,7 +894,11 @@ pub fn undo(
     }
     result?;
     journal.mark_undone(id)?;
-    let (updated, update_error) = update_after(mpd_address, &batch.path);
+    let (updated, update_error) = if batch.kind == "volumio_playlist" {
+        (None, None)
+    } else {
+        update_after(mpd_address, &batch.path)
+    };
     Ok(Applied {
         batch: id.to_string(),
         file: entry.path.clone(),
@@ -890,6 +1016,7 @@ mod tests {
             album_artist: None,
             date: None,
             base: None,
+            name: None,
         }
     }
 
@@ -904,6 +1031,7 @@ mod tests {
             album_artist: None,
             date: None,
             base: None,
+            name: None,
         }
     }
 
@@ -918,6 +1046,7 @@ mod tests {
             album_artist: None,
             date: None,
             base: None,
+            name: None,
         }
     }
 
@@ -939,6 +1068,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             1,
             &request(
                 "INTERNAL/Jazz",
@@ -969,6 +1099,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             2,
             &request("NAS/multimedia/Dune", &["*.srt"]),
         )
@@ -976,11 +1107,27 @@ mod tests {
         assert!(!p.exists);
         assert_eq!(p.after, "*.srt\n");
         assert_eq!(p.place, "the share multimedia, folder Dune");
-        assert!(prepare(&music, &shares, &d, 3, &request("../x", &["a"])).is_err());
-        assert!(prepare(&music, &shares, &d, 3, &request("INTERNAL/Rock", &["a"])).is_err());
+        assert!(prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            3,
+            &request("../x", &["a"])
+        )
+        .is_err());
+        assert!(prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            3,
+            &request("INTERNAL/Rock", &["a"])
+        )
+        .is_err());
         let mut odd = request("INTERNAL", &[]);
         odd.kind = "nothing".into();
-        assert!(prepare(&music, &shares, &d, 3, &odd).is_err());
+        assert!(prepare(&music, &shares, &d, &dir.join("playlists"), 3, &odd).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -997,6 +1144,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             1,
             &request("INTERNAL/Jazz", &["*.iso", "[#]recycle"]),
         )
@@ -1024,6 +1172,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             2,
             &request("INTERNAL/Jazz", &["*.mov"]),
         )
@@ -1060,7 +1209,15 @@ mod tests {
                 .unwrap_err()
                 .contains("already")
         );
-        let empty = prepare(&music, &shares, &d, 3, &request("INTERNAL/Jazz", &[""])).unwrap();
+        let empty = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            3,
+            &request("INTERNAL/Jazz", &[""]),
+        )
+        .unwrap();
         assert!(apply(&music, &shares, &mounter, &journal, &address, &empty)
             .unwrap_err()
             .contains("nothing"));
@@ -1101,6 +1258,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             1,
             &request("NAS/multimedia/Dune", &["*.srt", "*.txt"]),
         )
@@ -1142,6 +1300,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             1,
             &sheet("INTERNAL/Jazz/album.cue", None),
         )
@@ -1188,6 +1347,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             2,
             &sheet("INTERNAL/Jazz/album.cue", None),
         )
@@ -1208,6 +1368,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             3,
             &sheet("INTERNAL/Jazz/album.flac", None)
         )
@@ -1216,11 +1377,20 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             3,
             &sheet("INTERNAL/Jazz/gone.cue", None)
         )
         .is_err());
-        assert!(prepare(&music, &shares, &d, 3, &sheet("../album.cue", None)).is_err());
+        assert!(prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            3,
+            &sheet("../album.cue", None)
+        )
+        .is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1237,7 +1407,15 @@ mod tests {
         fs::write(music.join("INTERNAL/Jazz/image.flac"), b"x").unwrap();
         fs::write(music.join("INTERNAL/Jazz/a.cue"), text).unwrap();
         fs::write(music.join("INTERNAL/Jazz/b.cue"), text).unwrap();
-        let p = prepare(&music, &shares, &d, 1, &sheet("INTERNAL/Jazz/b.cue", None)).unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            1,
+            &sheet("INTERNAL/Jazz/b.cue", None),
+        )
+        .unwrap();
         assert_eq!(p.op, "write_text");
         assert!(!p.changed);
         assert_eq!(
@@ -1248,6 +1426,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             2,
             &sheet("INTERNAL/Jazz/b.cue", Some(&["remove"])),
         )
@@ -1278,6 +1457,77 @@ mod tests {
     }
 
     #[test]
+    fn a_library_playlist_is_imported_as_volumios_and_taken_back() {
+        let dir = temp("volumio");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        // Volumio's folder is made by the write when it is not there.
+        let playlists = dir.join("playlists");
+        fs::write(
+            music.join("INTERNAL/Jazz/01.flac"),
+            real_flac(&[("TITLE", "One"), ("ARTIST", "Ann"), ("ALBUM", "Live")]),
+        )
+        .unwrap();
+        fs::write(music.join("INTERNAL/Jazz/mix.m3u"), "01.flac\ngone.flac\n").unwrap();
+        let mut req = Request {
+            kind: "volumio_playlist".into(),
+            path: "INTERNAL/Jazz/mix.m3u".into(),
+            lines: Vec::new(),
+            repairs: None,
+            encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
+            base: None,
+            name: None,
+        };
+        let p = prepare(&music, &shares, &d, &playlists, 1, &req).unwrap();
+        assert_eq!(p.kind, "volumio_playlist");
+        assert_eq!(p.name.as_deref(), Some("mix"));
+        assert_eq!(p.from.as_deref(), Some("INTERNAL/Jazz/mix.m3u"));
+        assert_eq!(p.path, playlists.display().to_string());
+        assert_eq!(p.file, playlists.join("mix").display().to_string());
+        assert!(!p.exists);
+        assert!(p.changed);
+        assert_eq!(p.imported.len(), 2);
+        assert_eq!(p.imported[0].state, "song");
+        assert_eq!(p.imported[0].title.as_deref(), Some("One"));
+        assert_eq!(p.imported[1].state, "left_out");
+        assert_eq!(p.left_out, 1);
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.updated, None, "nothing for MPD to update");
+        assert_eq!(a.update_error, None);
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(playlists.join("mix")).unwrap()).unwrap();
+        assert_eq!(written[0]["uri"], "mnt/INTERNAL/Jazz/01.flac");
+        assert_eq!(written[0]["service"], "mpd");
+        let batch = journal.load(&a.batch).unwrap();
+        assert_eq!(
+            batch.note,
+            "Volumio playlist \"mix\" written from INTERNAL/Jazz/mix.m3u"
+        );
+        // The same name again is a change of that file, with the old one journaled.
+        req.name = Some("mix".into());
+        let again = prepare(&music, &shares, &d, &playlists, 2, &req).unwrap();
+        assert!(again.exists);
+        assert!(!again.changed, "the same items again");
+        req.name = Some("Mix two".into());
+        let other = prepare(&music, &shares, &d, &playlists, 3, &req).unwrap();
+        assert_eq!(other.file, playlists.join("Mix two").display().to_string());
+        req.name = Some("a/b".into());
+        assert!(prepare(&music, &shares, &d, &playlists, 4, &req).is_err());
+        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        assert!(u.written);
+        assert_eq!(u.updated, None);
+        assert!(!playlists.join("mix").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn the_tags_of_a_folder_are_written_file_by_file_journaled_and_set_back() {
         let dir = temp("tags");
         let music = dir.join("music");
@@ -1296,6 +1546,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             1,
             &folder_tags("INTERNAL/Jazz", None, Some("One")),
         )
@@ -1314,6 +1565,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             2,
             &folder_tags(
                 "INTERNAL/Jazz",
@@ -1356,6 +1608,7 @@ mod tests {
             &music,
             &shares,
             &d,
+            &dir.join("playlists"),
             3,
             &folder_tags("INTERNAL/Jazz", None, None),
         )
