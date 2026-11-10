@@ -1,19 +1,17 @@
 //! The `.mpdignore` analysis of one folder and everything under it, read-only: what
 //! MPD's walk would meet there by class, the lines already in force, and the lines
-//! that would keep the junk out. One directory at a time; counts and a handful of
-//! examples, never a list of every file.
+//! that would keep the junk out. Counts and a handful of examples, never a list of
+//! every file.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
 use crate::classify::{self, Class, Rules};
-use crate::ignore::{read_list, InForce};
-use crate::library::Library;
 use crate::mpd::Decoders;
+use crate::walk::{self, InForceLines, Progress, Walked};
 
 /// Examples kept per class and per suggestion.
 const EXAMPLES: usize = 5;
@@ -21,15 +19,6 @@ const EXAMPLES: usize = 5;
 const OTHER_SUFFIXES: usize = 200;
 /// Suffixes of Other shown, the most frequent first.
 const OTHER_SHOWN: usize = 20;
-/// Folders nested deeper than this are not walked; the report says so.
-const MAX_DEPTH: usize = 64;
-
-/// How far the walk has come, for the page while it runs.
-#[derive(Default)]
-pub struct Progress {
-    pub directories: AtomicUsize,
-    pub files: AtomicUsize,
-}
 
 #[derive(Serialize, Default, Debug)]
 pub struct Count {
@@ -60,14 +49,6 @@ pub struct Suggestion {
 }
 
 #[derive(Serialize, Debug)]
-pub struct InForceLines {
-    pub dir: String,
-    pub lines: Vec<String>,
-    /// `#` lines that look like names: comments to MPD, dead to their writer.
-    pub dead: Vec<String>,
-}
-
-#[derive(Serialize, Debug)]
 pub struct DecoderNote {
     /// `mpd` when the running MPD answered, `assumed` when it could not be asked.
     pub source: String,
@@ -92,19 +73,10 @@ pub struct Report {
     pub in_force: Vec<InForceLines>,
     pub suggestions: Vec<Suggestion>,
     pub decoders: DecoderNote,
+    /// Video containers are wanted here (Glass plays them, or the owner said so):
+    /// counted, never suggested.
+    pub video_in_use: bool,
     pub cancelled: bool,
-}
-
-struct Walk<'a> {
-    rules: Rules,
-    decoders: &'a Decoders,
-    progress: &'a Progress,
-    cancel: &'a AtomicBool,
-    in_force: InForce,
-    report: Report,
-    other_suffixes: BTreeMap<String, usize>,
-    other_lumped: usize,
-    suggestions: BTreeMap<String, Suggestion>,
 }
 
 /// The analysis of `path` (MPD's form) under the music directory.
@@ -113,194 +85,122 @@ pub fn analyse(
     path: &str,
     decoders: &Decoders,
     source: DecoderNote,
+    video_in_use: bool,
     progress: &Progress,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
-    let path = Library::check(path).ok_or_else(|| "not a library path".to_string())?;
-    // The lists in force above and at the folder: the root's, then each step down.
-    let mut in_force = InForce::default();
-    if let Some(list) = read_list(music) {
-        in_force.push(String::new(), list);
-    }
-    let mut dir = PathBuf::from(music);
-    let mut rel = String::new();
-    for component in path.split('/').filter(|c| !c.is_empty()) {
-        dir.push(component);
-        rel = join(&rel, component);
-        if let Some(list) = read_list(&dir) {
-            in_force.push(rel.clone(), list);
-        }
-    }
-    if !dir.is_dir() {
-        return Err("no such folder".to_string());
-    }
-    let mut walk = Walk {
-        rules: Rules::new(),
-        decoders,
-        progress,
-        cancel,
-        report: Report {
-            path: path.clone(),
-            directories: 0,
-            files: 0,
-            unreadable: 0,
-            too_deep: 0,
-            excluded: Count::default(),
-            classes: BTreeMap::new(),
-            audio_suffixes: BTreeMap::new(),
-            ffmpeg_suffixes: BTreeMap::new(),
-            other_suffixes: Vec::new(),
-            in_force: in_force
-                .lines()
-                .into_iter()
-                .map(|(dir, lines, dead)| InForceLines { dir, lines, dead })
-                .collect(),
-            suggestions: Vec::new(),
-            decoders: source,
-            cancelled: false,
-        },
-        in_force,
-        other_suffixes: BTreeMap::new(),
-        other_lumped: 0,
-        suggestions: BTreeMap::new(),
+    let start = walk::start(music, path)?;
+    let rules = Rules::new();
+    let mut report = Report {
+        path: start.path.clone(),
+        directories: 0,
+        files: 0,
+        unreadable: 0,
+        too_deep: 0,
+        excluded: Count::default(),
+        classes: BTreeMap::new(),
+        audio_suffixes: BTreeMap::new(),
+        ffmpeg_suffixes: BTreeMap::new(),
+        other_suffixes: Vec::new(),
+        in_force: start.in_force_lines(),
+        suggestions: Vec::new(),
+        decoders: source,
+        video_in_use,
+        cancelled: false,
     };
-    walk.directory(&dir, &path, 0);
-    let mut report = walk.report;
-    report.cancelled = cancel.load(Ordering::Relaxed);
-    let mut other: Vec<(String, usize)> = walk.other_suffixes.into_iter().collect();
-    other.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    other.truncate(OTHER_SHOWN);
-    if walk.other_lumped > 0 {
-        other.push(("(other suffixes)".to_string(), walk.other_lumped));
-    }
-    report.other_suffixes = other;
-    let mut suggestions: Vec<Suggestion> = walk.suggestions.into_values().collect();
-    suggestions.sort_by(|a, b| a.class.cmp(&b.class).then_with(|| b.count.cmp(&a.count)));
-    report.suggestions = suggestions;
-    Ok(report)
-}
-
-fn join(dir: &str, name: &str) -> String {
-    if dir.is_empty() {
-        name.to_string()
-    } else {
-        format!("{dir}/{name}")
-    }
-}
-
-impl Walk<'_> {
-    fn directory(&mut self, dir: &Path, rel: &str, depth: usize) {
-        if self.cancel.load(Ordering::Relaxed) {
-            return;
+    let mut other_suffixes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut other_lumped = 0usize;
+    let mut suggestions: BTreeMap<String, Suggestion> = BTreeMap::new();
+    let walked: Walked = walk::walk(start, progress, cancel, |visit| {
+        for x in visit.excluded {
+            report
+                .excluded
+                .add(&format!("{} ({} at {})", x.path, x.line, x.from), 0);
         }
-        if depth > MAX_DEPTH {
-            self.report.too_deep += 1;
-            return;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            self.report.unreadable += 1;
-            return;
-        };
-        self.report.directories += 1;
-        self.progress.directories.fetch_add(1, Ordering::Relaxed);
-        // One directory's names at a time, in order, so a report reads the same twice.
-        let mut entries: Vec<fs::DirEntry> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            if self.cancel.load(Ordering::Relaxed) {
-                return;
-            }
-            let name = entry.file_name();
-            let path = join(rel, &name.to_string_lossy());
-            // The exclude check comes before the stat, as in MPD's walk.
-            if let Some((from, line)) = self.in_force.matches(&name) {
-                let from = if from.is_empty() { "the root" } else { from };
-                self.report
-                    .excluded
-                    .add(&format!("{path} ({line} at {from})"), 0);
-                continue;
-            }
-            let Ok(meta) = fs::metadata(entry.path()) else {
-                self.report.unreadable += 1;
-                continue;
-            };
-            let (class, pattern) =
-                classify::classify(&self.rules, &name, meta.is_dir(), self.decoders);
+        let mut enter = Vec::new();
+        for (index, entry) in visit.entries.iter().enumerate() {
+            let (class, mut pattern) =
+                classify::classify(&rules, &entry.name, entry.is_dir, decoders);
             if class == Class::Folder {
-                let child = entry.path();
-                let pushed = match read_list(&child) {
-                    Some(list) => {
-                        self.in_force.push(path.clone(), list);
-                        true
-                    }
-                    None => false,
-                };
-                self.directory(&child, &path, depth + 1);
-                if pushed {
-                    self.in_force.pop();
-                }
+                enter.push(index);
                 continue;
             }
-            let bytes = if meta.is_dir() { 0 } else { meta.len() };
-            if !meta.is_dir() {
-                self.report.files += 1;
-                self.progress.files.fetch_add(1, Ordering::Relaxed);
+            // Video wanted here (Glass plays it, or the owner said so): counted, never
+            // suggested.
+            if class == Class::Video && video_in_use {
+                pattern = None;
             }
-            self.report
+            report
                 .classes
                 .entry(class)
                 .or_default()
-                .add(&path, bytes);
+                .add(&entry.path, entry.size);
+            let suffix = classify::suffix(&entry.name.to_string_lossy());
             match class {
                 Class::Audio => {
-                    if let Some(s) = classify::suffix(&name.to_string_lossy()) {
-                        *self.report.audio_suffixes.entry(s).or_insert(0) += 1;
+                    if let Some(s) = suffix {
+                        *report.audio_suffixes.entry(s).or_insert(0) += 1;
                     }
                 }
                 Class::FfmpegOnly => {
-                    if let Some(s) = classify::suffix(&name.to_string_lossy()) {
-                        *self.report.ffmpeg_suffixes.entry(s).or_insert(0) += 1;
+                    if let Some(s) = suffix {
+                        *report.ffmpeg_suffixes.entry(s).or_insert(0) += 1;
                     }
                 }
                 Class::Other => {
-                    let s = classify::suffix(&name.to_string_lossy())
-                        .unwrap_or_else(|| "(none)".to_string());
-                    if self.other_suffixes.len() < OTHER_SUFFIXES
-                        || self.other_suffixes.contains_key(&s)
-                    {
-                        *self.other_suffixes.entry(s).or_insert(0) += 1;
+                    let s = suffix.unwrap_or_else(|| "(none)".to_string());
+                    if other_suffixes.len() < OTHER_SUFFIXES || other_suffixes.contains_key(&s) {
+                        *other_suffixes.entry(s).or_insert(0) += 1;
                     } else {
-                        self.other_lumped += 1;
+                        other_lumped += 1;
                     }
                 }
                 _ => {}
             }
             if let Some(pattern) = pattern {
-                let suggestion =
-                    self.suggestions
-                        .entry(pattern.clone())
-                        .or_insert_with(|| Suggestion {
-                            pattern,
-                            class,
-                            count: 0,
-                            bytes: 0,
-                            examples: Vec::new(),
-                            note: class.note(),
-                        });
+                let suggestion = suggestions
+                    .entry(pattern.clone())
+                    .or_insert_with(|| Suggestion {
+                        pattern,
+                        class,
+                        count: 0,
+                        bytes: 0,
+                        examples: Vec::new(),
+                        note: class.note(),
+                    });
                 suggestion.count += 1;
-                suggestion.bytes += bytes;
+                suggestion.bytes += entry.size;
                 if suggestion.examples.len() < EXAMPLES {
-                    suggestion.examples.push(path);
+                    suggestion.examples.push(entry.path.clone());
                 }
             }
         }
+        enter
+    });
+    report.directories = walked.directories;
+    report.files = walked.files;
+    report.unreadable = walked.unreadable;
+    report.too_deep = walked.too_deep;
+    report.cancelled = walked.cancelled;
+    let mut other: Vec<(String, usize)> = other_suffixes.into_iter().collect();
+    other.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    other.truncate(OTHER_SHOWN);
+    if other_lumped > 0 {
+        other.push(("(other suffixes)".to_string(), other_lumped));
     }
+    report.other_suffixes = other;
+    let mut suggestions: Vec<Suggestion> = suggestions.into_values().collect();
+    suggestions.sort_by(|a, b| a.class.cmp(&b.class).then_with(|| b.count.cmp(&a.count)));
+    report.suggestions = suggestions;
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mpd;
+    use std::fs;
+    use std::path::PathBuf;
 
     /// A library with the reporter's kinds of trouble in it.
     fn library(name: &str) -> PathBuf {
@@ -357,12 +257,27 @@ mod tests {
         let root = library("report");
         let progress = Progress::default();
         let cancel = AtomicBool::new(false);
-        let r = analyse(&root, "NAS/Pop", &decoders(), note(), &progress, &cancel).unwrap();
+        let r = analyse(
+            &root,
+            "NAS/Pop",
+            &decoders(),
+            note(),
+            false,
+            &progress,
+            &cancel,
+        )
+        .unwrap();
         assert_eq!(r.path, "NAS/Pop");
+        assert!(!r.video_in_use);
         // Pop, Genesis, _SACD; not #recycle or @eaDir, which are not walked into.
         assert_eq!(r.directories, 3);
         assert_eq!(r.files, 9);
-        assert_eq!(progress.directories.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            progress
+                .directories
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
         let count = |c: Class| r.classes.get(&c).map(|x| x.count).unwrap_or(0);
         assert_eq!(count(Class::Audio), 2);
         assert_eq!(count(Class::Sidecar), 1);
@@ -407,6 +322,20 @@ mod tests {
         assert_eq!(r.in_force[0].dead, ["#recycle"]);
         assert_eq!(r.excluded.count, 0);
         assert!(!r.cancelled);
+        // With video in use, the clip is counted and not suggested.
+        let r = analyse(
+            &root,
+            "NAS/Pop",
+            &decoders(),
+            note(),
+            true,
+            &Progress::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(r.video_in_use);
+        assert_eq!(r.classes[&Class::Video].count, 1);
+        assert!(r.suggestions.iter().all(|s| s.pattern != "*.mov"));
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -418,6 +347,7 @@ mod tests {
             "NAS/Jazz",
             &decoders(),
             note(),
+            false,
             &Progress::default(),
             &AtomicBool::new(false),
         )
@@ -446,6 +376,7 @@ mod tests {
                 "../x",
                 &d,
                 note(),
+                false,
                 &Progress::default(),
                 &AtomicBool::new(false)
             )
@@ -458,6 +389,7 @@ mod tests {
                 "NAS/Rock",
                 &d,
                 note(),
+                false,
                 &Progress::default(),
                 &AtomicBool::new(false)
             )
@@ -469,6 +401,7 @@ mod tests {
             "NAS",
             &d,
             note(),
+            false,
             &Progress::default(),
             &AtomicBool::new(true),
         )

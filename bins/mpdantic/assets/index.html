@@ -43,9 +43,10 @@
   .row.dot .name { color: var(--muted); font-style: italic; }
   .row .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; flex: none; }
   .foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
-  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
-  button:hover { border-color: var(--accent); }
+  button, select { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
+  button:hover, select:hover { border-color: var(--accent); }
   button:disabled { opacity: .5; cursor: default; }
+  label.pref { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
   .empty, .error { padding: 18px 12px; color: var(--muted); }
   .error { color: var(--danger); }
   .panel { margin-top: 18px; }
@@ -70,6 +71,15 @@
   .sugg .ex { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
   .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; background: var(--line); color: var(--muted); text-transform: uppercase; }
   .tag.warn { background: var(--warn); color: #fff; }
+  .tag.bad { background: var(--danger); color: #fff; }
+  .tag.ok { background: var(--accent); color: #fff; }
+  details.sheet { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  details.sheet:last-child { border-bottom: 0; }
+  details.sheet summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  details.sheet summary .path { overflow-wrap: anywhere; }
+  details.sheet .inner { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
+  .finding { font-size: 13px; margin: 3px 0; }
+  .finding code { margin-right: 4px; }
 </style>
 </head>
 <body>
@@ -83,17 +93,39 @@
   <div class="crumbs" id="crumbs"></div>
   <div class="list" id="list"></div>
   <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden>More</button></div>
-  <div class="panel" id="panel">
+
+  <div class="panel" id="panel-ignore">
     <div class="head">
       <b>.mpdignore</b>
-      <span class="sub" id="panel-sub">What MPD's update would meet under this folder, and the lines that would keep the junk out. Read-only.</span>
+      <span class="sub">What MPD's update would meet under this folder, and the lines that would keep the junk out. Read-only.</span>
       <span class="grow"></span>
-      <button id="analyse">Analyse this folder</button>
-      <button id="cancel" hidden>Cancel</button>
+      <label class="pref" title="Glass plays video from the library; with video in use, video containers are counted and never suggested.">Video here:
+        <select id="pref-video">
+          <option value="auto">as Glass says</option>
+          <option value="in_use">in use</option>
+          <option value="junk">not wanted</option>
+        </select>
+      </label>
+      <button id="analyse-ignore">Analyse this folder</button>
+      <button id="cancel-ignore" hidden>Cancel</button>
     </div>
     <div class="body">
-      <div class="progress" id="progress">Not analysed yet.</div>
-      <div id="report"></div>
+      <div class="progress" id="progress-ignore">Not analysed yet.</div>
+      <div id="report-ignore"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-cue">
+    <div class="head">
+      <b>CUE sheets</b>
+      <span class="sub">Every sheet under this folder read as MPD reads it, and what MPD makes of it. Read-only.</span>
+      <span class="grow"></span>
+      <button id="analyse-cue">Check this folder</button>
+      <button id="cancel-cue" hidden>Cancel</button>
+    </div>
+    <div class="body">
+      <div class="progress" id="progress-cue">Not checked yet.</div>
+      <div id="report-cue"></div>
     </div>
   </div>
 </div>
@@ -120,6 +152,11 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  };
+  const ms = (n) => {
+    if (n === null || n === undefined) return '';
+    const s = Math.floor(n / 1000);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   };
 
   async function api(url, options) {
@@ -168,7 +205,8 @@
       ? (shown < current.total ? shown + ' of ' + current.total + ' shown' : current.total + ' entries') + ', ' + dirs + ' folders'
       : '';
     $('more').hidden = !current.more;
-    $('analyse').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
+    $('analyse-ignore').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
+    $('analyse-cue').textContent = current.path ? 'Check this folder' : 'Check the whole library';
   }
 
   function failed(path, message) {
@@ -213,68 +251,96 @@
     }
   }
 
-  // ------------------------------------------------------------ the analysis
+  // ---------------------------------------------------------- the preferences
+
+  function showPrefs(p) {
+    const select = $('pref-video');
+    select.value = p.video;
+    select.options[0].textContent = p.glass ? 'as Glass says (in use)' : 'as Glass says (not found)';
+    select.title = p.error ? 'Not kept: ' + p.error : (p.video_in_use ? 'Video containers are counted, never suggested.' : 'Video containers are suggested as lines to keep out.');
+  }
+
+  async function loadPrefs() {
+    try { showPrefs(await api('/api/preferences')); } catch (e) { /* the core said nothing */ }
+  }
+
+  async function savePrefs() {
+    try {
+      showPrefs(await api('/api/preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ video: $('pref-video').value }) }));
+    } catch (e) {
+      $('pref-video').title = String(e.message || e);
+    }
+  }
+
+  // ---------------------------------------------------------------- the jobs
 
   const CLASSES = {
     system_folder: 'NAS and system folders', sidecar: 'Sidecar files', archive: 'Archives', video: 'Video containers',
     ffmpeg_only: 'Claimed only by ffmpeg', audio: 'Audio', cue: 'CUE sheets', playlist: 'Playlists', image: 'Images',
     other: 'Other', folder: 'Folders'
   };
-  let job = null;
+  // One job at a time in the core; each panel follows its own kind.
+  const panels = {
+    ignore: { kind: 'ignore', job: null, verb: 'Walking', render: reportIgnore },
+    cue: { kind: 'cue', job: null, verb: 'Reading', render: reportCue }
+  };
 
-  function progress(text, bad) {
-    const p = $('progress');
-    p.textContent = text;
-    p.className = 'progress' + (bad ? ' bad' : '');
+  function progress(p, text, bad) {
+    const node = $('progress-' + p.kind);
+    node.textContent = text;
+    node.className = 'progress' + (bad ? ' bad' : '');
   }
 
-  async function analyse() {
-    $('report').textContent = '';
+  function buttons(p, running) {
+    $('cancel-' + p.kind).hidden = !running;
+    Object.values(panels).forEach((q) => { $('analyse-' + q.kind).disabled = running; });
+  }
+
+  async function analyse(p) {
+    $('report-' + p.kind).textContent = '';
     try {
-      const started = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ignore', path: current.path }) });
-      follow(started.id);
+      const started = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: p.kind, path: current.path }) });
+      follow(p, started.id);
     } catch (e) {
-      progress(String(e.message || e), true);
+      progress(p, String(e.message || e), true);
     }
   }
 
-  function follow(id) {
-    if (job && job.timer) clearTimeout(job.timer);
-    job = { id, timer: null };
-    $('cancel').hidden = false;
-    $('analyse').disabled = true;
-    poll();
+  function follow(p, id) {
+    if (p.job && p.job.timer) clearTimeout(p.job.timer);
+    p.job = { id, timer: null };
+    buttons(p, true);
+    poll(p);
   }
 
-  async function poll() {
-    if (!job) return;
+  async function poll(p) {
+    if (!p.job) return;
     try {
-      const j = await api('/api/jobs/' + job.id);
+      const j = await api('/api/jobs/' + p.job.id);
       if (j.state === 'running') {
-        progress('Walking ' + (j.path || 'the library') + ': ' + j.directories + ' folders, ' + j.files + ' files, ' + j.seconds + ' s.');
-        job.timer = setTimeout(poll, 1000);
+        progress(p, p.verb + ' ' + (j.path || 'the library') + ': ' + j.directories + ' folders, ' + j.files + ' files, ' + j.seconds + ' s.');
+        p.job.timer = setTimeout(() => poll(p), 1000);
         return;
       }
-      ended(j);
+      ended(p, j);
     } catch (e) {
-      progress(String(e.message || e), true);
-      ended(null);
+      progress(p, String(e.message || e), true);
+      ended(p, null);
     }
   }
 
-  function ended(j) {
-    $('cancel').hidden = true;
-    $('analyse').disabled = false;
-    job = null;
+  function ended(p, j) {
+    buttons(p, false);
+    p.job = null;
     if (!j) return;
-    if (j.state === 'failed') { progress('Failed: ' + j.error, true); return; }
-    progress((j.state === 'cancelled' ? 'Cancelled after ' : 'Done in ') + j.seconds + ' s: ' + j.directories + ' folders, ' + j.files + ' files under ' + (j.path || 'the library') + '.');
-    report(j.result);
+    if (j.state === 'failed') { progress(p, 'Failed: ' + j.error, true); return; }
+    progress(p, (j.state === 'cancelled' ? 'Cancelled after ' : 'Done in ') + j.seconds + ' s: ' + j.directories + ' folders, ' + j.files + ' files under ' + (j.path || 'the library') + '.');
+    p.render(j.result);
   }
 
-  async function cancel() {
-    if (!job) return;
-    try { await api('/api/jobs/' + job.id, { method: 'DELETE' }); } catch (e) { progress(String(e.message || e), true); }
+  async function cancel(p) {
+    if (!p.job) return;
+    try { await api('/api/jobs/' + p.job.id, { method: 'DELETE' }); } catch (e) { progress(p, String(e.message || e), true); }
   }
 
   function section(parent, title, help) {
@@ -299,14 +365,17 @@
     parent.appendChild(t);
   }
 
-  function report(r) {
-    const box = $('report');
+  // ------------------------------------------------------- the .mpdignore report
+
+  function reportIgnore(r) {
+    const box = $('report-ignore');
     box.textContent = '';
     if (!r) return;
     const decoders = r.decoders.source === 'mpd'
       ? 'The decoders of the running MPD: ' + r.decoders.count + ' suffixes, ' + r.decoders.detail + '.'
       : 'MPD could not be asked for its decoders (' + r.decoders.detail + '); ' + r.decoders.count + ' audio suffixes assumed.';
     const notes = [decoders];
+    if (r.video_in_use) notes.push('Video is in use here: video containers are counted, not suggested.');
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
     if (r.too_deep) notes.push(r.too_deep + ' folders were nested too deep to walk.');
     if (r.cancelled) notes.push('The walk was cancelled: the counts are partial.');
@@ -333,8 +402,19 @@
       const e = section(box, 'Already kept out', r.excluded.count + ' entries match a line in force, so MPD never looks at them.');
       e.appendChild(el('div', 'ex', r.excluded.examples.join('  |  ')));
     }
-    const f = section(box, 'Lines in force', r.in_force.length ? 'The .mpdignore files from the root down to this folder, as MPD inherits them.' : 'No .mpdignore from the root down to this folder.');
-    r.in_force.forEach((l) => {
+    linesInForce(box, r.in_force);
+    const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
+    if (audio.length) table(section(box, 'Audio by suffix'), audio);
+    const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => ['.' + k, String(r.ffmpeg_suffixes[k])]);
+    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; the rest is counted here.'), ffmpeg);
+    if (r.other_suffixes.length) {
+      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. A line by hand would spare the stat.'), r.other_suffixes.map((p) => [p[0].startsWith('(') ? p[0] : '.' + p[0], String(p[1])]));
+    }
+  }
+
+  function linesInForce(box, inForce) {
+    const f = section(box, 'Lines in force', inForce.length ? 'The .mpdignore files from the root down to this folder, as MPD inherits them.' : 'No .mpdignore from the root down to this folder.');
+    inForce.forEach((l) => {
       const row = el('div', 'sugg');
       row.appendChild(el('div', 'top', (l.dir || 'the root') + '/.mpdignore'));
       const lines = el('div', 'ex');
@@ -355,29 +435,78 @@
       });
       f.appendChild(row);
     });
-    const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
-    if (audio.length) table(section(box, 'Audio by suffix'), audio);
-    const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => ['.' + k, String(r.ffmpeg_suffixes[k])]);
-    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; the rest is counted here.'), ffmpeg);
-    if (r.other_suffixes.length) {
-      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. A line by hand would spare the stat.'), r.other_suffixes.map((p) => [p[0].startsWith('(') ? p[0] : '.' + p[0], String(p[1])]));
-    }
+  }
+
+  // -------------------------------------------------------------- the CUE report
+
+  const FILE_STATES = { ok: 'beside the sheet', missing: 'not beside the sheet', case: 'there in another case', suffix: 'there with another suffix', not_decoded: 'there, but no decoder claims it', foreign: 'a foreign path' };
+
+  function reportCue(r) {
+    const box = $('report-cue');
+    box.textContent = '';
+    if (!r) return;
+    const notes = [];
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
+    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
+    const totals = section(box, 'Sheets under ' + (r.path || 'the library'), notes.join(' '));
+    const rows = [['Sheets', String(r.sheets)], ['Clean', String(r.clean)], ['With findings', String(r.with_findings)]];
+    Object.keys(r.by_code).forEach((code) => { rows.push([code + '  ' + (r.codes[code] || ''), String(r.by_code[code])]); });
+    table(totals, rows);
+    if (!r.sheets) { totals.appendChild(el('div', 'help', 'No CUE sheet under this folder.')); linesInForce(box, r.in_force); return; }
+    const list = section(box, 'Each sheet', 'Sheets with findings first. A finding says what MPD does with the sheet as it is.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' sheets are listed; the totals count every one.' : ''));
+    r.list.forEach((s) => {
+      const d = el('details', 'sheet');
+      const sum = el('summary');
+      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? s.findings.length + (s.findings.length === 1 ? ' finding' : ' findings') : 'clean'));
+      sum.appendChild(el('span', 'path', s.path));
+      sum.appendChild(el('span', 'help', s.tracks + (s.tracks === 1 ? ' track' : ' tracks') + (s.album ? ', ' + s.album : '') + (s.encoding && s.encoding !== 'utf-8' ? ', ' + s.encoding : '')));
+      d.appendChild(sum);
+      const inner = el('div', 'inner');
+      s.findings.forEach((f) => {
+        const line = el('div', 'finding');
+        line.appendChild(el('code', '', f.code + (f.line ? ' line ' + f.line : '')));
+        line.appendChild(document.createTextNode(f.text));
+        inner.appendChild(line);
+      });
+      s.files.forEach((f) => {
+        const line = el('div', 'finding');
+        line.appendChild(el('span', 'tag ' + (f.state === 'ok' ? 'ok' : 'warn'), f.accepted ? f.kind : f.kind + ' (dropped)'));
+        line.appendChild(document.createTextNode(' '));
+        line.appendChild(el('code', '', f.name));
+        line.appendChild(document.createTextNode(' ' + (FILE_STATES[f.state] || f.state) + (f.found ? ': ' + f.found : '')));
+        inner.appendChild(line);
+      });
+      if (s.track_list.length) {
+        const rows = s.track_list.map((t) => [t.number + '  ' + (t.title || '') + (t.performer ? '  (' + t.performer + ')' : ''), ms(t.start_ms) + (t.end_ms !== null && t.end_ms !== undefined ? ' to ' + ms(t.end_ms) : ''), t.file]);
+        table(inner, rows);
+        if (s.tracks_truncated) inner.appendChild(el('div', 'help', 'Only the first ' + s.track_list.length + ' tracks are listed.'));
+      }
+      d.appendChild(inner);
+      list.appendChild(d);
+    });
+    linesInForce(box, r.in_force);
   }
 
   // The job already there when the page opens, from this device or another: followed
-  // while it runs, shown when it is done.
+  // while it runs, shown when it is done, on the panel of its kind.
   async function resume() {
     try {
       const j = await api('/api/jobs');
-      if (j.state === 'running') follow(j.id); else ended(j);
+      const p = panels[j.kind] || panels.ignore;
+      if (j.state === 'running') follow(p, j.id); else ended(p, j);
     } catch (e) { /* no job yet */ }
   }
 
   $('more').addEventListener('click', () => load(current.path, true));
-  $('analyse').addEventListener('click', analyse);
-  $('cancel').addEventListener('click', cancel);
+  Object.values(panels).forEach((p) => {
+    $('analyse-' + p.kind).addEventListener('click', () => analyse(p));
+    $('cancel-' + p.kind).addEventListener('click', () => cancel(p));
+  });
+  $('pref-video').addEventListener('change', savePrefs);
   window.addEventListener('hashchange', () => load(fromHash(), false));
   load(fromHash(), false);
+  loadPrefs();
   resume();
   status();
   setInterval(status, 5000);

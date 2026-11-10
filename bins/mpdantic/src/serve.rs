@@ -14,9 +14,11 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::analyse::{self, DecoderNote};
+use crate::cuecheck;
 use crate::jobs::Jobs;
 use crate::library::{self, Library, ListError};
 use crate::mpd::{self, Address, Decoders};
+use crate::prefs;
 use crate::status::Status;
 
 /// The page, whole.
@@ -36,6 +38,8 @@ pub struct Shared {
     pub mpd: Address,
     /// The decoders last read, with where they came from.
     pub decoders: Mutex<Option<(DecoderNote, Decoders)>>,
+    /// What the owner knows about the library.
+    pub prefs: Mutex<prefs::Store>,
 }
 
 impl Shared {
@@ -198,6 +202,28 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = start_job(shared, &r.body);
             (code, json, body)
         }
+        (_, "/api/preferences") if get => {
+            let body = shared
+                .prefs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .view()
+                .to_string()
+                + "\n";
+            (200, json, body)
+        }
+        ("PUT", "/api/preferences") => {
+            let Ok(wanted) = serde_json::from_slice::<prefs::Prefs>(&r.body) else {
+                return (400, json, error("the body is not the preferences"));
+            };
+            let mut store = shared.prefs.lock().unwrap_or_else(|e| e.into_inner());
+            match store.save(wanted) {
+                Ok(()) => (200, json, store.view().to_string() + "\n"),
+                Err(e) if e.starts_with("video must be") => (400, json, error(&e)),
+                // Kept in memory; the view says the file refused.
+                Err(_) => (200, json, store.view().to_string() + "\n"),
+            }
+        }
         (_, "/api/jobs") if get => match shared.jobs.current() {
             Some(job) => (200, json, job.to_string() + "\n"),
             None => (404, json, error("no job yet")),
@@ -216,6 +242,7 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         (_, "/")
         | (_, "/index.html")
         | (_, "/api/status")
+        | (_, "/api/preferences")
         | (_, "/api/list")
         | (_, "/api/decoders") => (405, json, error("method not allowed")),
         _ => (404, json, error("not found")),
@@ -227,9 +254,9 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
         return (400, error("the body is not JSON"));
     };
-    let kind = request["kind"].as_str().unwrap_or("");
+    let kind = request["kind"].as_str().unwrap_or("").to_string();
     let path = request["path"].as_str().unwrap_or("").to_string();
-    if kind != "ignore" {
+    if kind != "ignore" && kind != "cue" {
         return (400, error("the kind is not one the core knows"));
     }
     if Library::check(&path).is_none() {
@@ -238,9 +265,28 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let music = shared.library.music().to_path_buf();
     let (note, decoders) = shared.decoders();
     let job_path = path.clone();
-    let started = shared.jobs.start(kind, &path, move |progress, cancel| {
-        analyse::analyse(&music, &job_path, &decoders, note, progress, cancel)
-            .and_then(|report| serde_json::to_value(report).map_err(|e| e.to_string()))
+    let job_kind = kind.clone();
+    let video_in_use = shared
+        .prefs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .video_in_use();
+    let started = shared.jobs.start(&kind, &path, move |progress, cancel| {
+        if job_kind == "cue" {
+            cuecheck::check(&music, &job_path, &decoders, note, progress, cancel)
+                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        } else {
+            analyse::analyse(
+                &music,
+                &job_path,
+                &decoders,
+                note,
+                video_in_use,
+                progress,
+                cancel,
+            )
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        }
     });
     match started {
         Ok(id) => (202, serde_json::json!({ "id": id }).to_string() + "\n"),
@@ -396,14 +442,55 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_server(root: PathBuf, mpd: Address) -> Server {
+        let data = root.join(".mpdantic-data");
+        let glass = root.join(".no-glass");
         let shared = Arc::new(Shared {
             status: Arc::new(Mutex::new(Status::new())),
             library: Library::new(root),
             jobs: Arc::new(Jobs::new()),
             mpd,
             decoders: Mutex::new(None),
+            prefs: Mutex::new(prefs::Store::open(&data, &glass)),
         });
         start(0, shared).unwrap()
+    }
+
+    #[test]
+    fn the_preferences_are_read_kept_and_refused_when_wrong() {
+        let root = temp_library("serve-prefs");
+        let server = make_server(root.clone(), no_mpd());
+        let out = talk(server.port, "GET /api/preferences HTTP/1.0\r\n\r\n");
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["video"], "auto");
+        assert_eq!(value["video_in_use"], false);
+        assert_eq!(value["glass"], false);
+        let put = "{\"video\":\"in_use\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "PUT /api/preferences HTTP/1.0\r\nContent-Length: {}\r\n\r\n{put}",
+                put.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["video_in_use"], true);
+        assert!(root.join(".mpdantic-data/preferences.json").is_file());
+        let bad = "{\"video\":\"maybe\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "PUT /api/preferences HTTP/1.0\r\nContent-Length: {}\r\n\r\n{bad}",
+                bad.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = talk(
+            server.port,
+            "POST /api/preferences HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 405"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn talk(port: u16, request: &str) -> String {
@@ -595,6 +682,31 @@ mod tests {
             ),
         );
         assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        // The CUE check is the other kind.
+        let cue = "{\"kind\":\"cue\",\"path\":\"NAS\"}";
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/jobs HTTP/1.0\r\nContent-Length: {}\r\n\r\n{cue}",
+                cue.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 202"), "{out}");
+        let id = serde_json::from_str::<serde_json::Value>(body(&out)).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        let mut job = serde_json::Value::Null;
+        for _ in 0..200 {
+            let out = talk(server.port, &format!("GET /api/jobs/{id} HTTP/1.0\r\n\r\n"));
+            job = serde_json::from_str(body(&out)).unwrap();
+            if job["state"] != "running" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(job["state"], "done", "{job}");
+        assert_eq!(job["kind"], "cue");
+        assert_eq!(job["result"]["sheets"], 0);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

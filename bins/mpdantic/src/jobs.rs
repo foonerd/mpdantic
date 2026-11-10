@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::analyse::Progress;
+use crate::walk::Progress;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
 #[serde(rename_all = "lowercase")]

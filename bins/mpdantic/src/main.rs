@@ -1,25 +1,33 @@
 //! The core of MPDantic: one daemon, started by the plugin as its own systemd
 //! unit, that audits and repairs the library and serves the management
 //! interface. At this version it serves the pages, the library one folder at a
-//! time, the `.mpdignore` analysis of a folder as a job, and its status.
+//! time, the `.mpdignore` analysis and the CUE check of a folder as jobs, and its
+//! status.
 //!
-//! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--version]`
+//! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--version]`
 //!
 //! `DIR` under `--run` holds `status.json` (`/run/mpdantic` unless given);
 //! `--settings` is the file the plugin writes, with the port
 //! (`/data/configuration/system_controller/mpdantic/settings.json` unless given,
 //! the default port when the file is not there); `--music` is MPD's music
 //! directory (`/var/lib/mpd/music` unless given); `--mpd` is where MPD listens,
-//! a socket path or host:port (`/run/mpd/socket` unless given).
+//! a socket path or host:port (`/run/mpd/socket` unless given); `--data` is the
+//! folder the preferences are kept in (`/data/INTERNAL/mpdantic` unless given);
+//! `--glass` is the Glass plugin's folder, whose presence says video in the
+//! library is wanted (`/data/plugins/user_interface/glass` unless given).
 
 mod analyse;
 mod classify;
+mod cue;
+mod cuecheck;
 mod ignore;
 mod jobs;
 mod library;
 mod mpd;
+mod prefs;
 mod serve;
 mod status;
+mod walk;
 
 use std::fs;
 use std::io::ErrorKind;
@@ -44,10 +52,12 @@ struct Args {
     settings: PathBuf,
     music: PathBuf,
     mpd: mpd::Address,
+    data: PathBuf,
+    glass: PathBuf,
 }
 
 fn usage() -> ! {
-    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--version]");
+    eprintln!("mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--version]");
     process::exit(64);
 }
 
@@ -57,6 +67,8 @@ fn args() -> Args {
         settings: PathBuf::from("/data/configuration/system_controller/mpdantic/settings.json"),
         music: PathBuf::from("/var/lib/mpd/music"),
         mpd: mpd::Address::parse("/run/mpd/socket"),
+        data: PathBuf::from("/data/INTERNAL/mpdantic"),
+        glass: PathBuf::from(prefs::GLASS_PLUGIN),
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -64,6 +76,8 @@ fn args() -> Args {
             "--run" => out.run = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--settings" => out.settings = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--music" => out.music = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
+            "--data" => out.data = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
+            "--glass" => out.glass = it.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--mpd" => {
                 out.mpd = it
                     .next()
@@ -128,6 +142,7 @@ fn main() {
         jobs: Arc::new(Jobs::new()),
         mpd: args.mpd.clone(),
         decoders: Mutex::new(None),
+        prefs: Mutex::new(prefs::Store::open(&args.data, &args.glass)),
     });
     // The pages. A port that cannot be taken is said in the status, and the core stays
     // up so the plugin's button can say it too; the unit is not restarted in a loop.
