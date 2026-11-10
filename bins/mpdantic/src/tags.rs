@@ -132,11 +132,24 @@ pub fn duration_ms(path: &Path, suffix: &str) -> Option<u64> {
     read(path, suffix).duration_ms
 }
 
+/// How far into a file lofty looks for a tag or a first frame past junk: a megabyte,
+/// where lofty's own default is a kilobyte. Files with a stray header before the
+/// first MPEG frame are common (one of 4352 bytes seen), MPD's decoders resync past
+/// any amount, and lofty's reader does too, but its check before a write stops at the
+/// default and refuses the file; the same reach on both sides keeps read and write
+/// agreeing.
+pub const MAX_JUNK_BYTES: usize = 1 << 20;
+
+/// lofty's parse options as the core uses them, for reading and before a write.
+pub fn parse_options() -> ParseOptions {
+    ParseOptions::new().max_junk_bytes(MAX_JUNK_BYTES)
+}
+
 fn read_lofty(format: &str, file: &mut File, out: &mut Raw) -> Result<(), String> {
     // With the properties first; without them when the audio refuses, so the tags
     // still count.
-    let with = ParseOptions::new();
-    let without = ParseOptions::new().read_properties(false);
+    let with = parse_options();
+    let without = parse_options().read_properties(false);
     match read_lofty_with(format, file, out, with) {
         Ok(()) => Ok(()),
         Err(first) => {

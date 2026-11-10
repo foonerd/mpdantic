@@ -681,8 +681,26 @@ fn set_ilst(tag: &mut Ilst, key: &str, values: &[String]) -> Result<(), String> 
 
 fn save<T: AudioFile>(file: &mut File, f: &T) -> Result<(), String> {
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    f.save_to(file, WriteOptions::default())
-        .map_err(|e| e.to_string())
+    // lofty checks the file's format again before it writes, with these options: the
+    // reach past junk must be the reader's, or a file the check read is refused here.
+    let options = WriteOptions::default().parse_options(tags::parse_options());
+    f.save_to(file, options).map_err(|e| described(&e))
+}
+
+/// An error with its causes after it: lofty's "failed to write to file" says nothing
+/// of the io error under it, and that is what the user has to act on.
+fn described(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        let line = c.to_string();
+        if !text.contains(&line) {
+            text.push_str(": ");
+            text.push_str(&line);
+        }
+        cause = c.source();
+    }
+    text
 }
 
 fn not_here(kind: &Kind, format: &str) -> String {
@@ -1330,6 +1348,30 @@ pub mod tests {
         assert_eq!(seen.title, ["Title"]);
         assert_eq!(seen.date, ["1999"]);
         assert_eq!(seen.track, ["7"]);
+        // Junk before the first frame (a stray header of 4352 bytes, as seen in a
+        // library): the reader looks past it, and so must lofty's check before the
+        // write, else the file is refused with "no format could be determined".
+        let mut junk = vec![0u8; 4352];
+        junk[2] = 2;
+        junk[23..27].copy_from_slice(&[8, 0, 9, 2]);
+        let mut c = junk.clone();
+        c.extend_from_slice(&mpeg_frame());
+        c.extend_from_slice(&v1);
+        fs::write(dir.join("c.mp3"), &c).unwrap();
+        let p = plan(&dir, "", &decoders(), &ALL).unwrap();
+        let cf = p.files.iter().find(|f| f.name == "c.mp3").unwrap();
+        assert_eq!(cf.note, None, "{:?}", cf.note);
+        assert_eq!(cf.changes.len(), 5);
+        apply_file(&dir.join("c.mp3"), "mp3", &cf.changes).unwrap();
+        let after = fs::read(dir.join("c.mp3")).unwrap();
+        assert_eq!(&after[0..3], b"ID3", "the tag at the front");
+        assert!(
+            after.windows(junk.len()).any(|w| w == junk.as_slice()),
+            "the junk and the frame kept whole"
+        );
+        let seen = tags::view(&tags::read(&dir.join("c.mp3"), "mp3"));
+        assert!(!seen.id3v1_only);
+        assert_eq!(seen.title, ["Title"]);
         fs::remove_dir_all(&dir).unwrap();
     }
 
