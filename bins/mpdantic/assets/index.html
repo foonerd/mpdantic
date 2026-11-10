@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MPDantic</title>
+<style>
+  :root {
+    --bg: #f4f4f1; --panel: #ffffff; --line: #d8d8d2; --text: #1d1d1b; --muted: #6b6b66;
+    --accent: #2f7d32; --danger: #b3261e; --hover: #eef5ee;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1c; --panel: #262626; --line: #404040; --text: #e6e6e6; --muted: #9a9a9a;
+      --accent: #54b948; --danger: #d64545; --hover: #2e342e;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.4; }
+  .header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: baseline; gap: 12px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header .sub { color: var(--muted); font-size: 13px; }
+  .grow { flex: 1; }
+  .badge { font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 2px 8px; border-radius: 10px; background: var(--line); color: var(--muted); text-transform: uppercase; }
+  .badge.ok { background: var(--accent); color: #fff; }
+  .badge.bad { background: var(--danger); color: #fff; }
+  .container { max-width: 1000px; margin: 0 auto; padding: 14px 16px 60px; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 10px; font-size: 14px; }
+  .crumbs a { color: var(--accent); text-decoration: none; }
+  .crumbs a:hover { text-decoration: underline; }
+  .crumbs .sep { color: var(--muted); }
+  .crumbs .here { font-weight: 600; }
+  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row.dir { cursor: pointer; }
+  .row.dir:hover { background: var(--hover); }
+  .row .icon { width: 1.4em; color: var(--muted); text-align: center; flex: none; }
+  .row .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .row.dir .name { color: var(--accent); font-weight: 600; }
+  .row.dot .name { color: var(--muted); font-style: italic; }
+  .row .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; flex: none; }
+  .foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
+  button:hover { border-color: var(--accent); }
+  .empty, .error { padding: 18px 12px; color: var(--muted); }
+  .error { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>MPDantic</h1>
+  <span class="sub" id="version"></span>
+  <span class="grow"></span>
+  <span class="badge" id="state">...</span>
+</div>
+<div class="container">
+  <div class="crumbs" id="crumbs"></div>
+  <div class="list" id="list"></div>
+  <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden>More</button></div>
+</div>
+<script>
+'use strict';
+(function () {
+  const $ = (id) => document.getElementById(id);
+  // The folder on show: its path in MPD's form, the entries read so far, the count.
+  let current = { path: '', entries: [], total: 0, more: false };
+
+  const size = (n) => {
+    if (n < 1024) return n + ' B';
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return (n < 10 ? n.toFixed(1) : String(Math.round(n))) + ' ' + units[i];
+  };
+  const toHash = (path) => '#' + path.split('/').map(encodeURIComponent).join('/');
+  const fromHash = () => location.hash.replace(/^#/, '').split('/').map((s) => {
+    try { return decodeURIComponent(s); } catch (e) { return s; }
+  }).join('/');
+  const el = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  async function api(url) {
+    const r = await fetch(url, { cache: 'no-store' });
+    const body = await r.json().catch(() => ({ error: r.statusText }));
+    if (!r.ok) throw new Error(body.error || r.statusText);
+    return body;
+  }
+
+  function crumbs(path) {
+    const box = $('crumbs');
+    box.textContent = '';
+    const parts = path ? path.split('/') : [];
+    const add = (text, target, here) => {
+      if (here) { box.appendChild(el('span', 'here', text)); return; }
+      const a = el('a', '', text);
+      a.href = toHash(target);
+      box.appendChild(a);
+    };
+    add('Library', '', parts.length === 0);
+    parts.forEach((part, i) => {
+      box.appendChild(el('span', 'sep', '/'));
+      add(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1);
+    });
+  }
+
+  function render() {
+    crumbs(current.path);
+    const list = $('list');
+    list.textContent = '';
+    if (!current.entries.length) list.appendChild(el('div', 'empty', 'Nothing here.'));
+    current.entries.forEach((entry) => {
+      const row = el('div', 'row' + (entry.dir ? ' dir' : '') + (entry.name.startsWith('.') ? ' dot' : ''));
+      row.appendChild(el('span', 'icon', entry.dir ? String.fromCharCode(0x25B8) : String.fromCharCode(0xB7)));
+      row.appendChild(el('span', 'name', entry.name));
+      row.appendChild(el('span', 'size', entry.dir ? '' : size(entry.size)));
+      if (entry.dir) row.addEventListener('click', () => { location.hash = toHash((current.path ? current.path + '/' : '') + entry.name); });
+      list.appendChild(row);
+    });
+    const dirs = current.entries.filter((e) => e.dir).length;
+    const shown = current.entries.length;
+    $('count').textContent = current.total
+      ? (shown < current.total ? shown + ' of ' + current.total + ' shown' : current.total + ' entries') + ', ' + dirs + ' folders'
+      : '';
+    $('more').hidden = !current.more;
+  }
+
+  function failed(path, message) {
+    current = { path, entries: [], total: 0, more: false };
+    crumbs(path);
+    const list = $('list');
+    list.textContent = '';
+    list.appendChild(el('div', 'error', message));
+    $('count').textContent = '';
+    $('more').hidden = true;
+  }
+
+  // One folder, one page at a time; More reads the next page of the same folder.
+  async function load(path, next) {
+    const offset = next ? current.entries.length : 0;
+    try {
+      const listing = await api('/api/list?path=' + encodeURIComponent(path) + '&offset=' + offset);
+      if (next && listing.path === current.path) {
+        current.entries = current.entries.concat(listing.entries);
+        current.total = listing.total;
+        current.more = listing.more;
+      } else {
+        current = { path: listing.path, entries: listing.entries, total: listing.total, more: listing.more };
+      }
+      render();
+    } catch (e) {
+      failed(path, String(e.message || e));
+    }
+  }
+
+  async function status() {
+    const badge = $('state');
+    try {
+      const s = await api('/api/status');
+      $('version').textContent = 'core ' + s.version;
+      badge.textContent = s.state === 'error' ? 'error' : 'up';
+      badge.className = 'badge ' + (s.state === 'error' ? 'bad' : 'ok');
+      badge.title = s.error || '';
+    } catch (e) {
+      badge.textContent = 'unreachable';
+      badge.className = 'badge bad';
+    }
+  }
+
+  $('more').addEventListener('click', () => load(current.path, true));
+  window.addEventListener('hashchange', () => load(fromHash(), false));
+  load(fromHash(), false);
+  status();
+  setInterval(status, 5000);
+})();
+</script>
+</body>
+</html>

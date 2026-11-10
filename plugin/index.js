@@ -1,10 +1,12 @@
 'use strict';
-// MPDantic: the plugin shell. It owns the plugin's lifecycle, the settings page and the
-// core's service; the core (bin/mpdantic) does the work on the library and will serve
-// the management interface. Nothing heavy runs in this process.
+// MPDantic: the plugin shell. It owns the plugin's lifecycle, the settings page, the
+// core's service and the pages' announcement on the network; the core (bin/mpdantic)
+// does the work on the library and serves the management pages. Nothing heavy runs in
+// this process.
 
 const libQ = require('kew');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const VConf = require('v-conf');
@@ -14,6 +16,9 @@ const LOG = 'mpdantic: ';
 const SERVICE = 'mpdantic.service';
 const RUN_DIR = '/run/mpdantic';
 const STATUS_FILE = RUN_DIR + '/status.json';
+// The pages announced on the network, as Volumio announces its own page: a service
+// file Avahi watches for.
+const AVAHI_FILE = '/etc/avahi/services/mpdantic.service';
 
 const msg = (e) => (e && e.message ? e.message : String(e));
 
@@ -42,7 +47,9 @@ Mpdantic.prototype.onStart = function () {
     self.commandRouter.loadI18nStrings();
     // The core reads the settings at its start: the file is written first.
     try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
-    return self.startCore()
+    return self.announce()
+        .fail((e) => { self.logger.warn(LOG + 'announce: ' + msg(e)); })
+        .then(() => self.startCore())
         .fail((e) => {
             self.logger.error(LOG + 'start: ' + msg(e));
             self.toast('error', 'ERR_CORE', { error: msg(e) });
@@ -53,7 +60,9 @@ Mpdantic.prototype.onStart = function () {
 Mpdantic.prototype.onStop = function () {
     const self = this;
     self.active = false;
-    return self.stopCore()
+    return self.unannounce()
+        .fail((e) => { self.logger.warn(LOG + 'unannounce: ' + msg(e)); })
+        .then(() => self.stopCore())
         .fail((e) => { self.logger.warn(LOG + 'stop: ' + msg(e)); })
         .then(() => 'OK');
 };
@@ -108,18 +117,85 @@ Mpdantic.prototype.writeSettings = function () {
     fs.renameSync(part, self.settingsFile);
 };
 
+// ------------------------------------------------------------ the announcement
+
+// Written directly when the folder allows it (Volumio's own system plugin opens it
+// up), else through sudo tee, which the volumio user has.
+Mpdantic.prototype.announce = function () {
+    const self = this;
+    const text = h.avahiService(h.settingsFrom((k, d) => self.config.get(k, d)).port);
+    try {
+        fs.writeFileSync(AVAHI_FILE, text);
+        return libQ.resolve();
+    } catch (e) {
+        if (e.code !== 'EACCES' && e.code !== 'EPERM') return libQ.reject(e);
+    }
+    const defer = libQ.defer();
+    const child = execFile('/usr/bin/sudo', ['/usr/bin/tee', AVAHI_FILE], { timeout: 10000 }, (error, stdout, stderr) => {
+        if (error) defer.reject(new Error(String(stderr || error.message).trim()));
+        else defer.resolve();
+    });
+    child.stdin.on('error', () => { /* the exit says it */ });
+    child.stdin.end(text);
+    return defer.promise;
+};
+
+Mpdantic.prototype.unannounce = function () {
+    try {
+        fs.unlinkSync(AVAHI_FILE);
+        return libQ.resolve();
+    } catch (e) {
+        if (e.code === 'ENOENT') return libQ.resolve();
+        if (e.code !== 'EACCES' && e.code !== 'EPERM') return libQ.reject(e);
+    }
+    const defer = libQ.defer();
+    execFile('/usr/bin/sudo', ['/bin/rm', '-f', AVAHI_FILE], { timeout: 10000 }, (error, stdout, stderr) => {
+        if (error) defer.reject(new Error(String(stderr || error.message).trim()));
+        else defer.resolve();
+    });
+    return defer.promise;
+};
+
 // ------------------------------------------------------------- the settings
 
 Mpdantic.prototype.getUIConfig = function () {
     const self = this;
     const defer = libQ.defer();
     const lang = self.commandRouter.sharedVars.get('language_code');
+    const c = self.config;
     self.commandRouter.i18nJson(path.join(__dirname, 'i18n', 'strings_' + lang + '.json'),
         path.join(__dirname, 'i18n', 'strings_en.json'),
         path.join(__dirname, 'UIConfig.json'))
         .then((uiconf) => {
             const section = (id) => (uiconf.sections.find((s) => s.id === id) || { content: [] }).content;
-            setValue(section('management_section'), 'port', String(self.config.get('port', String(h.DEFAULT_PORT))));
+            const mgmt = section('management_section');
+            const port = h.settingsFrom((k, d) => c.get(k, d)).port;
+            setValue(mgmt, 'port', String(port));
+            // The address browsers reach the player by: the operator's when set, else the
+            // one found on the player's own interfaces (an IP address, so a network whose
+            // .local names do not resolve still gets there); the one found is the field's
+            // placeholder.
+            const found = h.lanAddress(os.networkInterfaces());
+            const override = String(c.get('address', '')).trim();
+            setValue(mgmt, 'address', override);
+            const addressField = mgmt.find((x) => x.id === 'address');
+            if (addressField && addressField.attributes && addressField.attributes[0]) addressField.attributes[0].placeholder = found || '';
+            // The buttons open the core's pages at that address, here inside Volumio's own
+            // page or in a tab of their own; without an address there are no buttons.
+            const here = mgmt.find((x) => x.id === 'open_here');
+            const tab = mgmt.find((x) => x.id === 'open_tab');
+            const address = override || found;
+            if (address) {
+                const links = h.pageLinks(address, port);
+                if (here) here.onClick.performerUrl = links.here;
+                if (tab) {
+                    tab.onClick.url = links.url;
+                    tab.doc = self.i18n('OPEN_TAB_DESC') + ' ' + links.url;
+                }
+            } else {
+                if (here) here.hidden = true;
+                if (tab) tab.hidden = true;
+            }
             defer.resolve(uiconf);
         })
         .fail((e) => {
@@ -129,7 +205,8 @@ Mpdantic.prototype.getUIConfig = function () {
     return defer.promise;
 };
 
-// The management section saved: the port checked, stored, and the core restarted on it.
+// The management section saved: the port and the address checked and stored, the
+// announcement rewritten, the core restarted on the port.
 Mpdantic.prototype.updateManagement = function (data) {
     const self = this;
     const port = h.validatePort(data && data.port);
@@ -137,10 +214,18 @@ Mpdantic.prototype.updateManagement = function (data) {
         self.toast('error', 'ERR_PORT', { value: String(data && data.port) });
         return libQ.resolve();
     }
+    const address = h.validateAddress(data && data.address);
+    if (!address.ok) {
+        self.toast('error', 'ERR_ADDRESS', { value: String(data && data.address) });
+        return libQ.resolve();
+    }
     self.config.set('port', String(port.value));
+    self.config.set('address', address.value);
     try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
     self.toast('success', 'SAVED');
-    return self.startCore()
+    return self.announce()
+        .fail((e) => { self.logger.warn(LOG + 'announce: ' + msg(e)); })
+        .then(() => self.startCore())
         .fail((e) => {
             self.logger.error(LOG + 'restart: ' + msg(e));
             self.toast('error', 'ERR_CORE', { error: msg(e) });

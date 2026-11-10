@@ -8,12 +8,14 @@ echo "Uninstalling MPDantic"
 PLUGIN_DIR=/data/plugins/system_controller/mpdantic
 UNIT=/etc/systemd/system/mpdantic.service
 SUDOERS=/etc/sudoers.d/volumio-user-mpdantic
+AVAHI=/etc/avahi/services/mpdantic.service
 
 systemctl stop mpdantic.service 2>/dev/null || true
 systemctl disable mpdantic.service 2>/dev/null || true
 rm -f "$UNIT"
 systemctl daemon-reload
 rm -f "$SUDOERS"
+rm -f "$AVAHI"
 rm -rf /run/mpdantic
 rm -f "$PLUGIN_DIR/bin/mpdantic"
 echo "The data under /data/INTERNAL/mpdantic stays"

@@ -2,11 +2,15 @@
 
 Pedantic about your library, so MPD does not choke on it.
 
-MPDantic is a Volumio 4 plugin that audits and repairs a music library for MPD, one folder at a time or the whole library from its root. It sizes MPD's output buffer to the player's memory, manages `.mpdignore` files with suggestions drawn from what is on the share, checks and repairs CUE sheets, rebases playlists written on other machines to the player's paths, and validates the tags the Albums view is built from. The heavy work runs in a Rust core; a thin Node shell carries the plugin's lifecycle and a settings page that says where the core's own pages are.
+MPDantic is a Volumio 4 plugin that audits and repairs a music library for MPD, one folder at a time or the whole library from its root. It sizes MPD's output buffer to the player's memory, manages `.mpdignore` files with suggestions drawn from what is on the share, checks and repairs CUE sheets, rebases playlists written on other machines to the player's paths, and validates the tags the Albums view is built from. The work is done from MPDantic's own pages, served by its core on the player; the heavy work runs in that Rust core, and a thin Node shell carries the plugin's lifecycle and a settings page that says where the pages are.
 
 ## Status
 
-In design. There is nothing to install yet: the repository carries the skeleton, a core that starts and waits, a shell that starts it, and the pipeline that builds, checks and signs a release. The first release will appear on the releases page and in the changelog.
+In design. There is nothing to install yet: the repository carries the core, which serves the pages and the library one folder at a time, the shell that starts it and announces the pages on the network, and the pipeline that builds, checks and signs a release. The first release will appear on the releases page and in the changelog.
+
+## The pages
+
+The core serves them on a port of the player (8030 unless set on the settings page), from its memory, for any browser on the network: `http://<player>:8030/`. The settings page opens them inside Volumio's own page or in a tab of their own, and shows the address; on the network they are announced as "MPDantic on <player>" for anything that lists Bonjour services. The first page is the library as MPD sees it, folder by folder from the roots (`NAS`, `USB`, `INTERNAL`), read on request one directory at a time; it never asks for the whole library.
 
 ## What it will do
 
@@ -26,12 +30,12 @@ Two parts in one zip, one copy of the core per Volumio architecture (`arm`, `arm
 
 | Part | What | Where it comes from |
 | --- | --- | --- |
-| The shell (`plugin/`) | The Volumio plugin as the store wants it: the settings page, the install, the core's service. | This repository. |
-| The core (`bins/mpdantic`) | One daemon in Rust, started by the shell as its own systemd unit. Static, linked against musl. | This repository, cross-built in CI. |
+| The shell (`plugin/`) | The Volumio plugin as the store wants it: the settings page, the install, the core's service, the pages' announcement on the network. | This repository. |
+| The core (`bins/mpdantic`) | One daemon in Rust, started by the shell as its own systemd unit: it serves the pages and the API, and does the work on the library. Static, linked against musl. | This repository, cross-built in CI. |
 
 Every release is built by GitHub Actions from a tag: the check, the cross builds, the zip with `MANIFEST` and its Ed25519 signature inside and `SHA256SUMS` with its signature beside, published as a pre-release and promoted by hand once tried. `build.json` in the zip names the commit.
 
-To work on it: `scripts/check.sh` is the workshop pass (format, lints, tests, docs, the shell scripts, the plugin's files and tests), `scripts/ship.sh` the cross builds, `scripts/package.sh` the zip. The Rust toolchain is pinned by `rust-toolchain.toml`; Node is needed only for the plugin's checks.
+To work on it: `scripts/check.sh` is the workshop pass (format, lints, tests, docs, the shell scripts, the plugin's files and tests, the pages' scripts), `scripts/ship.sh` the cross builds, `scripts/package.sh` the zip. The Rust toolchain is pinned by `rust-toolchain.toml`; Node is needed only for the plugin's checks. The core runs on a workstation too, for the pages against any folder: `mpdantic --run /tmp/mpdantic --music /path/to/music`.
 
 ## Licence
 

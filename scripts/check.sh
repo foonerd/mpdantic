@@ -109,6 +109,17 @@ echo "check: plugin"
 with_node --check plugin/index.js plugin/helpers.js
 with_node --test plugin/test/
 
+echo "check: pages"
+# The inline script of every page the core serves, parsed by Node: a page that does
+# not parse shows nothing, and no test of the core would say so.
+mkdir -p target/check
+for page in bins/*/assets/*.html; do
+  script="target/check/$(basename "$page").js"
+  awk '/<script>/{f=1;next}/<\/script>/{f=0}f' "$page" > "$script"
+  [ -s "$script" ] || { echo "check: $page has no script" >&2; exit 1; }
+  with_node --check "$script" || { echo "check: the script of $page does not parse" >&2; exit 1; }
+done
+
 echo "check: undefined names"
 # A name nothing defines parses and passes the tests, and throws when its line runs:
 # the plugin's scripts are linted for it, with one pinned ESLint fetched for the run.
