@@ -224,10 +224,69 @@ fn placeholders(template: &str) -> Vec<&str> {
     out
 }
 
+/// The plural rule of a language: which of a placeholder's forms a number takes.
+/// The page carries the same table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plural {
+    /// One form for exactly 1, the other otherwise: English and most of the bundle.
+    OneIsOne,
+    /// One form for 0 and 1: French.
+    OneIsZeroOrOne,
+    /// One, few, many: Polish and Russian.
+    Slavic,
+    /// One form: Japanese and Chinese.
+    Single,
+}
+
+impl Plural {
+    /// The rule of a language code as carried.
+    pub fn of(code: &str) -> Plural {
+        match code {
+            "fr" => Plural::OneIsZeroOrOne,
+            "pl" | "ru" => Plural::Slavic,
+            "ja" | "zh" => Plural::Single,
+            _ => Plural::OneIsOne,
+        }
+    }
+
+    /// The index of the form `n` takes, among `forms` of them (at least one).
+    pub fn index(self, n: f64, forms: usize) -> usize {
+        let last = forms.saturating_sub(1);
+        let whole = n.fract() == 0.0;
+        let i = match self {
+            Plural::OneIsOne => usize::from(n != 1.0),
+            Plural::OneIsZeroOrOne => usize::from(!(n == 0.0 || n == 1.0)),
+            Plural::Slavic => {
+                let m = n.abs() as u64;
+                if whole && n == 1.0 {
+                    0
+                } else if whole && (2..=4).contains(&(m % 10)) && !(12..=14).contains(&(m % 100)) {
+                    1
+                } else {
+                    2
+                }
+            }
+            Plural::Single => 0,
+        };
+        i.min(last)
+    }
+}
+
 /// A template rendered in English: `{name}` by the argument, `{name|one|other}` by
 /// the form the number in `name` takes (one for exactly 1); a placeholder with no
 /// argument stays as written, so that it is seen.
 pub fn fill(template: &str, args: &BTreeMap<String, Arg>) -> String {
+    fill_with(template, args, Plural::OneIsOne, &Arg::en)
+}
+
+/// A template rendered with a plural rule and a way of putting an argument into
+/// words, which is how a catalogue's template is rendered in its language.
+fn fill_with(
+    template: &str,
+    args: &BTreeMap<String, Arg>,
+    rule: Plural,
+    text_of: &dyn Fn(&Arg) -> String,
+) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -243,10 +302,9 @@ pub fn fill(template: &str, args: &BTreeMap<String, Arg>) -> String {
                 (Some(arg), Some(forms)) => {
                     let forms: Vec<&str> = forms.split('|').collect();
                     let n: f64 = arg.en().trim().parse().unwrap_or(f64::NAN);
-                    let index = if n == 1.0 { 0 } else { forms.len() - 1 };
-                    out.push_str(forms[index]);
+                    out.push_str(forms[rule.index(n, forms.len())]);
                 }
-                (Some(arg), None) => out.push_str(&arg.en()),
+                (Some(arg), None) => out.push_str(&text_of(arg)),
                 (None, _) => out.push_str(whole),
             },
             None => out.push_str(whole),
@@ -255,6 +313,58 @@ pub fn fill(template: &str, args: &BTreeMap<String, Arg>) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A language's catalogue held for rendering the core's sentences in it: what the
+/// page does with `tm()`, done in the core for the texts it writes out itself (the
+/// findings exported). A key the catalogue lacks renders as the English carried.
+pub struct Renderer {
+    texts: std::collections::HashMap<String, String>,
+    rule: Plural,
+    separator: String,
+}
+
+impl Renderer {
+    /// The renderer of a language code as Volumio or the address gives it; English
+    /// when the code is not one with a catalogue.
+    pub fn new(code: &str) -> Renderer {
+        let code = carried(code).unwrap_or("en");
+        let texts: std::collections::HashMap<String, String> = catalogue(code)
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default();
+        let separator = texts
+            .get("list.separator")
+            .cloned()
+            .unwrap_or_else(|| ", ".to_string());
+        Renderer {
+            texts,
+            rule: Plural::of(code),
+            separator,
+        }
+    }
+
+    /// A message in the language.
+    pub fn render(&self, m: &Msg) -> String {
+        if m.k == RAW {
+            return m.en.clone();
+        }
+        match self.texts.get(&m.k) {
+            Some(template) => fill_with(template, &m.a, self.rule, &|a| self.arg(a)),
+            None => m.en.clone(),
+        }
+    }
+
+    fn arg(&self, a: &Arg) -> String {
+        match a {
+            Arg::Text(t) => t.clone(),
+            Arg::Msg(m) => self.render(m),
+            Arg::List(items) => items
+                .iter()
+                .map(|i| self.arg(i))
+                .collect::<Vec<_>>()
+                .join(&self.separator),
+        }
+    }
 }
 
 /// A sentence of the core's for the page: its key in the catalogue, its arguments,
@@ -507,6 +617,71 @@ mod tests {
             placeholders("{n} {n|file|files} in {dir}, {Not}"),
             vec!["n", "dir"]
         );
+    }
+
+    #[test]
+    fn a_renderer_puts_a_message_into_a_language_with_its_plural_rule_and_separator() {
+        let files = |n: usize| {
+            msg!(
+                "core.tagcheck.no_disc",
+                "{dir}: {n} {n|file|files}, no disc number",
+                dir = "a/CD1",
+                n = n
+            )
+        };
+        let de = Renderer::new("de");
+        assert_eq!(de.render(&files(1)), "a/CD1: 1 Datei, keine Disc-Nummer");
+        assert_eq!(de.render(&files(2)), "a/CD1: 2 Dateien, keine Disc-Nummer");
+        // Volumio's code is carried; a code without a catalogue renders the English.
+        assert_eq!(
+            Renderer::new("de_DE").render(&files(1)),
+            "a/CD1: 1 Datei, keine Disc-Nummer"
+        );
+        assert_eq!(
+            Renderer::new("xx").render(&files(1)),
+            "a/CD1: 1 file, no disc number"
+        );
+        // The rules: French one for 0 and 1; Polish and Russian one, few, many;
+        // Japanese and Chinese the one form.
+        assert_eq!(Plural::OneIsZeroOrOne.index(0.0, 2), 0);
+        assert_eq!(Plural::OneIsZeroOrOne.index(2.0, 2), 1);
+        assert_eq!(Plural::Slavic.index(1.0, 3), 0);
+        assert_eq!(Plural::Slavic.index(3.0, 3), 1);
+        assert_eq!(Plural::Slavic.index(5.0, 3), 2);
+        assert_eq!(Plural::Slavic.index(12.0, 3), 2);
+        assert_eq!(Plural::Slavic.index(22.0, 3), 1);
+        assert_eq!(Plural::Slavic.index(1.5, 3), 2);
+        assert_eq!(Plural::Single.index(7.0, 1), 0);
+        assert_eq!(Plural::OneIsOne.index(1.0, 1), 0);
+        assert_eq!(Plural::of("fr"), Plural::OneIsZeroOrOne);
+        assert_eq!(Plural::of("zh"), Plural::Single);
+        let pl = Renderer::new("pl");
+        assert!(
+            pl.render(&files(5)).contains("5 plik\u{f3}w"),
+            "{}",
+            pl.render(&files(5))
+        );
+        assert!(
+            pl.render(&files(2)).contains("2 pliki"),
+            "{}",
+            pl.render(&files(2))
+        );
+        // A nested message and a list, joined with the language's separator; the
+        // words as they are stay as they are.
+        let missing = msg!(
+            "core.tagcheck.missing",
+            "{path}: no {fields}",
+            path = "x.flac",
+            fields = vec![
+                msg!("core.field.title", "title"),
+                msg!("core.field.artist", "artist")
+            ]
+        );
+        assert_eq!(de.render(&missing), "x.flac: kein Titel, Interpret");
+        let ja = Renderer::new("ja").render(&missing);
+        assert!(ja.starts_with("x.flac: "), "{ja}");
+        assert!(ja.contains('\u{3001}'), "{ja}");
+        assert_eq!(de.render(&Msg::raw("as it is")), "as it is");
     }
 
     #[test]

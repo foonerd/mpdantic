@@ -54,7 +54,7 @@ pub struct Suggestion {
     pub note: Msg,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct DecoderNote {
     /// `mpd` when the running MPD answered, `assumed` when it could not be asked.
     pub source: String,

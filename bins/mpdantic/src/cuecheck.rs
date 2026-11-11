@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::analyse::DecoderNote;
 use crate::classify;
 use crate::cue::{self, Finding, Track};
+use crate::findings::Sink;
 use crate::mpd::Decoders;
 use crate::text::Msg;
 use crate::walk::{self, InForceLines, Progress, Visit};
@@ -200,6 +201,8 @@ impl Beside {
 }
 
 /// The CUE check of `path` (MPD's form) under the music directory.
+/// The check of `path` and every folder under it; every finding to the sink as it
+/// is made.
 pub fn check(
     music: &Path,
     path: &str,
@@ -207,6 +210,36 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    run(music, path, decoders, source, progress, cancel, sink, true)
+}
+
+/// One folder alone, nothing under it entered: a folder checked again after a write.
+pub fn check_folder(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    let progress = Progress::default();
+    let cancel = AtomicBool::new(false);
+    run(
+        music, path, decoders, source, &progress, &cancel, sink, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    progress: &Progress,
+    cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+    descend: bool,
 ) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = classify::Rules::new();
@@ -229,15 +262,17 @@ pub fn check(
     };
     let walked = walk::walk(start, progress, cancel, |visit| {
         let mut enter = Vec::new();
-        for (index, entry) in visit.entries.iter().enumerate() {
-            if entry.is_dir {
-                let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
-                if class == classify::Class::Folder {
-                    enter.push(index);
+        if descend {
+            for (index, entry) in visit.entries.iter().enumerate() {
+                if entry.is_dir {
+                    let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
+                    if class == classify::Class::Folder {
+                        enter.push(index);
+                    }
                 }
             }
         }
-        directory(visit, decoders, &mut report);
+        directory(visit, decoders, &mut report, sink);
         enter
     });
     report.directories = walked.directories;
@@ -261,7 +296,7 @@ pub fn check(
 }
 
 /// The sheets of one directory, each against the names beside it.
-fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
+fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report, sink: &mut dyn Sink) {
     // The names beside the sheets: exact, by lowercase, by stem.
     let beside = Beside::new(
         visit
@@ -445,6 +480,9 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
             }
         }
         sheet.findings.sort_by_key(|f| (f.code, f.line));
+        for f in &sheet.findings {
+            sink.found(f.code, visit.path, &path, f.line, &f.text);
+        }
         report.sheets += 1;
         if sheet.findings.is_empty() {
             report.clean += 1;
@@ -556,6 +594,7 @@ mod tests {
     #[test]
     fn every_sheet_is_read_and_its_files_looked_for_beside_it() {
         let root = library("check");
+        let mut sink = crate::findings::Collector::default();
         let r = check(
             &root,
             "NAS",
@@ -563,9 +602,27 @@ mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut sink,
         )
         .unwrap();
         assert_eq!(r.sheets, 9);
+        // Every finding went to the sink, with the sheet's folder and path.
+        assert_eq!(sink.rows.len(), r.by_code.values().sum::<usize>());
+        let short = sink
+            .rows
+            .iter()
+            .find(|w| w.path == "NAS/Short/album.cue")
+            .unwrap();
+        assert_eq!(
+            (short.code.as_str(), short.folder.as_str()),
+            ("C14", "NAS/Short")
+        );
+        // One folder alone: its sheets' findings and nothing from under it.
+        let mut one = crate::findings::Collector::default();
+        check_folder(&root, "NAS/Short", &decoders(), note(), &mut one).unwrap();
+        assert!(!one.rows.is_empty());
+        assert!(one.rows.iter().all(|w| w.folder == "NAS/Short"));
+        assert_eq!(one.rows.iter().filter(|w| w.code == "C14").count(), 1);
         assert_eq!(r.clean, 1);
         assert_eq!(r.with_findings, 8);
         // NAS, Clean, Box, Box/1, Short, Twice; Skipped is kept out by the line in force.
@@ -627,6 +684,7 @@ mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut crate::findings::Collector::default(),
         );
         assert_eq!(r.unwrap_err(), "not a library path");
         fs::create_dir_all(root.join("USB")).unwrap();
@@ -637,6 +695,7 @@ mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut crate::findings::Collector::default(),
         )
         .unwrap();
         assert_eq!(r.sheets, 0);

@@ -56,9 +56,11 @@ pub fn no_such_folder() -> Msg {
     msg!("core.path.no_such_folder", "no such folder")
 }
 
-/// One directory as the visitor sees it.
+/// One directory as the visitor sees it: where it is on disk, its library path
+/// (empty at the root), its entries and the names kept out.
 pub struct Visit<'a> {
     pub dir: &'a Path,
+    pub path: &'a str,
     pub entries: &'a [Entry],
     pub excluded: &'a [Excluded],
 }
@@ -218,6 +220,7 @@ fn directory<F>(
     }
     let enter = visit(&Visit {
         dir,
+        path: rel,
         entries: &entries,
         excluded: &excluded,
     });

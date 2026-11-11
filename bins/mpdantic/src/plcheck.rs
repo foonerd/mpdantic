@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::analyse::DecoderNote;
 use crate::classify::{self, Class, Rules};
 use crate::cue::Finding;
+use crate::findings::Sink;
 use crate::mpd::Decoders;
 use crate::playlist::{self, Place};
 use crate::text::Msg;
@@ -90,6 +91,8 @@ pub fn code_text(code: &str) -> &'static str {
 }
 
 /// The playlist check of `path` (MPD's form) under the music directory.
+/// The check of `path` and every folder under it; every finding to the sink as it
+/// is made.
 pub fn check(
     music: &Path,
     path: &str,
@@ -97,6 +100,36 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    run(music, path, decoders, source, progress, cancel, sink, true)
+}
+
+/// One folder alone, nothing under it entered: a folder checked again after a write.
+pub fn check_folder(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    let progress = Progress::default();
+    let cancel = AtomicBool::new(false);
+    run(
+        music, path, decoders, source, &progress, &cancel, sink, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    progress: &Progress,
+    cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+    descend: bool,
 ) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = Rules::new();
@@ -120,15 +153,17 @@ pub fn check(
     };
     let walked = walk::walk(start, progress, cancel, |visit| {
         let mut enter = Vec::new();
-        for (index, entry) in visit.entries.iter().enumerate() {
-            if entry.is_dir {
-                let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
-                if class == Class::Folder {
-                    enter.push(index);
+        if descend {
+            for (index, entry) in visit.entries.iter().enumerate() {
+                if entry.is_dir {
+                    let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
+                    if class == Class::Folder {
+                        enter.push(index);
+                    }
                 }
             }
         }
-        directory(music, visit, decoders, &mut report);
+        directory(music, visit, decoders, &mut report, sink);
         enter
     });
     report.directories = walked.directories;
@@ -179,7 +214,13 @@ fn folder_of(path: &str) -> &str {
 }
 
 /// The playlists of one directory.
-fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Report) {
+fn directory(
+    music: &Path,
+    visit: &Visit,
+    decoders: &Decoders,
+    report: &mut Report,
+    sink: &mut dyn Sink,
+) {
     for entry in visit.entries.iter().filter(|e| !e.is_dir) {
         let name = entry.name.to_string_lossy();
         let Some(suffix) = classify::suffix(&name) else {
@@ -280,6 +321,9 @@ fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Repo
             });
         }
         findings.sort_by_key(|f| (f.line == 0, f.line, f.code));
+        for f in &findings {
+            sink.found(f.code, visit.path, &path, f.line, &f.text);
+        }
         report.playlists += 1;
         if findings.is_empty() {
             report.clean += 1;
@@ -358,6 +402,7 @@ pub mod tests {
     #[test]
     fn every_playlist_is_read_and_its_entries_placed() {
         let root = library("check");
+        let mut sink = crate::findings::Collector::default();
         let r = check(
             &root,
             "NAS",
@@ -365,9 +410,24 @@ pub mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut sink,
         )
         .unwrap();
         assert_eq!(r.playlists, 5);
+        // Every finding went to the sink, each in the folder of its playlist.
+        assert_eq!(sink.rows.len(), r.by_code.values().sum::<usize>());
+        assert!(sink
+            .rows
+            .iter()
+            .all(|w| w.path.rsplit_once('/').map(|(d, _)| d) == Some(w.folder.as_str())));
+        let folder = sink.rows[0].folder.clone();
+        let mut one = crate::findings::Collector::default();
+        check_folder(&root, &folder, &decoders(), note(), &mut one).unwrap();
+        assert!(one.rows.iter().all(|w| w.folder == folder));
+        assert_eq!(
+            one.rows.len(),
+            sink.rows.iter().filter(|w| w.folder == folder).count()
+        );
         assert_eq!(r.not_read, 1);
         assert_eq!(r.clean, 1);
         assert_eq!(r.with_findings, 4);

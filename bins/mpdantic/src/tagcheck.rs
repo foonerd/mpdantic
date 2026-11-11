@@ -1,7 +1,7 @@
 //! The tag check of one folder and everything under it, read-only: every audio file
 //! read for its tags, what MPD makes of them per file, and per folder whether the
-//! Albums view would show the folder as one album or several. Counts and a handful
-//! of examples; nothing per file kept for the whole walk.
+//! Albums view would show the folder as one album or several. The report keeps
+//! counts and a handful of examples; every finding goes to the sink as it is made.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::analyse::{Count, DecoderNote};
 use crate::classify::{self, Class, Rules};
+use crate::findings::Sink;
 use crate::mpd::Decoders;
 use crate::tags::{self, Seen};
 use crate::text::Msg;
@@ -103,7 +104,8 @@ const PLACEHOLDERS: &[&str] = &[
     "various artists",
 ];
 
-/// The tag check of `path` (MPD's form) under the music directory.
+/// The tag check of `path` (MPD's form) under the music directory, every folder
+/// under it entered; every finding to the sink as it is made.
 pub fn check(
     music: &Path,
     path: &str,
@@ -111,6 +113,36 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    run(music, path, decoders, source, progress, cancel, sink, true)
+}
+
+/// One folder alone, nothing under it entered: a folder checked again after a write.
+pub fn check_folder(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    sink: &mut dyn Sink,
+) -> Result<Report, Msg> {
+    let progress = Progress::default();
+    let cancel = AtomicBool::new(false);
+    run(
+        music, path, decoders, source, &progress, &cancel, sink, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(
+    music: &Path,
+    path: &str,
+    decoders: &Decoders,
+    source: DecoderNote,
+    progress: &Progress,
+    cancel: &AtomicBool,
+    sink: &mut dyn Sink,
+    descend: bool,
 ) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = Rules::new();
@@ -133,15 +165,17 @@ pub fn check(
     };
     let walked = walk::walk(start, progress, cancel, |visit| {
         let mut enter = Vec::new();
-        for (index, entry) in visit.entries.iter().enumerate() {
-            if entry.is_dir {
-                let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
-                if class == Class::Folder {
-                    enter.push(index);
+        if descend {
+            for (index, entry) in visit.entries.iter().enumerate() {
+                if entry.is_dir {
+                    let (class, _) = classify::classify(&rules, &entry.name, true, decoders);
+                    if class == Class::Folder {
+                        enter.push(index);
+                    }
                 }
             }
         }
-        directory(visit, &rules, decoders, &mut report, cancel);
+        directory(visit, &rules, decoders, &mut report, cancel, sink);
         enter
     });
     report.directories = walked.directories;
@@ -157,12 +191,21 @@ pub fn check(
     Ok(report)
 }
 
-fn add(report: &mut Report, code: &str, example: Msg) {
+/// A finding: to the sink whole, and to the report as a count with a few examples.
+fn found(
+    report: &mut Report,
+    sink: &mut dyn Sink,
+    folder: &str,
+    path: &str,
+    code: &str,
+    text: Msg,
+) {
+    sink.found(code, folder, path, 0, &text);
     report
         .findings
         .entry(code.to_string())
         .or_default()
-        .add_example(example, 0);
+        .add_example(text, 0);
 }
 
 /// The first value, trimmed.
@@ -184,7 +227,9 @@ fn directory(
     decoders: &Decoders,
     report: &mut Report,
     cancel: &AtomicBool,
+    sink: &mut dyn Sink,
 ) {
+    let folder = visit.path;
     let has_cue = visit.entries.iter().any(|e| {
         !e.is_dir && classify::suffix(&e.name.to_string_lossy()).as_deref() == Some("cue")
     });
@@ -220,8 +265,11 @@ fn directory(
         report.read += 1;
         *report.by_format.entry(raw.format.clone()).or_insert(0) += 1;
         if let Some(problem) = &raw.problem {
-            add(
+            found(
                 report,
+                sink,
+                folder,
+                &entry.path,
                 "T12",
                 msg!(
                     "core.tagcheck.not_read",
@@ -234,7 +282,7 @@ fn directory(
         }
         audio_files += 1;
         let seen = tags::view(&raw);
-        file_findings(report, &entry.path, &raw, &seen, has_cue);
+        file_findings(report, sink, folder, &entry.path, &raw, &seen, has_cue);
         let album = first(&seen.album).unwrap_or("(none)").to_string();
         let album_artist = first(&seen.album_artist)
             .or_else(|| first(&seen.artist))
@@ -254,38 +302,48 @@ fn directory(
     if audio_files == 0 {
         return;
     }
+    // The codes a folder raises once: the folder is their path.
     if looks_like_disc && with_disc == 0 {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            folder,
             "T05",
             msg!(
                 "core.tagcheck.no_disc",
                 "{dir}: {n} {n|file|files}, no disc number",
-                dir = dir_of(visit),
+                dir = folder,
                 n = without_disc
             ),
         );
     } else if with_disc > 0 && without_disc > 0 {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            folder,
             "T05",
             msg!(
                 "core.tagcheck.disc_mixed",
                 "{dir}: {with} {with|file|files} with a disc number, {without} without",
-                dir = dir_of(visit),
+                dir = folder,
                 with = with_disc,
                 without = without_disc
             ),
         );
     }
     if albums.len() > 1 || album_artists.len() > 1 {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            folder,
             "T06",
             msg!(
                 "core.tagcheck.split",
                 "{dir}: {albums} {albums|album|albums}, {artists} album {artists|artist|artists} in {files} {files|file|files}",
-                dir = dir_of(visit),
+                dir = folder,
                 albums = albums.len(),
                 artists = album_artists.len(),
                 files = audio_files
@@ -293,7 +351,7 @@ fn directory(
         );
         if report.splits.len() < SPLITS_LISTED {
             report.splits.push(Split {
-                dir: dir_of(visit),
+                dir: folder.to_string(),
                 files: audio_files,
                 albums: counted(albums),
                 album_artists: counted(album_artists),
@@ -305,16 +363,16 @@ fn directory(
     }
 }
 
-fn dir_of(visit: &Visit) -> String {
-    visit
-        .entries
-        .first()
-        .and_then(|e| e.path.rsplit_once('/').map(|(d, _)| d.to_string()))
-        .unwrap_or_default()
-}
-
 /// The findings of one file, from MPD's view of it.
-fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, has_cue: bool) {
+fn file_findings(
+    report: &mut Report,
+    sink: &mut dyn Sink,
+    folder: &str,
+    path: &str,
+    raw: &tags::Raw,
+    seen: &Seen,
+    has_cue: bool,
+) {
     let missing: Vec<Msg> = [
         ("title", first(&seen.title).is_none()),
         ("artist", first(&seen.artist).is_none()),
@@ -325,8 +383,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
     .map(|(n, _)| field_name(n))
     .collect();
     if !missing.is_empty() {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            path,
             "T01",
             msg!(
                 "core.tagcheck.missing",
@@ -341,8 +402,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
     });
     if seen.album_artist.is_empty() {
         if let Some(k) = ignored_album_artist {
-            add(
+            found(
                 report,
+                sink,
+                folder,
+                path,
                 "T02",
                 msg!(
                     "core.tagcheck.ignored_key",
@@ -359,8 +423,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
     match first(&seen.date) {
         None => {
             if let Some(k) = ignored_date {
-                add(
+                found(
                     report,
+                    sink,
+                    folder,
+                    path,
                     "T03",
                     msg!(
                         "core.tagcheck.ignored_key",
@@ -373,8 +440,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         }
         Some(d) => {
             if d.len() < 4 || !d[..4].chars().all(|c| c.is_ascii_digit()) {
-                add(
+                found(
                     report,
+                    sink,
+                    folder,
+                    path,
                     "T03",
                     msg!(
                         "core.tagcheck.date",
@@ -387,8 +457,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         }
     }
     match first(&seen.track) {
-        None => add(
+        None => found(
             report,
+            sink,
+            folder,
+            path,
             "T04",
             msg!(
                 "core.tagcheck.no_track",
@@ -399,8 +472,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         Some(t) => {
             let n = t.split('/').next().unwrap_or("").trim();
             if n.is_empty() || n.chars().any(|c| !c.is_ascii_digit()) {
-                add(
+                found(
                     report,
+                    sink,
+                    folder,
+                    path,
                     "T04",
                     msg!(
                         "core.tagcheck.track",
@@ -410,8 +486,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
                     ),
                 );
             } else if n.chars().all(|c| c == '0') {
-                add(
+                found(
                     report,
+                    sink,
+                    folder,
+                    path,
                     "T04",
                     msg!("core.tagcheck.track_zero", "{path}: track 0", path = path),
                 );
@@ -426,8 +505,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         .chain(&seen.album)
         .collect();
     if let Some(t) = texts.iter().find(|t| tags::looks_mangled(t)) {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            path,
             "T07",
             msg!(
                 "core.tagcheck.mangled",
@@ -438,7 +520,7 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         );
     }
     if seen.id3v1_only {
-        add(report, "T08", Msg::raw(path));
+        found(report, sink, folder, path, "T08", Msg::raw(path));
     }
     for (name, values) in [
         ("title", &seen.title),
@@ -452,8 +534,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         distinct.sort();
         distinct.dedup();
         if distinct.len() > 1 {
-            add(
+            found(
                 report,
+                sink,
+                folder,
+                path,
                 "T09",
                 msg!(
                     "core.tagcheck.twice",
@@ -479,8 +564,11 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         .chain(&seen.album)
         .find(|v| placeholder(v))
     {
-        add(
+        found(
             report,
+            sink,
+            folder,
+            path,
             "T10",
             msg!(
                 "core.tagcheck.placeholder",
@@ -491,7 +579,7 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         );
     }
     if seen.cuesheet && has_cue {
-        add(report, "T11", Msg::raw(path));
+        found(report, sink, folder, path, "T11", Msg::raw(path));
     }
     let _ = raw;
 }
@@ -638,6 +726,7 @@ mod tests {
     #[test]
     fn every_audio_file_is_read_and_the_folders_judged() {
         let root = library("check");
+        let mut sink = crate::findings::Collector::default();
         let r = check(
             &root,
             "NAS",
@@ -645,9 +734,28 @@ mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut sink,
         )
         .unwrap();
         assert_eq!(r.directories, 5);
+        // Every finding went to the sink: a file's in its folder, a folder's with the
+        // folder as its path.
+        assert_eq!(
+            sink.rows.len(),
+            r.findings.values().map(|c| c.count).sum::<usize>()
+        );
+        assert!(sink.rows.iter().all(|w| {
+            if PER_FOLDER.contains(&w.code.as_str()) {
+                w.path == w.folder
+            } else {
+                w.path.rsplit_once('/').map(|(d, _)| d) == Some(w.folder.as_str())
+            }
+        }));
+        // One folder alone, nothing under it: the compilation's own findings.
+        let mut one = crate::findings::Collector::default();
+        check_folder(&root, "NAS/Comp", &decoders(), note(), &mut one).unwrap();
+        assert!(one.rows.iter().all(|w| w.folder == "NAS/Comp"));
+        assert_eq!(one.rows.iter().filter(|w| w.code == "T02").count(), 2);
         // Two in Clean, three in Comp, two in CD1 as flac; the mp3; the wma.
         assert_eq!(r.read, 9, "{:?}", r.by_format);
         assert_eq!(r.by_format.get("flac"), Some(&7));
@@ -703,6 +811,7 @@ mod tests {
             note(),
             &Progress::default(),
             &AtomicBool::new(false),
+            &mut crate::findings::Collector::default(),
         )
         .unwrap();
         assert_eq!(r.read, 0);

@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::analyse::{self, DecoderNote};
 use crate::cuecheck;
+use crate::findings;
 use crate::jobs::Jobs;
 use crate::library::{self, Library, ListError};
 use crate::mount;
@@ -65,6 +66,8 @@ pub struct Shared {
     pub album: Mutex<Option<report::Album>>,
     pub mounter: mount::Mounter,
     pub journal: undo::Journal,
+    /// The findings of the last check of each kind, kept whole.
+    pub findings: findings::Store,
     /// The previews prepared and not yet applied, by id.
     pub previews: Mutex<std::collections::HashMap<u64, write::Preview>>,
     pub next_preview: std::sync::atomic::AtomicU64,
@@ -299,6 +302,15 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = start_job(shared, &r.body);
             (code, json, body)
         }
+        // The findings of the last check of each kind, kept whole.
+        (_, "/api/findings") if get => (200, json, json_of(&shared.findings.overviews())),
+        (_, path) if get && path.starts_with("/api/findings/") => {
+            findings_get(shared, &path["/api/findings/".len()..], &r.query)
+        }
+        ("POST", path) if path.starts_with("/api/findings/") => {
+            let (code, body) = findings_post(shared, &path["/api/findings/".len()..], &r.body);
+            (code, json, body)
+        }
         ("POST", "/api/batches") => {
             let (code, body) = prepare_batch(shared, &r.body);
             (code, json, body)
@@ -440,16 +452,70 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .video_in_use();
+    let store = shared.findings.clone();
     let started = shared.jobs.start(&kind, &path, move |progress, cancel| {
+        // The three checks write their findings whole into the store as they go;
+        // the report for the page is as before.
         if job_kind == "cue" {
-            cuecheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
+            let mut writer = store.begin("cue")?;
+            let r = cuecheck::check(
+                &music,
+                &job_path,
+                &decoders,
+                note,
+                progress,
+                cancel,
+                &mut writer,
+            )?;
+            writer.finish(findings::Summary {
+                path: r.path.clone(),
+                cancelled: r.cancelled,
+                directories: r.directories,
+                files: r.files,
+                counted: r.sheets,
+                codes: findings::codes_of(&r.codes),
+            })?;
+            serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string()))
         } else if job_kind == "playlists" {
-            plcheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
+            let mut writer = store.begin("playlists")?;
+            let r = plcheck::check(
+                &music,
+                &job_path,
+                &decoders,
+                note,
+                progress,
+                cancel,
+                &mut writer,
+            )?;
+            writer.finish(findings::Summary {
+                path: r.path.clone(),
+                cancelled: r.cancelled,
+                directories: r.directories,
+                files: r.files,
+                counted: r.playlists,
+                codes: findings::codes_of(&r.codes),
+            })?;
+            serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string()))
         } else if job_kind == "tags" {
-            tagcheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
+            let mut writer = store.begin("tags")?;
+            let r = tagcheck::check(
+                &music,
+                &job_path,
+                &decoders,
+                note,
+                progress,
+                cancel,
+                &mut writer,
+            )?;
+            writer.finish(findings::Summary {
+                path: r.path.clone(),
+                cancelled: r.cancelled,
+                directories: r.directories,
+                files: r.files,
+                counted: r.read,
+                codes: findings::codes_of(&r.codes),
+            })?;
+            serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string()))
         } else {
             analyse::analyse(
                 &music,
@@ -477,6 +543,216 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
 
 fn json_of<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()) + "\n"
+}
+
+/// `GET /api/findings/<kind>/folders?code=&dismissed=&offset=&limit=`, the folders
+/// with findings a page at a time; `/rows?folder=`, one folder's rows; or
+/// `/api/findings/<kind>.txt?lang=`, the list as text in the language.
+fn findings_get(shared: &Shared, rest: &str, query: &str) -> (u16, &'static str, String) {
+    let json = "application/json";
+    let q = pairs(query);
+    let value = |key: &str| q.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    let filter = findings::Filter {
+        codes: q
+            .iter()
+            .filter(|(k, v)| k == "code" && !v.is_empty())
+            .map(|(_, v)| v.clone())
+            .collect(),
+        dismissed: matches!(value("dismissed").as_deref(), Some("1") | Some("true")),
+    };
+    if let Some(kind) = rest.strip_suffix(".txt") {
+        if !findings::KINDS.contains(&kind) {
+            return (404, json, error(&findings::kind_unknown()));
+        }
+        let lang = text::language(&shared.settings, query);
+        return match shared.findings.export(kind, lang, &filter) {
+            Some(text) => (200, "text/plain; charset=utf-8", text),
+            None => (404, json, error(&findings::no_store())),
+        };
+    }
+    let Some((kind, what)) = rest.split_once('/') else {
+        return (404, json, error(&msg!("core.api.not_found", "not found")));
+    };
+    if !findings::KINDS.contains(&kind) {
+        return (404, json, error(&findings::kind_unknown()));
+    }
+    match what {
+        "folders" => {
+            let offset = value("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let limit = value("limit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(findings::FOLDERS_DEFAULT);
+            match shared.findings.folders(kind, &filter, offset, limit) {
+                Some(page) => (200, json, json_of(&page)),
+                None => (404, json, error(&findings::no_store())),
+            }
+        }
+        "rows" => {
+            let folder = value("folder").unwrap_or_default();
+            match shared.findings.rows(kind, &folder) {
+                Some(rows) => (200, json, json_of(&rows)),
+                None => (404, json, error(&findings::no_store())),
+            }
+        }
+        _ => (404, json, error(&msg!("core.api.not_found", "not found"))),
+    }
+}
+
+/// `POST /api/findings/<kind>/dismiss` with `{ "code", "path", "dismissed" }`: the
+/// owner's word on a finding, the folder's rows after; `/recheck` with
+/// `{ "folders": [...] }` or `{ "all": true }`: the folders checked again as a job.
+fn findings_post(shared: &Shared, rest: &str, body: &[u8]) -> (u16, String) {
+    let Some((kind, what)) = rest.split_once('/') else {
+        return (404, error(&msg!("core.api.not_found", "not found")));
+    };
+    if !findings::KINDS.contains(&kind) {
+        return (404, error(&findings::kind_unknown()));
+    }
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
+    };
+    match what {
+        "dismiss" => {
+            let code = request["code"].as_str().unwrap_or("");
+            let path = request["path"].as_str().unwrap_or("");
+            let on = request["dismissed"].as_bool().unwrap_or(true);
+            match shared.findings.dismiss(kind, code, path, on) {
+                Ok(rows) => (200, json_of(&rows)),
+                Err(e) if e.k == "core.findings.no_such_finding" => (404, error(&e)),
+                Err(e) => (500, error(&e)),
+            }
+        }
+        "recheck" => {
+            let folders: Vec<String> = if request["all"].as_bool().unwrap_or(false) {
+                shared.findings.open_folders(kind)
+            } else {
+                request["folders"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            if folders.is_empty() {
+                return (
+                    400,
+                    error(&msg!(
+                        "core.findings.nothing_to_recheck",
+                        "no folder to check again"
+                    )),
+                );
+            }
+            recheck_job(shared, kind, folders)
+        }
+        _ => (404, error(&msg!("core.api.not_found", "not found"))),
+    }
+}
+
+/// The folders checked again one by one as a job, the store patched as each is
+/// done; the result says how many were done and how many findings stay open.
+fn recheck_job(shared: &Shared, kind: &str, folders: Vec<String>) -> (u16, String) {
+    let music = shared.library.music().to_path_buf();
+    let (note, decoders) = shared.decoders();
+    let store = shared.findings.clone();
+    let kind = kind.to_string();
+    let started = shared
+        .jobs
+        .start(&format!("recheck-{kind}"), "", move |progress, cancel| {
+            let mut done = 0usize;
+            for folder in &folders {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let rows = recheck(&music, &kind, folder, &decoders, &note)?;
+                store.patch(&kind, folder, rows)?;
+                progress.directories.fetch_add(1, Ordering::Relaxed);
+                done += 1;
+            }
+            let open = store.overview(&kind).map(|o| o.open).unwrap_or(0);
+            Ok(serde_json::json!({ "kind": kind, "folders": done, "of": folders.len(), "open": open }))
+        });
+    match started {
+        Ok(id) => (202, serde_json::json!({ "id": id }).to_string() + "\n"),
+        Err(_) => (
+            409,
+            error(&msg!(
+                "core.api.busy",
+                "a job is running; wait for it or cancel it"
+            )),
+        ),
+    }
+}
+
+/// One folder checked again for a kind: its rows as they are now; none for a
+/// folder that is gone, since its findings went with it.
+fn recheck(
+    music: &std::path::Path,
+    kind: &str,
+    folder: &str,
+    decoders: &Decoders,
+    note: &DecoderNote,
+) -> Result<Vec<findings::Row>, Msg> {
+    let mut sink = findings::Collector::default();
+    let result = match kind {
+        "cue" => {
+            cuecheck::check_folder(music, folder, decoders, note.clone(), &mut sink).map(|_| ())
+        }
+        "playlists" => {
+            plcheck::check_folder(music, folder, decoders, note.clone(), &mut sink).map(|_| ())
+        }
+        _ => tagcheck::check_folder(music, folder, decoders, note.clone(), &mut sink).map(|_| ()),
+    };
+    match result {
+        Ok(()) => Ok(sink.rows),
+        Err(e) if e.k == "core.path.no_such_folder" => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The kind of store a batch's kind belongs to, if any.
+fn store_kind(batch_kind: &str) -> Option<&'static str> {
+    match batch_kind {
+        "tags" => Some("tags"),
+        "cue" => Some("cue"),
+        "playlist" => Some("playlists"),
+        _ => None,
+    }
+}
+
+/// After a write or an undo in a folder: the folder checked again for the kind and
+/// the store patched, when there is a store of the kind, with the decoders last
+/// read; the folder's rows after, for the page. A failure here is said on stderr
+/// and not to the page, since the write itself is done.
+fn refresh_folder(shared: &Shared, batch_kind: &str, folder: &str) -> Option<serde_json::Value> {
+    let kind = store_kind(batch_kind)?;
+    if !shared.findings.has(kind) {
+        return None;
+    }
+    let kept = shared
+        .decoders
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let (note, decoders) = kept.unwrap_or_else(|| shared.decoders());
+    let rows = match recheck(shared.library.music(), kind, folder, &decoders, &note) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("mpdantic: the {kind} findings of {folder} were not checked again: {e}");
+            return None;
+        }
+    };
+    match shared.findings.patch(kind, folder, rows) {
+        Ok(rows) => Some(serde_json::json!({ "kind": kind, "folder": folder, "rows": rows })),
+        Err(e) => {
+            eprintln!("mpdantic: the {kind} findings of {folder} were not patched: {e}");
+            None
+        }
+    }
 }
 
 /// `POST /api/batches` with `{ "kind": "mpdignore", "path": "NAS/Jazz", "lines": [...] }`:
@@ -577,7 +853,11 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(&preview.id);
-            (200, json_of(&applied))
+            let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
+            if let Some(findings) = refresh_folder(shared, &preview.kind, &preview.path) {
+                value["findings"] = findings;
+            }
+            (200, value.to_string() + "\n")
         }
         Err(e) if e.k.starts_with("core.write.changed_") => (409, error(&e)),
         Err(e) if e.k == "core.write.nothing_to_write" => (400, error(&e)),
@@ -588,6 +868,13 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
 /// `POST /api/undo/<id>`: the batch undone, MPD told.
 fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
     let shares = mount::shares(&shared.networkfs).unwrap_or_default();
+    // The batch's kind and folder, for the findings of the folder after the undo.
+    let batch = shared
+        .journal
+        .list()
+        .iter()
+        .find(|b| b.id == id)
+        .map(|b| (b.kind.clone(), b.path.clone()));
     match write::undo(
         shared.library.music(),
         &shares,
@@ -596,7 +883,15 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
         &shared.mpd,
         id,
     ) {
-        Ok(applied) => (200, json_of(&applied)),
+        Ok(applied) => {
+            let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
+            if let Some((kind, folder)) = batch {
+                if let Some(findings) = refresh_folder(shared, &kind, &folder) {
+                    value["findings"] = findings;
+                }
+            }
+            (200, value.to_string() + "\n")
+        }
         Err(e) if e.k == "core.undo.no_such_batch" => (404, error(&e)),
         Err(e)
             if e.k.starts_with("core.write.changed_")
@@ -892,6 +1187,7 @@ mod tests {
             album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
             journal: undo::Journal::new(&data.join("undo")),
+            findings: findings::Store::new(&data),
             previews: Mutex::new(std::collections::HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(0),
         });
@@ -972,6 +1268,162 @@ mod tests {
             "POST /api/undo/nothing HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
         );
         assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_findings_of_a_check_are_kept_listed_dismissed_exported_and_followed_through_a_write() {
+        let root = temp_library("serve-findings");
+        std::fs::write(root.join("USB/b.flac"), b"x").unwrap();
+        std::fs::write(
+            root.join("USB/a.cue"),
+            "FILE \"b.FLAC\" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let post = |path: &str, body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST {path} HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let get = |path: &str| talk(server.port, &format!("GET {path} HTTP/1.0\r\n\r\n"));
+        let parsed = |out: &str| -> serde_json::Value { serde_json::from_str(body(out)).unwrap() };
+        let wait = |id: u64| -> serde_json::Value {
+            for _ in 0..300 {
+                let job = parsed(&get(&format!("/api/jobs/{id}")));
+                if job["state"] != "running" {
+                    return job;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("the job did not end");
+        };
+        // Nothing before a check; a kind that is not kept is not found.
+        let all = parsed(&get("/api/findings"));
+        assert!(all["cue"].is_null() && all["tags"].is_null() && all["playlists"].is_null());
+        assert!(get("/api/findings/cue/folders").starts_with("HTTP/1.0 404"));
+        assert!(get("/api/findings/ignore/folders").starts_with("HTTP/1.0 404"));
+        // The check, and its findings kept whole.
+        let out = post("/api/jobs", "{\"kind\":\"cue\",\"path\":\"USB\"}");
+        assert!(out.starts_with("HTTP/1.0 202"), "{out}");
+        let job = wait(parsed(&out)["id"].as_u64().unwrap());
+        assert_eq!(job["state"], "done", "{job}");
+        let all = parsed(&get("/api/findings"));
+        let cue = &all["cue"];
+        assert_eq!(cue["kind"], "cue");
+        assert_eq!(cue["path"], "USB");
+        assert_eq!(cue["counted"], 1);
+        assert_eq!(cue["open_folders"], 1);
+        let open = cue["open"].as_u64().unwrap();
+        assert!(open >= 2, "{cue}");
+        assert_eq!(cue["dismissed"], 0);
+        assert!(cue["codes"]["C01"].as_str().unwrap().contains("FILE type"));
+        let page = parsed(&get("/api/findings/cue/folders"));
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["folders"][0]["folder"], "USB");
+        assert_eq!(page["folders"][0]["open"], open);
+        assert_eq!(page["folders"][0]["codes"]["C01"], 1);
+        let rows = parsed(&get("/api/findings/cue/rows?folder=USB"));
+        let c01 = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["code"] == "C01")
+            .unwrap();
+        assert_eq!(c01["path"], "USB/a.cue");
+        assert_eq!(c01["folder"], "USB");
+        assert_eq!(c01["dismissed"], false);
+        assert_eq!(c01["text"]["k"], "core.cue.file_type");
+        // A code filter, and a page past the end.
+        let page = parsed(&get("/api/findings/cue/folders?code=C99"));
+        assert_eq!(page["total"], 0);
+        let page = parsed(&get("/api/findings/cue/folders?offset=5"));
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["folders"].as_array().unwrap().len(), 0);
+        // The owner's word on one finding.
+        let out = post(
+            "/api/findings/cue/dismiss",
+            "{\"code\":\"C01\",\"path\":\"USB/a.cue\",\"dismissed\":true}",
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let rows = parsed(&out);
+        assert!(rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["code"] == "C01" && r["dismissed"] == true));
+        let cue = parsed(&get("/api/findings"))["cue"].clone();
+        assert_eq!(cue["dismissed"], 1);
+        assert_eq!(cue["open"], open - 1);
+        let out = post(
+            "/api/findings/cue/dismiss",
+            "{\"code\":\"C01\",\"path\":\"nowhere.cue\",\"dismissed\":true}",
+        );
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        // The list as text, in German, the dismissed row only when asked for.
+        let out = get("/api/findings/cue.txt?lang=de");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert!(out.contains("Content-Type: text/plain; charset=utf-8"));
+        let text = body(&out);
+        assert!(text.starts_with("# mpdantic "), "{text}");
+        assert!(text.contains("\tUSB/a.cue\t"), "{text}");
+        assert!(!text.contains("C01\t"), "{text}");
+        // The German of the sheet without an AUDIO track, rendered by the core.
+        assert!(
+            text.contains("C09\tUSB/a.cue\t0\tKein AUDIO-Titel"),
+            "{text}"
+        );
+        let text = get("/api/findings/cue.txt?lang=de&dismissed=1");
+        // The FILE line is line 1 of the sheet.
+        assert!(text.contains("C01\tUSB/a.cue\t1\t"), "{text}");
+        assert!(text.contains("\tdismissed\n"), "{text}");
+        // A repair written: the folder checked again and its rows in the answer.
+        let p = parsed(&post(
+            "/api/batches",
+            "{\"kind\":\"cue\",\"path\":\"USB/a.cue\"}",
+        ));
+        let id = p["id"].as_u64().unwrap();
+        let out = post(&format!("/api/batches/{id}/apply"), "");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let applied = parsed(&out);
+        assert_eq!(applied["findings"]["kind"], "cue");
+        assert_eq!(applied["findings"]["folder"], "USB");
+        let after = applied["findings"]["rows"].as_array().unwrap();
+        assert!(
+            after
+                .iter()
+                .all(|r| r["code"] != "C01" && r["code"] != "C02"),
+            "{after:?}"
+        );
+        let cue = parsed(&get("/api/findings"))["cue"].clone();
+        assert_eq!(cue["open"], after.len());
+        assert_eq!(cue["dismissed"], 0);
+        // The undo brings the sheet back as it was, and the finding with it, still
+        // dismissed: the owner's word was on the path.
+        let list = parsed(&get("/api/undo"));
+        let batch = list[0]["id"].as_str().unwrap().to_string();
+        let out = post(&format!("/api/undo/{batch}"), "");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let undone = parsed(&out);
+        let back = undone["findings"]["rows"].as_array().unwrap();
+        assert!(
+            back.iter()
+                .any(|r| r["code"] == "C01" && r["dismissed"] == true),
+            "{back:?}"
+        );
+        // Every listed folder checked again as a job.
+        assert!(post("/api/findings/cue/recheck", "{\"folders\":[]}").starts_with("HTTP/1.0 400"));
+        let out = post("/api/findings/cue/recheck", "{\"all\":true}");
+        assert!(out.starts_with("HTTP/1.0 202"), "{out}");
+        let job = wait(parsed(&out)["id"].as_u64().unwrap());
+        assert_eq!(job["state"], "done", "{job}");
+        assert_eq!(job["kind"], "recheck-cue");
+        assert_eq!(job["result"]["folders"], 1);
+        assert_eq!(job["result"]["open"], open - 1);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

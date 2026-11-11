@@ -30,6 +30,7 @@ mod classify;
 mod cue;
 mod cuecheck;
 mod cuefix;
+mod findings;
 mod ignore;
 mod jobs;
 mod library;
@@ -184,6 +185,7 @@ fn main() {
         album: Mutex::new(None),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
         journal: undo::Journal::new(&args.data.join("undo")),
+        findings: findings::Store::new(&args.data),
         previews: Mutex::new(std::collections::HashMap::new()),
         next_preview: std::sync::atomic::AtomicU64::new(0),
     });
