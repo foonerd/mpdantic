@@ -57,6 +57,7 @@ Mpdantic.prototype.onStart = function () {
     self.registerMpdHook();
     // The core reads the settings at its start: the file is written first.
     try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
+    try { self.writePlan(); } catch (e) { self.logger.error(LOG + 'plan: ' + msg(e)); }
     // At boot the MPD plugin writes mpd.conf itself, with the hook in it, and restarts
     // MPD; a check before that write has landed would restart MPD a second time, so
     // the check waits for the boot to complete. Enabled at runtime, it runs at once.
@@ -210,6 +211,16 @@ Mpdantic.prototype.mpdConfIsCurrent = function () {
     return h.mpdConfCurrent(current, this.getMpdConfig());
 };
 
+// The plan written beside the settings for the core's player report, whole and moved
+// into place; only the shell knows the backend's heap.
+Mpdantic.prototype.writePlan = function () {
+    const plan = this.bufferPlan();
+    const text = h.bufferPlanFile(plan, h.bufferSummary(plan, (k, v) => this.i18n(k, v)));
+    const file = path.join(path.dirname(this.settingsFile), 'buffer.json');
+    fs.writeFileSync(file + '.part', text);
+    fs.renameSync(file + '.part', file);
+};
+
 // Volumio's own writer, then its own restart, which also reconnects the backend's MPD
 // client. createMPDFile calls back before its asynchronous write lands; the backend's
 // own callers restart at once, and a short pause keeps the restart behind the write.
@@ -246,6 +257,7 @@ Mpdantic.prototype.whenBootCompleted = function () {
 Mpdantic.prototype.updateBuffer = function (data) {
     const self = this;
     self.config.set('buffer_auto', !!(data && data.buffer_auto === true));
+    try { self.writePlan(); } catch (e) { self.logger.error(LOG + 'plan: ' + msg(e)); }
     if (self.mpdConfIsCurrent()) {
         self.toast('success', 'SAVED_BUFFER', { line: h.bufferSummary(self.bufferPlan(), (k, v) => self.i18n(k, v)) });
         return libQ.resolve();

@@ -36,6 +36,7 @@ mod plcheck;
 mod plfix;
 mod plimport;
 mod prefs;
+mod report;
 mod serve;
 mod status;
 mod tagcheck;
@@ -171,6 +172,10 @@ fn main() {
         prefs: Mutex::new(prefs::Store::open(&args.data, &args.glass)),
         networkfs: args.networkfs.clone(),
         volumio_playlists: args.volumio_playlists.clone(),
+        // The shell's plan for the output buffer, written beside the settings.
+        buffer_plan: args.settings.with_file_name("buffer.json"),
+        measuring: std::sync::atomic::AtomicBool::new(false),
+        album: Mutex::new(None),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
         journal: undo::Journal::new(&args.data.join("undo")),
         previews: Mutex::new(std::collections::HashMap::new()),

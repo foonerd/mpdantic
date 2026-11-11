@@ -200,6 +200,23 @@ function mpdConfCurrent(conf, text) {
     return text === '' ? !current.includes(MPD_MARKER) : current.includes(text);
 }
 
+// The plan as the core reads it for the player report, written beside the settings:
+// the summary line, the figures, the rule's time constant for this architecture.
+function bufferPlanFile(plan, line, when) {
+    return JSON.stringify({
+        line: String(line || ''),
+        mib: plan.mib,
+        floor_mib: plan.floorMib,
+        raised: plan.raised,
+        reason: plan.reason,
+        limiting: plan.limiting,
+        bounds: plan.bounds,
+        inputs: plan.inputs,
+        quadratic: BUFFER.quadratic[plan.inputs.arch] || BUFFER.quadratic.arm,
+        when: Math.floor((when === undefined ? Date.now() : when) / 1000)
+    }, null, 2) + '\n';
+}
+
 // The plan as one line for the settings page and the status toast; t translates.
 function bufferSummary(plan, t) {
     const vars = {
@@ -215,5 +232,5 @@ function bufferSummary(plan, t) {
 
 module.exports = {
     DEFAULT_PORT, validatePort, validateAddress, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
-    BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary
+    BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary, bufferPlanFile
 };

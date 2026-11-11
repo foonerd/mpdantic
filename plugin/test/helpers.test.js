@@ -144,6 +144,22 @@ test('the hook appends the line under its marker only when the buffer is raised'
     assert.equal(h.mpdConfCurrent(template + text, ''), false);
 });
 
+test('the plan file carries the line, the figures and the time constant for the core', () => {
+    const mpd = [0, 24, 6];
+    const vm = h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005.3 * MIB, arch: 'x64', mpdVersion: mpd });
+    const file = JSON.parse(h.bufferPlanFile(vm, 'Set to 128 MiB', 1794342000000));
+    assert.equal(file.line, 'Set to 128 MiB');
+    assert.deepEqual([file.mib, file.floor_mib, file.raised, file.reason, file.limiting], [128, 80, true, 'raised', 'time']);
+    assert.deepEqual(file.bounds, { heap: 156, memory: 243, time: 128 });
+    assert.equal(file.inputs.heapLimitMib, 2005);
+    assert.equal(file.inputs.mpdVersion, '0.24.6');
+    assert.equal(file.quadratic, 0.0073);
+    assert.equal(file.when, 1794342000);
+    const pi = h.bufferPlan({ memTotal: 16003 * MIB, heapLimit: 1048 * MIB, arch: 'arm', mpdVersion: mpd });
+    assert.equal(JSON.parse(h.bufferPlanFile(pi, '')).quadratic, 0.016);
+    assert.ok(h.bufferPlanFile(vm, 'x').endsWith('\n'));
+});
+
 test('the buffer summary names the reason, the bound and the inputs', () => {
     const mpd = [0, 24, 6];
     const vm = h.bufferPlan({ memTotal: 3914 * MIB, heapLimit: 2005.3 * MIB, arch: 'x64', mpdVersion: mpd });

@@ -21,6 +21,7 @@ use crate::mount;
 use crate::mpd::{self, Address, Decoders};
 use crate::plcheck;
 use crate::prefs;
+use crate::report;
 use crate::status::Status;
 use crate::tagcheck;
 use crate::undo;
@@ -51,6 +52,11 @@ pub struct Shared {
     pub networkfs: std::path::PathBuf,
     /// Where Volumio keeps its own playlists.
     pub volumio_playlists: std::path::PathBuf,
+    /// The shell's plan for the output buffer (`buffer.json` beside the settings).
+    pub buffer_plan: std::path::PathBuf,
+    /// One measurement of the album query at a time, and the last one made.
+    pub measuring: std::sync::atomic::AtomicBool,
+    pub album: Mutex<Option<report::Album>>,
     pub mounter: mount::Mounter,
     pub journal: undo::Journal,
     /// The previews prepared and not yet applied, by id.
@@ -214,6 +220,18 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             .to_string()
                 + "\n";
             (200, json, body)
+        }
+        (_, "/api/report") if get => (200, json, report_json(shared)),
+        ("POST", "/api/report/measure") => {
+            if shared.measuring.swap(true, Ordering::SeqCst) {
+                (409, json, error("a measurement is running; wait for it"))
+            } else {
+                let quadratic = report::plan(&shared.buffer_plan).and_then(|p| p.quadratic);
+                let album = report::measure(&shared.mpd, quadratic);
+                *shared.album.lock().unwrap_or_else(|e| e.into_inner()) = Some(album);
+                shared.measuring.store(false, Ordering::SeqCst);
+                (200, json, report_json(shared))
+            }
         }
         ("POST", "/api/jobs") => {
             let (code, body) = start_job(shared, &r.body);
@@ -575,6 +593,24 @@ fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()) + "\n"
 }
 
+/// The player report as JSON, with the block rendered in it.
+fn report_json(shared: &Shared) -> String {
+    let (note, decoders) = shared.decoders();
+    let album = shared
+        .album
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let sources = report::Sources::system(&shared.buffer_plan, &shared.networkfs);
+    let r = report::gather(
+        &sources,
+        &shared.mpd,
+        (&note.source, decoders.suffixes.len()),
+        album,
+    );
+    serde_json::to_string(&r).unwrap_or_else(|e| error(&e.to_string())) + "\n"
+}
+
 fn error(message: &str) -> String {
     serde_json::json!({ "error": message }).to_string() + "\n"
 }
@@ -631,6 +667,9 @@ mod tests {
             prefs: Mutex::new(prefs::Store::open(&data, &glass)),
             networkfs: root.join(".no-networkfs.json"),
             volumio_playlists: data.join("volumio-playlists"),
+            buffer_plan: data.join("buffer.json"),
+            measuring: std::sync::atomic::AtomicBool::new(false),
+            album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
             journal: undo::Journal::new(&data.join("undo")),
             previews: Mutex::new(std::collections::HashMap::new()),
@@ -923,6 +962,48 @@ mod tests {
         );
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         assert!(!folder.join("mix").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_player_report_is_served_and_the_album_query_measured_once_at_a_time() {
+        let root = temp_library("serve-report");
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let out = talk(server.port, "GET /api/report HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(r["version"], crate::VERSION);
+        assert_eq!(r["protocol"], "0.24.6");
+        assert_eq!(r["stats"]["songs"], 123456);
+        assert!(r.get("album").is_none());
+        let text = r["text"].as_str().unwrap();
+        assert!(text.contains("library: 1,234 artists"), "{text}");
+        assert!(text.contains("album query: not measured"), "{text}");
+        let out = talk(
+            server.port,
+            "POST /api/report/measure HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(r["album"]["complete"], true);
+        assert!(r["album"]["bytes"].as_u64().unwrap() > 60);
+        assert!(
+            r["text"]
+                .as_str()
+                .unwrap()
+                .contains("album query: 0.0 MiB in"),
+            "{}",
+            r["text"]
+        );
+        // The measurement is kept for the next read of the report.
+        let out = talk(server.port, "GET /api/report HTTP/1.0\r\n\r\n");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(r["album"]["complete"], true);
+        let out = talk(server.port, "GET /api/report/measure HTTP/1.0\r\n\r\n");
+        assert!(
+            out.starts_with("HTTP/1.0 404") || out.starts_with("HTTP/1.0 405"),
+            "{out}"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

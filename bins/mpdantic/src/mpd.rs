@@ -105,6 +105,54 @@ impl Connection {
             }
         }
     }
+
+    /// One command, its reply read as fast as the socket gives it and counted, never
+    /// kept: how large a reply is and how long MPD takes to give it. Incomplete when
+    /// MPD closes the connection first, which it does past its output buffer.
+    pub fn measure(&mut self, command: &str) -> Result<Measured, String> {
+        self.socket
+            .get_mut()
+            .write_all(format!("{command}\n").as_bytes())
+            .map_err(|e| e.to_string())?;
+        let started = std::time::Instant::now();
+        let mut bytes = 0u64;
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let n = match self.socket.read_until(b'\n', &mut line) {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => 0,
+                Err(e) => return Err(e.to_string()),
+            };
+            let millis = started.elapsed().as_millis() as u64;
+            if n == 0 {
+                return Ok(Measured {
+                    bytes,
+                    millis,
+                    complete: false,
+                });
+            }
+            if line == b"OK\n" {
+                return Ok(Measured {
+                    bytes,
+                    millis,
+                    complete: true,
+                });
+            }
+            if line.starts_with(b"ACK ") {
+                return Err(String::from_utf8_lossy(&line[4..]).trim().to_string());
+            }
+            bytes += n as u64;
+        }
+    }
+}
+
+/// A reply measured: its size, the time to the last byte, whether it ended with OK.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Measured {
+    pub bytes: u64,
+    pub millis: u64,
+    pub complete: bool,
 }
 
 /// The decoders of an MPD: the protocol version its greeting names, its plugins with
@@ -211,6 +259,8 @@ pub mod tests {
                     let answer = match line.trim() {
                         "decoders" => "plugin: mad\nsuffix: mp3\nsuffix: mp2\nmime_type: audio/mpeg\nplugin: flac\nsuffix: flac\nplugin: ffmpeg\nsuffix: FLAC\nsuffix: mkv\nsuffix: txt\nOK\n".to_string(),
                         l if l.starts_with("update \"") && l.ends_with('"') => "updating_db: 7\nOK\n".to_string(),
+                        "stats" => "uptime: 100\nplaytime: 10\nartists: 1234\nalbums: 5678\nsongs: 123456\ndb_playtime: 3542400\ndb_update: 1794342000\nOK\n".to_string(),
+                        "search album \"\"" => "file: a.flac\nTitle: One\nAlbum: X\nfile: b.flac\nTitle: Two\nAlbum: X\nfile: c.flac\nTitle: Three\nAlbum: Y\nOK\n".to_string(),
                         other => format!("ACK [5@0] {{}} unknown command \"{other}\"\n"),
                     };
                     let _ = stream.write_all(answer.as_bytes());

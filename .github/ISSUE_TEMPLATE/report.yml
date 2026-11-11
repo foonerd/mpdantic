@@ -1,0 +1,28 @@
+name: Player report
+description: What MPDantic found or did on your player, with the report from its About page.
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. The block below comes from MPDantic's own pages: the About tab, "This player", Copy. It names no share, path or credential, only counts. "Measure the album query" before copying tells how large the album list is against MPD's output buffer; it asks MPD for every song once, which takes a few seconds on a large library.
+  - type: textarea
+    id: report
+    attributes:
+      label: The player report
+      description: Paste the block from the About page as it is.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did and what you saw
+      description: The tab, the folder, the button; what the page said; what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: library
+    attributes:
+      label: Where the library is
+      description: Internal storage, USB, a NAS share (cifs or nfs); its size if the report could not say.

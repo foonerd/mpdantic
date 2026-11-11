@@ -41,6 +41,8 @@
   .panel .body { padding: 12px 12px 14px; }
   .panel .body p { max-width: 68ch; }
   .panel .body p + p { margin-top: 8px; }
+  .report textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); resize: vertical; white-space: pre; overflow-x: auto; }
+  .report .actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .help { color: var(--muted); font-size: 13px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 1px 5px; border-radius: 4px; }
   .links { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 14px; }
@@ -81,6 +83,15 @@
     <div class="body">
       <p>Audits and repairs a Volumio player's music library for MPD, one folder at a time or the whole library from its root: what MPD's update meets under a folder and the <code>.mpdignore</code> lines that keep the junk out; CUE sheets read the way MPD reads them, with the repairs a sheet's text allows; the tags the Albums view is built from, read as written and judged by MPD's own rules. Every write is shown whole first, confirmed once, journaled, and undone from the same page; on a network share it goes through a read-write mount made for the write and released after.</p>
       <p class="links"><a href="https://github.com/foonerd/mpdantic" target="_blank" rel="noopener">Repository</a><a href="https://github.com/foonerd/mpdantic/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/foonerd/mpdantic/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a><a href="https://github.com/foonerd/mpdantic/issues" target="_blank" rel="noopener">Issues</a></p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head"><b>This player</b><span class="sub">for an issue</span></div>
+    <div class="body report">
+      <p class="help">What this player is and how its library sits against MPD's output buffer, as one block to paste into an issue. It names no share, path or credential, only counts. The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds.</p>
+      <textarea id="report" rows="9" readonly spellcheck="false">Reading...</textarea>
+      <div class="actions"><button class="small" id="copy">Copy</button><button class="small" id="measure">Measure the album query</button><span class="help" id="report-note"></span></div>
     </div>
   </section>
 
@@ -130,6 +141,32 @@
   }).catch(() => {
     $('state').textContent = 'unreachable';
     $('state').className = 'badge bad';
+  });
+  // The player report: the block the core renders, the album query measured on a
+  // click, the copy through the selection (the page is plain HTTP, where the clipboard
+  // API is not available; the selected text is left for a copy by hand when the
+  // command is refused).
+  const box = $('report');
+  const note = $('report-note');
+  const showReport = (r) => { box.value = r.text || ''; box.rows = Math.max(7, (r.text || '').split('\n').length + 1); };
+  const loadReport = () => fetch('/api/report', { cache: 'no-store' }).then((r) => r.json()).then(showReport).catch((e) => { box.value = 'The report could not be read: ' + (e.message || e); });
+  loadReport();
+  $('copy').addEventListener('click', () => {
+    box.focus();
+    box.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    note.textContent = done ? 'Copied.' : 'Selected; copy it with Ctrl+C or Cmd+C.';
+  });
+  $('measure').addEventListener('click', () => {
+    const button = $('measure');
+    button.disabled = true;
+    note.textContent = 'Asking MPD for every song...';
+    fetch('/api/report/measure', { method: 'POST' }).then((r) => r.json()).then((r) => {
+      if (r.error) { note.textContent = r.error; return; }
+      showReport(r);
+      note.textContent = r.album && r.album.error ? 'Not measured: ' + r.album.error : 'Measured.';
+    }).catch((e) => { note.textContent = 'Not measured: ' + (e.message || e); }).then(() => { button.disabled = false; });
   });
   // Close: only when this page is the window itself. Inside Volumio's own iframe page
   // its arrow back is the way out. The window closes where the browser allows (one the
