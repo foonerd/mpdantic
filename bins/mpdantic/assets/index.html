@@ -542,7 +542,7 @@
       });
       if (rows.length) table(box, rows);
       if (gone.length) {
-        const b = el('button', '', 'Take the ' + gone.length + (gone.length === 1 ? ' item' : ' items') + ' out of the queue');
+        const b = el('button', 'primary', 'Take the ' + gone.length + (gone.length === 1 ? ' item' : ' items') + ' out of the queue');
         b.addEventListener('click', async () => {
           b.disabled = true;
           gone.map((s) => s.index).sort((a, c) => c - a).forEach((index) => socket.emit('removeFromQueue', { value: index }));
