@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} of {total} {total|folder|folders} shown",
   "page.findings.nothing_listed": "Nothing listed: nothing open among the codes chosen.",
   "page.findings.open_folder": "Open the folder",
+  "page.findings.edit": "Edit the tags",
   "page.findings.dismiss": "Dismiss",
   "page.findings.restore": "Restore",
   "page.findings.dismissed": "dismissed",

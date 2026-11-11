@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{total} {total|フォルダー}中 {shown} 件を表示",
   "page.findings.nothing_listed": "表示するものがありません: 選んだコードに未解決の指摘はありません。",
   "page.findings.open_folder": "フォルダーを開く",
+  "page.findings.edit": "タグを編集",
   "page.findings.dismiss": "却下",
   "page.findings.restore": "戻す",
   "page.findings.dismissed": "却下済み",

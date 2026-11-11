@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "Pokazano {shown} z {total} {total|folderu|folderów|folderów}",
   "page.findings.nothing_listed": "Nic nie wymieniono: wśród wybranych kodów nie ma nic otwartego.",
   "page.findings.open_folder": "Otwórz folder",
+  "page.findings.edit": "Edytuj tagi",
   "page.findings.dismiss": "Odrzuć",
   "page.findings.restore": "Przywróć",
   "page.findings.dismissed": "odrzucona",

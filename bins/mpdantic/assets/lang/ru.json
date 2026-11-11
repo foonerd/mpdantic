@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "Показано {shown} из {total} {total|папки|папок|папок}",
   "page.findings.nothing_listed": "Ничего не перечислено: среди выбранных кодов нет открытых.",
   "page.findings.open_folder": "Открыть папку",
+  "page.findings.edit": "Изменить теги",
   "page.findings.dismiss": "Отклонить",
   "page.findings.restore": "Вернуть",
   "page.findings.dismissed": "отклонено",

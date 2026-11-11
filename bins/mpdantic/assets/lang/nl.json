@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} van {total} {total|map|mappen} getoond",
   "page.findings.nothing_listed": "Niets vermeld: niets open onder de gekozen codes.",
   "page.findings.open_folder": "De map openen",
+  "page.findings.edit": "Tags bewerken",
   "page.findings.dismiss": "Afwijzen",
   "page.findings.restore": "Terughalen",
   "page.findings.dismissed": "afgewezen",

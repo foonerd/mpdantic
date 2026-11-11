@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} von {total} {total|Ordner|Ordnern} angezeigt",
   "page.findings.nothing_listed": "Nichts aufgeführt: unter den gewählten Codes ist nichts offen.",
   "page.findings.open_folder": "Den Ordner öffnen",
+  "page.findings.edit": "Tags bearbeiten",
   "page.findings.dismiss": "Verwerfen",
   "page.findings.restore": "Zurückholen",
   "page.findings.dismissed": "verworfen",

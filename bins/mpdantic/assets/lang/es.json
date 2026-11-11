@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} de {total} {total|carpeta mostrada|carpetas mostradas}",
   "page.findings.nothing_listed": "Nada listado: nada abierto entre los códigos elegidos.",
   "page.findings.open_folder": "Abrir la carpeta",
+  "page.findings.edit": "Editar las etiquetas",
   "page.findings.dismiss": "Descartar",
   "page.findings.restore": "Recuperar",
   "page.findings.dismissed": "descartado",

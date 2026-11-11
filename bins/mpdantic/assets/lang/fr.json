@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} sur {total} {total|dossier affiché|dossiers affichés}",
   "page.findings.nothing_listed": "Rien à lister : rien d'ouvert parmi les codes choisis.",
   "page.findings.open_folder": "Ouvrir le dossier",
+  "page.findings.edit": "Modifier les tags",
   "page.findings.dismiss": "Écarter",
   "page.findings.restore": "Rétablir",
   "page.findings.dismissed": "écarté",

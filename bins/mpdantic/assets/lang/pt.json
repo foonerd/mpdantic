@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "{shown} de {total} {total|pasta mostrada|pastas mostradas}",
   "page.findings.nothing_listed": "Nada listado: nada aberto entre os códigos escolhidos.",
   "page.findings.open_folder": "Abrir a pasta",
+  "page.findings.edit": "Editar as etiquetas",
   "page.findings.dismiss": "Descartar",
   "page.findings.restore": "Repor",
   "page.findings.dismissed": "descartado",

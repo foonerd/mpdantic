@@ -306,6 +306,7 @@
   "page.findings.folders_shown": "显示 {shown} 个，共 {total} {total|个文件夹}",
   "page.findings.nothing_listed": "没有可列出的内容：所选代码中没有未处理的问题。",
   "page.findings.open_folder": "打开文件夹",
+  "page.findings.edit": "编辑标签",
   "page.findings.dismiss": "忽略",
   "page.findings.restore": "恢复",
   "page.findings.dismissed": "已忽略",
