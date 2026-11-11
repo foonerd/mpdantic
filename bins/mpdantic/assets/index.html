@@ -140,6 +140,28 @@
   .field textarea { display: block; width: 100%; box-sizing: border-box; min-width: 0; }
   .help.bad, .done.bad { color: var(--danger); }
   .done { margin-top: 10px; font-size: 14px; }
+  /* The findings view: a mode of the page. The header and the page's body step
+     aside, the bar below is the only sticky thing, and the list takes the width. */
+  body.working > .header, body.working > .container { display: none; }
+  .workbar { position: sticky; top: 0; z-index: 3; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .workbar b { font-size: 16px; }
+  .workbar .sub { color: var(--muted); font-size: 13px; }
+  .findings-line { margin-top: 8px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  button.chip { font-size: 13px; padding: 3px 10px; border-radius: 12px; }
+  button.chip.on { border-color: var(--accent); background: var(--hover); color: var(--accent); }
+  .fx-tools { align-items: center; margin-bottom: 10px; }
+  a.button { display: inline-block; font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 4px 10px; font-size: 13px; border-radius: 6px; text-decoration: none; }
+  a.button:hover { border-color: var(--accent); }
+  details.folder { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  details.folder:last-child { border-bottom: 0; }
+  details.folder summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  details.folder summary .path { overflow-wrap: anywhere; font-weight: 600; }
+  details.folder .inner { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
+  .frow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; margin: 4px 0; }
+  .frow.dismissed { opacity: .6; }
+  .frow .file { font-weight: 600; overflow-wrap: anywhere; }
+  .frow .text { flex: 1; min-width: 12em; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -206,6 +228,7 @@
     </div>
     <div class="body">
       <div class="progress" id="progress-cue" data-i18n="page.not_checked">Not checked yet.</div>
+      <div class="findings-line" id="findings-cue" hidden></div>
       <div id="report-cue"></div>
     </div>
   </div>
@@ -220,6 +243,7 @@
     </div>
     <div class="body">
       <div class="progress" id="progress-tags" data-i18n="page.not_checked">Not checked yet.</div>
+      <div class="findings-line" id="findings-tags" hidden></div>
       <div id="report-tags"></div>
       <div class="write">
         <b data-i18n="page.tags.repair_title">Repair tags in this folder</b>
@@ -247,6 +271,7 @@
     </div>
     <div class="body">
       <div class="progress" id="progress-playlists" data-i18n="page.not_checked">Not checked yet.</div>
+      <div class="findings-line" id="findings-playlists" hidden></div>
       <div id="report-playlists"></div>
     </div>
   </div>
@@ -303,6 +328,27 @@
     </div>
   </div>
 </div>
+<section id="findings" hidden>
+  <div class="workbar">
+    <b id="fx-title"></b>
+    <span class="sub" id="fx-count"></span>
+    <span class="grow"></span>
+    <button class="small" id="fx-next" data-i18n="page.findings.next">Next open</button>
+    <button class="small" id="fx-close" data-i18n="page.close">Close</button>
+  </div>
+  <div class="container">
+    <div class="help" id="fx-about"></div>
+    <div class="chips" id="fx-codes"></div>
+    <div class="actions fx-tools">
+      <label class="pref"><input type="checkbox" id="fx-dismissed"> <span data-i18n="page.findings.show_dismissed">Show dismissed</span></label>
+      <a class="button" id="fx-export" data-i18n="page.findings.export">Export as text</a>
+      <button class="small" id="fx-recheck" data-i18n="page.findings.recheck">Re-check the listed folders</button>
+      <span class="help" id="fx-progress"></span>
+    </div>
+    <div class="list" id="fx-folders"></div>
+    <div class="foot"><span id="fx-shown"></span><span class="grow"></span><button id="fx-more" hidden data-i18n="page.more">More</button></div>
+  </div>
+</section>
 <script>
 'use strict';
 (function () {
@@ -952,6 +998,7 @@
     const vars = { seconds: j.seconds, dirs: j.directories, files: j.files, path: theLibrary(j.path) };
     progress(p, j.state === 'cancelled' ? t('page.job.cancelled', vars) : t('page.job.done', vars));
     p.render(j.result);
+    loadOverviews();
   }
 
   async function cancel(p) {
@@ -1274,6 +1321,313 @@
     });
     linesInForce(box, r.in_force);
   }
+
+  // ------------------------------------------------------------ the findings view
+
+  // The work list of a kind's last check: a mode of the page rather than a dialog
+  // over it. The listing and the tabs step aside, the bar holds the count and one
+  // Close, and only Close or the browser's back leave it; a preview still open asks
+  // first. The position is kept per kind, so a Close costs nothing.
+  const FX_KINDS = { cue: 'page.tab.cue', tags: 'page.tab.tags', playlists: 'page.tab.playlists' };
+  const FX_PAGE = 50;
+  const fx = { kind: null, filter: { codes: [], dismissed: false }, offset: 0, total: 0, overview: null };
+
+  const fxKey = (kind) => 'mpdantic.findings.' + kind;
+  function fxSaved(kind) {
+    try { return JSON.parse(sessionStorage.getItem(fxKey(kind))) || {}; } catch (e) { return {}; }
+  }
+  function fxSave() {
+    if (!fx.kind) return;
+    const open = document.querySelector('#fx-folders details.folder[open]');
+    const state = { filter: fx.filter, scroll: window.scrollY, open: open ? open.dataset.folder : null };
+    try { sessionStorage.setItem(fxKey(fx.kind), JSON.stringify(state)); } catch (e) { /* no storage here */ }
+  }
+  const fxCard = (folder) => document.querySelector('#fx-folders details.folder[data-folder="' + CSS.escape(folder) + '"]');
+
+  // The line under a panel's head: the last check of the kind, if any, and the way in.
+  async function loadOverviews() {
+    let all = {};
+    try { all = await api('/api/findings'); } catch (e) { return; }
+    Object.keys(FX_KINDS).forEach((kind) => {
+      const line = $('findings-' + kind);
+      line.textContent = '';
+      const o = all[kind];
+      if (!o) { line.hidden = true; return; }
+      line.hidden = false;
+      const vars = { path: theLibrary(o.path), when: when(o.when), open: o.open, folders: o.open_folders };
+      line.appendChild(el('span', '', t(o.open ? 'page.findings.of_last_check' : 'page.findings.none_open', vars) + (o.cancelled ? ' ' + t('page.check_cancelled') : '')));
+      const b = el('button', 'small', t('page.findings.work_through'));
+      b.addEventListener('click', () => openFindings(kind));
+      line.appendChild(b);
+    });
+  }
+
+  function openFindings(kind) {
+    const saved = fxSaved(kind);
+    fx.kind = kind;
+    fx.filter = saved.filter && Array.isArray(saved.filter.codes) ? saved.filter : { codes: [], dismissed: false };
+    $('fx-title').textContent = t('page.findings.title', { kind: t(FX_KINDS[kind]) });
+    $('fx-dismissed').checked = fx.filter.dismissed;
+    $('fx-progress').textContent = '';
+    document.body.classList.add('working');
+    $('findings').hidden = false;
+    history.pushState({ findings: kind }, '');
+    fxRefresh().then(() => {
+      const card = saved.open ? fxCard(saved.open) : null;
+      if (card) card.open = true;
+      window.scrollTo(0, saved.scroll || 0);
+    });
+  }
+
+  // Close, or the browser's back (`popped`): a preview still open asks first, and a
+  // no puts the state back so the next back asks again.
+  function closeFindings(popped) {
+    if (!fx.kind) return;
+    if (document.querySelector('#findings .preview') && !window.confirm(t('page.findings.close_confirm'))) {
+      if (popped) history.pushState({ findings: fx.kind }, '');
+      return;
+    }
+    fxSave();
+    fx.kind = null;
+    $('findings').hidden = true;
+    $('fx-folders').textContent = '';
+    document.body.classList.remove('working');
+    if (!popped && history.state && history.state.findings) history.back();
+    loadOverviews();
+  }
+  window.addEventListener('popstate', () => { if (fx.kind) closeFindings(true); });
+  $('fx-close').addEventListener('click', () => closeFindings(false));
+
+  // The list read again from the start; the folder open stays open when it is
+  // still listed.
+  async function fxRefresh() {
+    const was = document.querySelector('#fx-folders details.folder[open]');
+    const open = was ? was.dataset.folder : null;
+    $('fx-folders').textContent = '';
+    fx.offset = 0;
+    await fxCounts();
+    fxExportLink();
+    await fxPage();
+    const card = open ? fxCard(open) : null;
+    if (card) card.open = true;
+  }
+
+  // The bar's count and the chips, from the kind's overview.
+  async function fxCounts() {
+    try {
+      const all = await api('/api/findings');
+      fx.overview = all[fx.kind] || null;
+    } catch (e) { fx.overview = null; }
+    const o = fx.overview;
+    $('fx-count').textContent = o ? t('page.findings.count', { open: o.open, folders: o.open_folders, dismissed: o.dismissed }) : '';
+    $('fx-about').textContent = t('page.findings.about') + (o && o.cancelled ? ' ' + t('page.check_cancelled') : '');
+    const box = $('fx-codes');
+    box.textContent = '';
+    if (!o) return;
+    Object.keys(o.codes).sort().forEach((code) => {
+      const n = (o.by_code_open[code] || 0) + (fx.filter.dismissed ? (o.by_code_dismissed[code] || 0) : 0);
+      if (!n) return;
+      const chip = el('button', 'chip' + (fx.filter.codes.includes(code) ? ' on' : ''), code + ' ' + n);
+      chip.title = codeText(code, o.codes[code]);
+      chip.addEventListener('click', () => {
+        const at = fx.filter.codes.indexOf(code);
+        if (at < 0) fx.filter.codes.push(code); else fx.filter.codes.splice(at, 1);
+        fxSave();
+        fxRefresh();
+      });
+      box.appendChild(chip);
+    });
+  }
+
+  const fxQuery = () => ['dismissed=' + (fx.filter.dismissed ? 1 : 0)].concat(fx.filter.codes.map((c) => 'code=' + encodeURIComponent(c))).join('&');
+
+  function fxExportLink() {
+    const a = $('fx-export');
+    a.href = '/api/findings/' + fx.kind + '.txt?lang=' + encodeURIComponent(LANG) + '&' + fxQuery();
+    a.download = 'mpdantic-' + fx.kind + '-findings.txt';
+  }
+
+  async function fxPage() {
+    const box = $('fx-folders');
+    try {
+      const page = await api('/api/findings/' + fx.kind + '/folders?offset=' + fx.offset + '&limit=' + FX_PAGE + '&' + fxQuery());
+      fx.total = page.total;
+      page.folders.forEach((f) => box.appendChild(folderCard(f)));
+      fx.offset += page.folders.length;
+      if (!fx.total) box.appendChild(el('div', 'empty', t('page.findings.nothing_listed')));
+    } catch (e) {
+      box.appendChild(el('div', 'error', String(e.message || e)));
+      fx.total = 0;
+    }
+    $('fx-more').hidden = fx.offset >= fx.total;
+    $('fx-shown').textContent = fx.total ? t('page.findings.folders_shown', { shown: fx.offset, total: fx.total }) : '';
+  }
+  $('fx-more').addEventListener('click', () => fxPage());
+
+  // A folder of the list: its count and codes in the summary, its rows and its
+  // repair inside, read when it is opened.
+  function folderCard(f) {
+    const d = el('details', 'folder');
+    d.dataset.folder = f.folder;
+    fxSummary(d, f.open, f.codes);
+    d.appendChild(el('div', 'inner'));
+    d.addEventListener('toggle', () => { if (d.open && !d.querySelector('.inner').childNodes.length) fxRows(d); });
+    return d;
+  }
+
+  function fxSummary(card, open, codes) {
+    let sum = card.querySelector('summary');
+    if (!sum) { sum = el('summary'); card.insertBefore(sum, card.firstChild); }
+    sum.textContent = '';
+    sum.appendChild(el('span', 'tag ' + (open ? 'bad' : 'ok'), open ? t('page.findings', { n: open }) : t('page.clean')));
+    sum.appendChild(el('span', 'path', theRoot(card.dataset.folder)));
+    sum.appendChild(el('span', 'help', Object.keys(codes).sort().map((c) => c + ' ' + codes[c]).join(separator())));
+  }
+
+  async function fxRows(card) {
+    const inner = card.querySelector('.inner');
+    inner.textContent = '';
+    inner.appendChild(el('div', 'help', t('page.reading')));
+    try {
+      const rows = await api('/api/findings/' + fx.kind + '/rows?folder=' + encodeURIComponent(card.dataset.folder));
+      fxRender(card, rows, false);
+    } catch (e) {
+      inner.textContent = '';
+      inner.appendChild(el('div', 'help bad', String(e.message || e)));
+    }
+  }
+
+  // The folder's rows as the core gave them, the summary following; after a change
+  // a folder with nothing open is clean and closes.
+  function fxRender(card, rows, changed) {
+    const folder = card.dataset.folder;
+    const inner = card.querySelector('.inner');
+    // The box under the actions holds a preview or an outcome; it is kept across a
+    // re-render, so what a write just said stays on show.
+    const kept = inner.querySelector(':scope > .actions + div');
+    inner.textContent = '';
+    const open = rows.filter((r) => !r.dismissed);
+    const codes = {};
+    open.forEach((r) => { codes[r.code] = (codes[r.code] || 0) + 1; });
+    fxSummary(card, open.length, codes);
+    rows.filter((r) => fx.filter.dismissed || !r.dismissed).forEach((r) => {
+      const row = el('div', 'frow' + (r.dismissed ? ' dismissed' : ''));
+      row.appendChild(el('code', '', r.code + (r.line ? ' ' + t('page.line', { n: r.line }) : '')));
+      if (r.path !== folder) row.appendChild(el('span', 'file', r.path.slice(folder ? folder.length + 1 : 0)));
+      // The sentence names its path first; the row has named it already.
+      const sentence = tm(r.text);
+      row.appendChild(el('span', 'text', sentence.startsWith(r.path + ': ') ? sentence.slice(r.path.length + 2) : sentence));
+      if (r.dismissed) row.appendChild(el('span', 'tag', t('page.findings.dismissed')));
+      const b = el('button', 'small', r.dismissed ? t('page.findings.restore') : t('page.findings.dismiss'));
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          const after = await api('/api/findings/' + fx.kind + '/dismiss', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ code: r.code, path: r.path, dismissed: !r.dismissed }) });
+          fxRender(card, after, true);
+          fxCounts();
+        } catch (e) {
+          b.disabled = false;
+          row.appendChild(el('span', 'help bad', String(e.message || e)));
+        }
+      });
+      row.appendChild(b);
+      inner.appendChild(row);
+    });
+    fxActions(card, rows, inner, kept);
+    if (changed && !open.length && !(kept && kept.childNodes.length)) card.open = false;
+  }
+
+  // The repairs: a tag repair takes the folder; a sheet's or a playlist's takes the
+  // file, one each; the preview card renders in place with its Write. The folder
+  // itself is one click away, by choice.
+  function fxActions(card, rows, inner, kept) {
+    const folder = card.dataset.folder;
+    const actions = el('div', 'actions');
+    const box = kept || el('div');
+    const name = (path) => path.slice(folder ? folder.length + 1 : 0);
+    if (fx.kind === 'tags') {
+      const fix = el('button', '', t('page.repair'));
+      fix.addEventListener('click', () => { fix.disabled = true; repairWith('tags', folder, box, fix); });
+      actions.appendChild(fix);
+    } else {
+      const codes = fx.kind === 'cue' ? REPAIRABLE : REPAIRABLE_LISTS;
+      Array.from(new Set(rows.filter((r) => !r.dismissed).map((r) => r.path))).forEach((path) => {
+        if (rows.some((r) => r.path === path && !r.dismissed && codes.includes(r.code))) {
+          const fix = el('button', '', t('page.repair') + ': ' + name(path));
+          fix.addEventListener('click', () => {
+            fix.disabled = true;
+            if (fx.kind === 'cue') repairWith('cue', path, box, fix); else repairWith('playlist', path, box, fix, { base: folder });
+          });
+          actions.appendChild(fix);
+        }
+        if (fx.kind === 'playlists') {
+          const imp = el('button', '', t('page.playlists.import') + ': ' + name(path));
+          imp.title = t('page.playlists.import_title');
+          imp.addEventListener('click', () => { imp.disabled = true; repairWith('volumio_playlist', path, box, imp); });
+          actions.appendChild(imp);
+        }
+      });
+    }
+    const open = el('button', 'small', t('page.findings.open_folder'));
+    open.addEventListener('click', () => leaveTo(folder));
+    actions.appendChild(open);
+    inner.appendChild(actions);
+    inner.appendChild(box);
+  }
+
+  // Leaving for a folder on the page: the view closed, the kind's tab shown, the
+  // folder loaded.
+  function leaveTo(folder) {
+    const kind = fx.kind;
+    closeFindings(false);
+    if (fx.kind) return;
+    showTab(kind);
+    location.hash = toHash(folder);
+  }
+
+  // After a write or an undo the core checked the folder again: its card follows.
+  function fxFolderUpdated(found) {
+    if (!fx.kind || found.kind !== fx.kind) return;
+    const card = fxCard(found.folder);
+    if (card) fxRender(card, found.rows, true);
+    fxCounts();
+  }
+
+  $('fx-dismissed').addEventListener('change', () => { fx.filter.dismissed = $('fx-dismissed').checked; fxSave(); fxRefresh(); });
+  $('fx-next').addEventListener('click', () => {
+    const next = Array.from(document.querySelectorAll('#fx-folders details.folder')).find((d) => d.querySelector('summary .tag.bad') && !d.open);
+    if (!next) return;
+    next.open = true;
+    next.scrollIntoView({ block: 'start' });
+  });
+
+  // The listed folders checked again as a job: every folder with an open finding,
+  // or the ones on show when codes are chosen; the list read again after.
+  $('fx-recheck').addEventListener('click', async () => {
+    const button = $('fx-recheck');
+    const note = $('fx-progress');
+    const body = fx.filter.codes.length
+      ? { folders: Array.from(document.querySelectorAll('#fx-folders details.folder')).map((d) => d.dataset.folder) }
+      : { all: true };
+    const of = body.all ? (fx.overview ? fx.overview.open_folders : 0) : body.folders.length;
+    button.disabled = true;
+    try {
+      const started = await api('/api/findings/' + fx.kind + '/recheck', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
+      for (;;) {
+        const j = await api('/api/jobs/' + started.id);
+        if (j.state !== 'running') {
+          note.textContent = j.state === 'failed' ? t('page.job.failed', { error: j.error }) : t('page.findings.recheck_done', { folders: j.result.folders, open: j.result.open });
+          break;
+        }
+        note.textContent = t('page.findings.recheck_progress', { done: j.directories, of });
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+      await fxRefresh();
+    } catch (e) {
+      note.textContent = String(e.message || e);
+    }
+    button.disabled = false;
+  });
 
   // ------------------------------------------------------------- the writes
 
@@ -1638,6 +1992,9 @@
       } else {
         box.appendChild(el('div', 'help', t('page.after.undo_tab')));
       }
+      // The core checked the folder again for the findings view, which follows
+      // with the outcome left in place to read.
+      if (a.findings) fxFolderUpdated(a.findings);
       if (closed) closed();
       loadUndo();
     } catch (e) {
@@ -1676,6 +2033,7 @@
     const note = $('undo-note');
     try {
       const a = await api('/api/undo/' + encodeURIComponent(id), { method: 'POST' });
+      if (a.findings) fxFolderUpdated(a.findings);
       note.textContent = '';
       note.appendChild(outcome(a, 'undone'));
       note.hidden = false;
@@ -1728,6 +2086,7 @@
   load(fromHash(), false);
   loadPrefs();
   loadUndo();
+  loadOverviews();
   resume();
   status();
   setInterval(status, 5000);
