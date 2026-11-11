@@ -99,7 +99,8 @@ for (const file of strings) {
   if (!order) { console.error(file + ': the keys are not in the English order'); process.exit(1); }
   const varsDiffer = en.filter(([k, v]) => vars(v) !== vars(other.find(([o]) => o === k)[1])).map(([k]) => k);
   if (varsDiffer.length) { console.error(file + ': the variables differ from English in ' + varsDiffer.join(', ')); process.exit(1); }
-  const empty = other.filter(([, v]) => String(v).trim() === '').map(([k]) => k);
+  // Empty only where the English is empty (a text filled in at runtime).
+  const empty = other.filter(([k, v]) => String(v).trim() === '' && String(en.find(([e]) => e === k)[1]).trim() !== '').map(([k]) => k);
   if (empty.length) { console.error(file + ': empty in ' + empty.join(', ')); process.exit(1); }
 }
 console.log((strings.length - 1) + ' translations carry the English keys');
