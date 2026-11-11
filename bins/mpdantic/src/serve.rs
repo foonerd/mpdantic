@@ -1502,18 +1502,15 @@ mod tests {
         let settings = root.join(".mpdantic-data").join("settings.json");
         std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
         std::fs::write(&settings, "{ \"port\": 6218, \"language\": \"zh_TW\" }\n").unwrap();
-        let expected = if text::catalogue("zh").is_some() {
-            "zh"
-        } else {
-            "en"
-        };
         let out = talk(server.port, "GET /api/status HTTP/1.0\r\n\r\n");
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
-        assert_eq!(value["language"], expected);
+        assert_eq!(value["language"], "zh");
         let out = talk(server.port, "GET /?tab=cue HTTP/1.0\r\n\r\n");
-        assert!(body(&out).contains(&format!("<html lang=\"{expected}\">")));
+        assert!(body(&out).contains("<html lang=\"zh\">"));
+        // The Chinese catalogue is in the slot: "up" in its three characters.
+        assert!(body(&out).contains("\"page.state.up\": \"\u{8fd0}\u{884c}\u{4e2d}\""));
         let out = talk(server.port, "GET /about HTTP/1.0\r\n\r\n");
-        assert!(body(&out).contains(&format!("<html lang=\"{expected}\">")));
+        assert!(body(&out).contains("<html lang=\"zh\">"));
         // The address decides before the settings.
         let out = talk(server.port, "GET /?lang=en&tab=cue HTTP/1.0\r\n\r\n");
         assert!(body(&out).contains("<html lang=\"en\">"));

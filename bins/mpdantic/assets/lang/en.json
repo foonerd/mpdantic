@@ -522,7 +522,6 @@
   "core.tags.not_read_here": "a format not read here",
   "core.tags.not_dsf": "not a DSF file",
   "core.tags.not_dff": "not a DSDIFF file",
-  "core.x.y": "English with {n} {n|file|files} in {dir}",
   "core.io.at": "{path}: {error}",
   "core.undo.no_such_batch": "no such batch",
   "core.undo.bad_name": "not a name the journal keeps",

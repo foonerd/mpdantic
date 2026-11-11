@@ -28,6 +28,16 @@ pub const LANGUAGES: [&str; 11] = [
 pub fn catalogue(code: &str) -> Option<&'static str> {
     match code {
         "en" => Some(include_str!("../assets/lang/en.json")),
+        "de" => Some(include_str!("../assets/lang/de.json")),
+        "es" => Some(include_str!("../assets/lang/es.json")),
+        "fr" => Some(include_str!("../assets/lang/fr.json")),
+        "it" => Some(include_str!("../assets/lang/it.json")),
+        "ja" => Some(include_str!("../assets/lang/ja.json")),
+        "nl" => Some(include_str!("../assets/lang/nl.json")),
+        "pl" => Some(include_str!("../assets/lang/pl.json")),
+        "pt" => Some(include_str!("../assets/lang/pt.json")),
+        "ru" => Some(include_str!("../assets/lang/ru.json")),
+        "zh" => Some(include_str!("../assets/lang/zh.json")),
         _ => None,
     }
 }
@@ -434,27 +444,31 @@ mod tests {
         assert_eq!(language(&settings, "tab=cue"), "en");
         fs::write(&settings, "{ \"port\": 6218, \"language\": \"zh_TW\" }\n").unwrap();
         assert_eq!(player_language(&settings), Some("zh"));
-        // The player's language serves when its catalogue is built in, else English.
-        let expected = if catalogue("zh").is_some() {
-            "zh"
-        } else {
-            "en"
-        };
-        assert_eq!(language(&settings, ""), expected);
-        assert_eq!(language(&settings, "lang=xx&tab=cue"), expected);
+        // The player's language serves; an unknown one in the address falls back to it.
+        assert_eq!(language(&settings, ""), "zh");
+        assert_eq!(language(&settings, "lang=xx&tab=cue"), "zh");
         // The address decides before the player's setting.
         assert_eq!(language(&settings, "tab=cue&lang=en"), "en");
+        assert_eq!(language(&settings, "lang=pl"), "pl");
         fs::write(&settings, "not json").unwrap();
         assert_eq!(language(&settings, ""), "en");
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn the_english_catalogue_is_built_in_and_parses_to_flat_texts() {
-        let value: serde_json::Value = serde_json::from_str(catalogue("en").unwrap()).unwrap();
-        let map = value.as_object().unwrap();
-        assert!(map.contains_key("page.state.up"));
-        assert!(map.values().all(|v| v.is_string()));
+    fn every_language_has_a_catalogue_built_in_with_the_english_keys() {
+        let english: serde_json::Value = serde_json::from_str(catalogue("en").unwrap()).unwrap();
+        let english = english.as_object().unwrap();
+        assert!(english.contains_key("page.state.up"));
+        for code in LANGUAGES {
+            let value: serde_json::Value =
+                serde_json::from_str(catalogue(code).unwrap_or_else(|| panic!("{code}"))).unwrap();
+            let map = value.as_object().unwrap();
+            assert!(map.values().all(|v| v.is_string()), "{code}");
+            let keys: Vec<&String> = map.keys().collect();
+            let wanted: Vec<&String> = english.keys().collect();
+            assert_eq!(keys, wanted, "{code}");
+        }
         assert_eq!(catalogue("xx"), None);
     }
 

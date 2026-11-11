@@ -76,7 +76,8 @@ for (const key of keys) {
 // placeholders, and no core key without a msg!.
 const core = {};
 for (const f of fs.readdirSync(SRC).filter((x) => x.endsWith('.rs'))) {
-  const text = read(SRC + f);
+  // The comments out, so an example in a doc comment is not a sentence.
+  const text = read(SRC + f).split('\n').map((l) => (/^\s*\/\//.test(l) ? '' : l)).join('\n');
   const re = /msg!\(\s*"([a-z0-9_.]+)"\s*,\s*"((?:[^"\\]|\\.)*)"/g;
   let m;
   while ((m = re.exec(text))) {

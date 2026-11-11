@@ -4,7 +4,9 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Every surface in eleven languages: English, German, Spanish, French, Italian, Japanese, Dutch, Polish, Portuguese, Russian and Chinese. The settings page follows Volumio's language, as every plugin's does. The management pages follow the player's language too: the shell tells the core the language Volumio is set to, at start and whenever it changes, and the core serves the pages with that language's texts built in; `?lang=de` in the address opens them in a language of its own, and a language the pages do not have falls back to English. Every sentence the core writes (a finding, a repair, a note on the Written tab, an error) is a key with its arguments, rendered on the page in the language in hand with that language's plural forms. The player report on the System tab stays in English on purpose, for the maintainers who read it in issues; MPD's own terms stay as MPD writes them.
 
 ## [0.1.1] - 2026-11-11
 
