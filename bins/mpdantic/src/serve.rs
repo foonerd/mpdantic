@@ -25,11 +25,12 @@ use crate::report;
 use crate::status::Status;
 use crate::tagcheck;
 use crate::tagfix;
+use crate::text;
 use crate::undo;
 use crate::vlists;
 use crate::write;
 
-/// The page, whole.
+/// The page, whole; served with the catalogue of the language in its slot.
 const PAGE: &str = include_str!("../assets/index.html");
 /// The About page: what MPDantic is, where it comes from, what it is built of.
 const ABOUT: &str = include_str!("../assets/about.html");
@@ -56,6 +57,8 @@ pub struct Shared {
     pub volumio_playlists: std::path::PathBuf,
     /// The shell's plan for the output buffer (`buffer.json` beside the settings).
     pub buffer_plan: std::path::PathBuf,
+    /// The settings the shell writes, read at each page for the player's language.
+    pub settings: std::path::PathBuf,
     /// One measurement of the album query at a time, and the last one made.
     pub measuring: std::sync::atomic::AtomicBool,
     pub album: Mutex<Option<report::Album>>,
@@ -75,11 +78,12 @@ impl Shared {
                 DecoderNote {
                     source: "mpd".to_string(),
                     count: d.suffixes.len(),
-                    detail: format!(
-                        "MPD protocol {}, {} plugins, {} suffixes only ffmpeg claims",
-                        d.protocol,
-                        d.plugins.len(),
-                        d.ffmpeg_only.len()
+                    detail: msg!(
+                        "core.decoders.from_mpd",
+                        "MPD protocol {protocol}, {plugins} plugins, {ffmpeg_only} suffixes only ffmpeg claims",
+                        protocol = d.protocol.clone(),
+                        plugins = d.plugins.len(),
+                        ffmpeg_only = d.ffmpeg_only.len()
                     ),
                 },
                 d,
@@ -90,7 +94,7 @@ impl Shared {
                     DecoderNote {
                         source: "assumed".to_string(),
                         count: d.suffixes.len(),
-                        detail: format!("MPD could not be asked: {e}"),
+                        detail: msg!("core.decoders.not_asked", "MPD could not be asked: {error}", error = e),
                     },
                     d,
                 )
@@ -197,16 +201,33 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         .path
         .strip_prefix("/api/jobs/")
         .and_then(|s| s.parse::<u64>().ok());
+    let html = "text/html; charset=utf-8";
     match (r.method.as_str(), r.path.as_str()) {
-        (_, "/") | (_, "/index.html") if get => (200, "text/html; charset=utf-8", PAGE.to_string()),
-        (_, "/about") if get => (200, "text/html; charset=utf-8", ABOUT.to_string()),
+        // The pages in the player's language, or the one the address asks for.
+        (_, "/") | (_, "/index.html") if get => {
+            let code = text::language(&shared.settings, &r.query);
+            (200, html, text::page_for(PAGE, code))
+        }
+        (_, "/about") if get => {
+            let code = text::language(&shared.settings, &r.query);
+            (200, html, text::page_for(ABOUT, code))
+        }
+        // A catalogue on its own, for a reader of the texts.
+        (_, path) if get && path.starts_with("/lang/") && path.ends_with(".json") => {
+            let code = &path["/lang/".len()..path.len() - ".json".len()];
+            match text::catalogue(code) {
+                Some(catalogue) => (200, json, catalogue.to_string()),
+                None => (404, json, error("no such language")),
+            }
+        }
         (_, "/api/status") if get => {
-            let body = shared
+            let mut value = shared
                 .status
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .json();
-            (200, json, body)
+                .value();
+            value["language"] = text::language(&shared.settings, "").into();
+            (200, json, value.to_string() + "\n")
         }
         (_, "/api/list") if get => {
             let (code, body) = list(&shared.library, &r.query);
@@ -804,6 +825,7 @@ mod tests {
             networkfs: root.join(".no-networkfs.json"),
             volumio_playlists: data.join("volumio-playlists"),
             buffer_plan: data.join("buffer.json"),
+            settings: data.join("settings.json"),
             measuring: std::sync::atomic::AtomicBool::new(false),
             album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
@@ -1369,10 +1391,17 @@ mod tests {
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         assert!(out.contains("Content-Type: text/html; charset=utf-8"));
         assert!(body(&out).contains("<title>MPDantic</title>"));
+        // In English with its catalogue in the slot, no settings file being there.
+        assert!(body(&out).contains("<html lang=\"en\">"));
+        assert!(body(&out).contains("<script id=\"lang\" type=\"application/json\">{\n"));
+        assert!(body(&out).contains("\"page.state.up\""));
         let out = talk(server.port, "HEAD / HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
         assert_eq!(body(&out), "");
-        assert!(out.contains(&format!("Content-Length: {}", PAGE.len())));
+        assert!(out.contains(&format!(
+            "Content-Length: {}",
+            text::page_for(PAGE, "en").len()
+        )));
         // The About page beside it, with its codes; a POST to it is not allowed.
         let out = talk(server.port, "GET /about HTTP/1.0\r\n\r\n");
         assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
@@ -1397,6 +1426,44 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(value["state"], "idle");
         assert_eq!(value["version"], crate::VERSION);
+        assert_eq!(value["language"], "en");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_pages_follow_the_players_language_and_the_catalogues_are_served_on_their_own() {
+        let root = temp_library("serve-language");
+        let server = make_server(root.clone(), no_mpd());
+        // The shell's settings say the player's language, in Volumio's code.
+        let settings = root.join(".mpdantic-data").join("settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, "{ \"port\": 6218, \"language\": \"zh_TW\" }\n").unwrap();
+        let expected = if text::catalogue("zh").is_some() {
+            "zh"
+        } else {
+            "en"
+        };
+        let out = talk(server.port, "GET /api/status HTTP/1.0\r\n\r\n");
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["language"], expected);
+        let out = talk(server.port, "GET /?tab=cue HTTP/1.0\r\n\r\n");
+        assert!(body(&out).contains(&format!("<html lang=\"{expected}\">")));
+        let out = talk(server.port, "GET /about HTTP/1.0\r\n\r\n");
+        assert!(body(&out).contains(&format!("<html lang=\"{expected}\">")));
+        // The address decides before the settings.
+        let out = talk(server.port, "GET /?lang=en&tab=cue HTTP/1.0\r\n\r\n");
+        assert!(body(&out).contains("<html lang=\"en\">"));
+        assert!(body(&out).contains("\"page.state.up\": \"up\""));
+        // A catalogue on its own is the file as built in; an unknown one is not found.
+        let out = talk(server.port, "GET /lang/en.json HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200 OK"), "{out}");
+        assert!(out.contains("Content-Type: application/json"));
+        let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(value["page.state.up"], "up");
+        let out = talk(server.port, "GET /lang/xx.json HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        let out = talk(server.port, "GET /lang/en.txt HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1473,7 +1540,10 @@ mod tests {
         assert_eq!(value["suffixes"][0], "flac");
         assert_eq!(value["ffmpeg_only"][0], "mkv");
         assert_eq!(value["plugins"][0]["name"], "mad");
-        assert!(value["detail"]
+        // The note is a message: its key and arguments for the page, the English beside.
+        assert_eq!(value["detail"]["k"], "core.decoders.from_mpd");
+        assert_eq!(value["detail"]["a"]["protocol"], "0.24.6");
+        assert!(value["detail"]["en"]
             .as_str()
             .unwrap()
             .starts_with("MPD protocol 0.24.6"));
@@ -1481,7 +1551,8 @@ mod tests {
         let out = talk(server.port, "GET /api/decoders HTTP/1.0\r\n\r\n");
         let value: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(value["source"], "assumed");
-        assert!(value["detail"]
+        assert_eq!(value["detail"]["k"], "core.decoders.not_asked");
+        assert!(value["detail"]["en"]
             .as_str()
             .unwrap()
             .contains("could not be asked"));

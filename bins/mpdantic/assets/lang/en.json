@@ -1,0 +1,9 @@
+{
+  "page.core": "core {version}",
+  "page.state.up": "up",
+  "page.state.error": "error",
+  "page.state.unreachable": "unreachable",
+  "about.version": "core {version} - About",
+  "core.decoders.from_mpd": "MPD protocol {protocol}, {plugins} plugins, {ffmpeg_only} suffixes only ffmpeg claims",
+  "core.decoders.not_asked": "MPD could not be asked: {error}"
+}

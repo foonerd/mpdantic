@@ -44,8 +44,9 @@ fi
 echo "check: plugin files"
 # Volumio's core reads every plugin's strings at its start: one bad file takes the
 # whole backend down, so every JSON the plugin ships must parse. A key written twice in
-# one object parses, and the later one silently wins: that is refused too.
-with_node - plugin/package.json plugin/config.json plugin/UIConfig.json plugin/i18n/*.json <<'JS'
+# one object parses, and the later one silently wins: that is refused too. The pages'
+# catalogues, built into the core, go through the same.
+with_node - plugin/package.json plugin/config.json plugin/UIConfig.json plugin/i18n/*.json bins/mpdantic/assets/lang/*.json <<'JS'
 const fs = require('fs');
 function keysWrittenTwice(text) {
   const twice = new Set();
@@ -81,29 +82,37 @@ for (const file of files) {
 }
 console.log(files.length + ' plugin files parse');
 // Every language carries exactly the English keys, in the English order, with the
-// same {{variables}}: a string added in English alone would show as its key on a
-// player in another language, and a variable renamed in one would show as text.
-const strings = files.filter((f) => /\/i18n\/strings_[a-z_]+\.json$/.test(f));
-const english = strings.find((f) => f.endsWith('strings_en.json'));
-if (!english) { console.error('plugin/i18n/strings_en.json is missing'); process.exit(1); }
+// same variables ({{name}} on the settings page, {name} in the pages' catalogues): a
+// string added in English alone would show as its key on a player in another
+// language, and a variable renamed in one would show as text. The settings page's
+// strings and the pages' catalogues are two sets, each held to its own English.
+const sets = [
+  { name: 'plugin/i18n', english: 'strings_en.json', is: (f) => /\/i18n\/strings_[a-z_A-Z]+\.json$/.test(f) },
+  { name: 'assets/lang', english: 'en.json', is: (f) => /\/assets\/lang\/[a-z_A-Z]+\.json$/.test(f) }
+];
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, p + k + '.') : [[p + k, v]]));
-const en = flat(JSON.parse(fs.readFileSync(english, 'utf8')));
-const vars = (s) => (String(s).match(/\{\{[a-z]+\}\}/g) || []).sort().join(' ');
-for (const file of strings) {
-  if (file === english) continue;
-  const other = flat(JSON.parse(fs.readFileSync(file, 'utf8')));
-  const missing = en.filter(([k]) => !other.some(([o]) => o === k)).map(([k]) => k);
-  const extra = other.filter(([k]) => !en.some(([e]) => e === k)).map(([k]) => k);
-  if (missing.length || extra.length) { console.error(file + ': not the English keys' + (missing.length ? '; missing ' + missing.join(', ') : '') + (extra.length ? '; extra ' + extra.join(', ') : '')); process.exit(1); }
-  const order = other.map(([k]) => k).join('\n') === en.map(([k]) => k).join('\n');
-  if (!order) { console.error(file + ': the keys are not in the English order'); process.exit(1); }
-  const varsDiffer = en.filter(([k, v]) => vars(v) !== vars(other.find(([o]) => o === k)[1])).map(([k]) => k);
-  if (varsDiffer.length) { console.error(file + ': the variables differ from English in ' + varsDiffer.join(', ')); process.exit(1); }
-  // Empty only where the English is empty (a text filled in at runtime).
-  const empty = other.filter(([k, v]) => String(v).trim() === '' && String(en.find(([e]) => e === k)[1]).trim() !== '').map(([k]) => k);
-  if (empty.length) { console.error(file + ': empty in ' + empty.join(', ')); process.exit(1); }
+const vars = (s) => (String(s).match(/\{\{?[a-z_]+\}?\}/g) || []).sort().join(' ');
+for (const set of sets) {
+  const strings = files.filter(set.is);
+  const english = strings.find((f) => f.endsWith('/' + set.english));
+  if (!english) { console.error(set.name + '/' + set.english + ' is missing'); process.exit(1); }
+  const en = flat(JSON.parse(fs.readFileSync(english, 'utf8')));
+  for (const file of strings) {
+    if (file === english) continue;
+    const other = flat(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const missing = en.filter(([k]) => !other.some(([o]) => o === k)).map(([k]) => k);
+    const extra = other.filter(([k]) => !en.some(([e]) => e === k)).map(([k]) => k);
+    if (missing.length || extra.length) { console.error(file + ': not the English keys' + (missing.length ? '; missing ' + missing.join(', ') : '') + (extra.length ? '; extra ' + extra.join(', ') : '')); process.exit(1); }
+    const order = other.map(([k]) => k).join('\n') === en.map(([k]) => k).join('\n');
+    if (!order) { console.error(file + ': the keys are not in the English order'); process.exit(1); }
+    const varsDiffer = en.filter(([k, v]) => vars(v) !== vars(other.find(([o]) => o === k)[1])).map(([k]) => k);
+    if (varsDiffer.length) { console.error(file + ': the variables differ from English in ' + varsDiffer.join(', ')); process.exit(1); }
+    // Empty only where the English is empty (a text filled in at runtime).
+    const empty = other.filter(([k, v]) => String(v).trim() === '' && String(en.find(([e]) => e === k)[1]).trim() !== '').map(([k]) => k);
+    if (empty.length) { console.error(file + ': empty in ' + empty.join(', ')); process.exit(1); }
+  }
+  console.log(set.name + ': ' + (strings.length - 1) + ' translations carry the ' + en.length + ' English keys');
 }
-console.log((strings.length - 1) + ' translations carry the English keys');
 JS
 
 echo "check: plugin"

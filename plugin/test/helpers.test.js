@@ -31,10 +31,15 @@ test('an address is empty, a host name or an IP address', () => {
     assert.deepEqual(h.validateAddress('a"b'), { ok: false });
 });
 
-test('the settings carry the port, the default when the value is not one', () => {
-    assert.deepEqual(h.settingsFrom(() => '8031'), { port: 8031 });
-    assert.deepEqual(h.settingsFrom(() => 'nonsense'), { port: h.DEFAULT_PORT });
-    assert.deepEqual(h.settingsFrom((k, d) => d), { port: h.DEFAULT_PORT });
+test('the settings carry the port and the language, the defaults when a value is not one', () => {
+    assert.deepEqual(h.settingsFrom(() => '8031', 'de'), { port: 8031, language: 'de' });
+    assert.deepEqual(h.settingsFrom(() => 'nonsense', 'zh_TW'), { port: h.DEFAULT_PORT, language: 'zh_TW' });
+    assert.deepEqual(h.settingsFrom((k, d) => d), { port: h.DEFAULT_PORT, language: 'en' });
+    assert.equal(h.languageCode(' ja '), 'ja');
+    assert.equal(h.languageCode('../x'), 'en');
+    assert.equal(h.languageCode('DE'), 'en');
+    assert.equal(h.languageCode(''), 'en');
+    assert.equal(h.languageCode(undefined), 'en');
 });
 
 test('the player address is the wired interface first, then wireless, then any', () => {

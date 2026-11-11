@@ -22,10 +22,18 @@ function validateAddress(value) {
     return { ok: true, value: text };
 }
 
-// The settings as the core reads them, from the configuration's values.
-function settingsFrom(get) {
+// The player's language as Volumio says it (its codes: en, de, ..., zh_TW), kept to
+// the shape of one; English when it is not one. The core picks the catalogue.
+function languageCode(value) {
+    const text = String(value === undefined || value === null ? '' : value).trim();
+    return /^[a-z]{2,3}(_[A-Z]{2})?$/.test(text) ? text : 'en';
+}
+
+// The settings as the core reads them, from the configuration's values and the
+// player's language.
+function settingsFrom(get, language) {
     const port = validatePort(get('port', DEFAULT_PORT));
-    return { port: port.ok ? port.value : DEFAULT_PORT };
+    return { port: port.ok ? port.value : DEFAULT_PORT, language: languageCode(language) };
 }
 
 // The IPv4 address browsers reach the player by: a wired interface first, else
@@ -231,6 +239,6 @@ function bufferSummary(plan, t) {
 }
 
 module.exports = {
-    DEFAULT_PORT, validatePort, validateAddress, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
+    DEFAULT_PORT, validatePort, validateAddress, languageCode, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
     BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary, bufferPlanFile
 };

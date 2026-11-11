@@ -342,7 +342,7 @@ pub mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: String::new(),
+            detail: crate::text::Msg::raw(""),
         }
     }
 

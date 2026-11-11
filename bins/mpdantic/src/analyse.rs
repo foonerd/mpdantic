@@ -53,7 +53,8 @@ pub struct DecoderNote {
     /// `mpd` when the running MPD answered, `assumed` when it could not be asked.
     pub source: String,
     pub count: usize,
-    pub detail: String,
+    /// What MPD said of itself, or why it could not be asked.
+    pub detail: crate::text::Msg,
 }
 
 #[derive(Serialize, Debug)]
@@ -269,7 +270,7 @@ mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: String::new(),
+            detail: crate::text::Msg::raw(""),
         }
     }
 

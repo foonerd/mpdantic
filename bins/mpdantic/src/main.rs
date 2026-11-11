@@ -7,9 +7,9 @@
 //! `mpdantic [--run DIR] [--settings FILE] [--music DIR] [--mpd ADDRESS] [--data DIR] [--glass DIR] [--version]`
 //!
 //! `DIR` under `--run` holds `status.json` (`/run/mpdantic` unless given);
-//! `--settings` is the file the plugin writes, with the port
+//! `--settings` is the file the plugin writes, with the port and the player's language
 //! (`/data/configuration/system_controller/mpdantic/settings.json` unless given,
-//! the default port when the file is not there); `--music` is MPD's music
+//! the default port and English when the file is not there); `--music` is MPD's music
 //! directory (`/var/lib/mpd/music` unless given); `--mpd` is where MPD listens,
 //! a socket path or host:port (`/run/mpd/socket` unless given); `--data` is the
 //! folder the preferences are kept in (`/data/INTERNAL/mpdantic` unless given);
@@ -20,6 +20,10 @@
 //! (`/data/configuration/system_controller/networkfs/config.json` unless given);
 //! `--volumio-playlists` is the folder Volumio keeps its own playlists in
 //! (`/data/playlist` unless given).
+
+// First, for its `msg!` macro, which the modules after it use.
+#[macro_use]
+mod text;
 
 mod analyse;
 mod classify;
@@ -175,6 +179,7 @@ fn main() {
         volumio_playlists: args.volumio_playlists.clone(),
         // The shell's plan for the output buffer, written beside the settings.
         buffer_plan: args.settings.with_file_name("buffer.json"),
+        settings: args.settings.clone(),
         measuring: std::sync::atomic::AtomicBool::new(false),
         album: Mutex::new(None),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),

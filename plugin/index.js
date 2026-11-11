@@ -47,7 +47,23 @@ Mpdantic.prototype.onVolumioStart = function () {
     // Every plugin's onVolumioStart runs before any onStart, so the MPD plugin sees the
     // hook when it writes mpd.conf at boot.
     this.registerMpdHook();
+    this.watchLanguage();
     return libQ.resolve();
+};
+
+// The pages follow Volumio's language: the settings are rewritten at every change of
+// it (the appearance plugin sets the shared value), and the core reads them at the
+// next page. Volumio keeps every callback registered, so this registers once.
+Mpdantic.prototype.watchLanguage = function () {
+    const self = this;
+    if (self.languageWatched) return;
+    const vars = self.commandRouter.sharedVars;
+    if (!vars || typeof vars.registerCallback !== 'function') return;
+    self.languageWatched = true;
+    vars.registerCallback('language_code', () => {
+        if (!self.active) return;
+        try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
+    });
 };
 
 Mpdantic.prototype.onStart = function () {
@@ -133,10 +149,12 @@ Mpdantic.prototype.readStatus = function () {
     try { return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8')); } catch (e) { return null; }
 };
 
-// The settings as the core reads them, written whole and moved into place.
+// The settings as the core reads them, with the player's language, written whole and
+// moved into place.
 Mpdantic.prototype.writeSettings = function () {
     const self = this;
-    const text = JSON.stringify(h.settingsFrom((k, d) => self.config.get(k, d)), null, 2) + '\n';
+    const language = self.commandRouter.sharedVars ? self.commandRouter.sharedVars.get('language_code') : undefined;
+    const text = JSON.stringify(h.settingsFrom((k, d) => self.config.get(k, d), language), null, 2) + '\n';
     const part = self.settingsFile + '.part';
     fs.writeFileSync(part, text);
     fs.renameSync(part, self.settingsFile);

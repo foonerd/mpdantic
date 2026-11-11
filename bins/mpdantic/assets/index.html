@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MPDantic</title>
+<script id="lang" type="application/json">{}</script>
 <style>
   :root {
     --bg: #f4f4f1; --panel: #ffffff; --line: #d8d8d2; --text: #1d1d1b; --muted: #6b6b66;
@@ -339,6 +340,29 @@
   const when = (seconds) => new Date(seconds * 1000).toLocaleString();
   const JSON_BODY = { 'Content-Type': 'application/json' };
 
+  // ------------------------------------------------------------ the language
+
+  // The catalogue of the page's language, put into the page by the core.
+  const CAT = (() => { try { return JSON.parse($('lang').textContent) || {}; } catch (e) { return {}; } })();
+  const fill = (s, vars) => Object.keys(vars || {}).reduce((out, k) => out.split('{' + k + '}').join(String(vars[k])), s);
+  // A text of the page's by its key, its {variables} filled in; the key itself when
+  // the catalogue lacks it, so that a missing text is seen, not hidden.
+  const t = (key, vars) => fill(typeof CAT[key] === 'string' ? CAT[key] : key, vars);
+  // A sentence of the core's: rendered from the catalogue by its key with its
+  // arguments, else the English it carries; a plain string as it is.
+  const tm = (m) => {
+    if (m === null || m === undefined) return '';
+    if (typeof m !== 'object' || typeof m.k !== 'string') return String(m);
+    return typeof CAT[m.k] === 'string' ? fill(CAT[m.k], m.a) : String(m.en === undefined ? m.k : m.en);
+  };
+  // The markup's texts from the catalogue: data-i18n for the content, data-i18n-title
+  // and data-i18n-placeholder for those attributes.
+  function translateMarkup() {
+    document.querySelectorAll('[data-i18n]').forEach((n) => { n.textContent = t(n.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-title]').forEach((n) => { n.title = t(n.dataset.i18nTitle); });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach((n) => { n.placeholder = t(n.dataset.i18nPlaceholder); });
+  }
+
   async function api(url, options) {
     const r = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
     if (r.status === 204) return null;
@@ -430,12 +454,12 @@
     const badge = $('state');
     try {
       const s = await api('/api/status');
-      $('version').textContent = 'core ' + s.version;
-      badge.textContent = s.state === 'error' ? 'error' : 'up';
+      $('version').textContent = t('page.core', { version: s.version });
+      badge.textContent = s.state === 'error' ? t('page.state.error') : t('page.state.up');
       badge.className = 'badge ' + (s.state === 'error' ? 'bad' : 'ok');
       badge.title = s.error || '';
     } catch (e) {
-      badge.textContent = 'unreachable';
+      badge.textContent = t('page.state.unreachable');
       badge.className = 'badge bad';
     }
   }
@@ -906,8 +930,8 @@
     box.textContent = '';
     if (!r) return;
     const decoders = r.decoders.source === 'mpd'
-      ? 'The decoders of the running MPD: ' + r.decoders.count + ' suffixes, ' + r.decoders.detail + '.'
-      : 'MPD could not be asked for its decoders (' + r.decoders.detail + '); ' + r.decoders.count + ' audio suffixes assumed.';
+      ? 'The decoders of the running MPD: ' + r.decoders.count + ' suffixes, ' + tm(r.decoders.detail) + '.'
+      : 'MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); ' + r.decoders.count + ' audio suffixes assumed.';
     const notes = [decoders];
     if (r.video_in_use) notes.push('Video is in use here: video containers are counted, not suggested.');
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
@@ -1016,7 +1040,7 @@
     box.textContent = '';
     if (!r) return;
     const notes = [];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
     if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
     const totals = section(box, 'Sheets under ' + (r.path || 'the library'), notes.join(' '));
@@ -1072,7 +1096,7 @@
     box.textContent = '';
     if (!r) return;
     const notes = [r.read + ' audio files read' + (Object.keys(r.by_format).length ? ' (' + Object.keys(r.by_format).map((k) => k + ' ' + r.by_format[k]).join(', ') + ')' : '') + '.'];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
     if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
     const splits = section(box, 'Folders that show as several albums', r.splits.length
@@ -1124,7 +1148,7 @@
     box.textContent = '';
     if (!r) return;
     const notes = [];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + r.decoders.detail + '); the usual audio suffixes assumed.');
+    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
     if (r.not_read) notes.push(r.not_read + ' asx or rss files are MPD\'s too and were not read.');
     if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
     if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
@@ -1624,6 +1648,7 @@
   $('lines').addEventListener('input', syncPicks);
   $('lines').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) previewBatch(false); });
   window.addEventListener('hashchange', () => load(fromHash(), false));
+  translateMarkup();
   showTab(savedTab());
   load(fromHash(), false);
   loadPrefs();

@@ -32,8 +32,8 @@ impl Status {
         self.error = Some(what);
     }
 
-    /// The status as JSON, one line.
-    pub fn json(&self) -> String {
+    /// The status as a value, for the file and for the page's route to add to.
+    pub fn value(&self) -> serde_json::Value {
         serde_json::json!({
             "version": crate::VERSION,
             "pid": process::id(),
@@ -42,8 +42,11 @@ impl Status {
             "port": self.port,
             "uptime": self.started.elapsed().as_secs(),
         })
-        .to_string()
-            + "\n"
+    }
+
+    /// The status as JSON, one line.
+    pub fn json(&self) -> String {
+        self.value().to_string() + "\n"
     }
 
     /// Written whole and moved into place, so a reader never sees a part.

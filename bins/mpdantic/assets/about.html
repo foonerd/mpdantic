@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MPDantic - About</title>
+<script id="lang" type="application/json">{}</script>
 <style>
   :root {
     --bg: #f4f4f1; --panel: #ffffff; --line: #d8d8d2; --text: #1d1d1b; --muted: #6b6b66;
@@ -119,16 +120,23 @@
 'use strict';
 (function () {
   const $ = (id) => document.getElementById(id);
+  // The catalogue of the page's language, put into the page by the core, and the
+  // texts by their keys, as on the main page.
+  const CAT = (() => { try { return JSON.parse($('lang').textContent) || {}; } catch (e) { return {}; } })();
+  const fill = (s, vars) => Object.keys(vars || {}).reduce((out, k) => out.split('{' + k + '}').join(String(vars[k])), s);
+  const t = (key, vars) => fill(typeof CAT[key] === 'string' ? CAT[key] : key, vars);
+  document.querySelectorAll('[data-i18n]').forEach((n) => { n.textContent = t(n.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-title]').forEach((n) => { n.title = t(n.dataset.i18nTitle); });
   // The core's version and state, as the main page shows them.
   fetch('/api/status', { cache: 'no-store' }).then((r) => r.json()).then((s) => {
-    $('version').textContent = 'core ' + s.version + ' - About';
-    $('core').textContent = 'core ' + s.version;
+    $('version').textContent = t('about.version', { version: s.version });
+    $('core').textContent = t('page.core', { version: s.version });
     const badge = $('state');
-    badge.textContent = s.state === 'error' ? 'error' : 'up';
+    badge.textContent = s.state === 'error' ? t('page.state.error') : t('page.state.up');
     badge.className = 'badge ' + (s.state === 'error' ? 'bad' : 'ok');
     badge.title = s.error || '';
   }).catch(() => {
-    $('state').textContent = 'unreachable';
+    $('state').textContent = t('page.state.unreachable');
     $('state').className = 'badge bad';
   });
   // Close: only when this page is the window itself. Inside Volumio's own iframe page
