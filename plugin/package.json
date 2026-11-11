@@ -1,6 +1,6 @@
 {
   "name": "mpdantic",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Audits and repairs a music library for MPD: output buffer sizing by RAM, .mpdignore management, CUE sheet repair, playlist rebasing, tag validation. Rust core, thin Node shell.",
   "main": "index.js",
   "scripts": {
@@ -20,7 +20,7 @@
     "os": ["bookworm"],
     "architectures": ["armhf", "amd64"],
     "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management page.",
-    "changelog": "0.1.1 Second test cut: the core writes files owned by another user (music copied over the network); MP3s with junk before the first frame written; the tag editor file by file; the Volumio tab checking and repairing Volumio's playlists, favourites and queue; the ignore file edited by hand; the player report on a System tab; the buttons organised by role; third-party notices in the zip."
+    "changelog": "0.1.2 Third test cut: every surface in eleven languages; the findings of a check kept whole and worked through in a view of their own, with dismissals, an export as text and a re-check of folders; the tag editor and file names from tags or tags from file names by one pattern, in that view and on the Tags tab; Keep out on every folder row; QNAP's and Netatalk's folders known; every count in its singular."
   },
   "dependencies": {
     "kew": "^0.7.0",
