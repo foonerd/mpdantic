@@ -464,7 +464,7 @@ pub fn render(r: &Report) -> String {
                 ),
             }
         )),
-        None => out.push_str("album query: not measured (the button on the About page)\n"),
+        None => out.push_str("album query: not measured (the button on the System tab)\n"),
     }
     out
 }
@@ -558,7 +558,7 @@ mod tests {
         assert!(text.contains("shares: 1 cifs, 1 nfs\n"), "{text}");
         assert!(text.contains("output buffer: 80 MiB (Volumio's own); bounds heap 76, memory 1106, time 86 MiB; backend heap 1048 MiB\n"), "{text}");
         assert!(
-            text.ends_with("album query: not measured (the button on the About page)\n"),
+            text.ends_with("album query: not measured (the button on the System tab)\n"),
             "{text}"
         );
         assert!(text.is_ascii(), "{text}");

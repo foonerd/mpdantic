@@ -1,16 +1,16 @@
 name: Player report
-description: What MPDantic found or did on your player, with the report from its About page.
+description: What MPDantic found or did on your player, with the report from its System tab.
 labels: ["report"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you. The block below comes from MPDantic's own pages: the About tab, "This player", Copy. It names no share, path or credential, only counts. "Measure the album query" before copying tells how large the album list is against MPD's output buffer; it asks MPD for every song once, which takes a few seconds on a large library.
+        Thank you. The block below comes from MPDantic's own pages: the System tab, Copy. It names no share, path or credential, only counts. "Measure the album query" before copying tells how large the album list is against MPD's output buffer; it asks MPD for every song once, which takes a few seconds on a large library.
   - type: textarea
     id: report
     attributes:
       label: The player report
-      description: Paste the block from the About page as it is.
+      description: Paste the block from the System tab as it is.
       render: text
     validations:
       required: true

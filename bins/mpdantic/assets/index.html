@@ -94,6 +94,9 @@
   .write .line { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .write textarea { flex: 1; min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 1.5; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); resize: vertical; }
   .write textarea:focus { outline: none; border-color: var(--accent); }
+  .system textarea { display: block; width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); resize: vertical; white-space: pre; overflow-x: auto; }
+  .system .actions { align-items: center; }
+  .system .help { margin-top: 10px; }
   .write .line button { align-self: flex-start; }
   .preview { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
   .preview .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
@@ -134,6 +137,7 @@
     <button class="tab" id="tab-tags">Tags</button>
     <button class="tab" id="tab-playlists">Playlists</button>
     <button class="tab" id="tab-undo">Written</button>
+    <button class="tab" id="tab-system">System</button>
     <a class="tab" href="/about">About</a>
   </nav>
 
@@ -223,6 +227,18 @@
     <div class="body">
       <div class="done" id="undo-note" hidden></div>
       <div class="progress" id="undo-box">Nothing written yet.</div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-system" hidden>
+    <div class="head">
+      <b>System</b>
+      <span class="sub">This player, as one block for an issue: what it is, and how its library sits against MPD's output buffer. It names no share, path or credential, only counts.</span>
+    </div>
+    <div class="body system">
+      <textarea id="report" rows="9" readonly spellcheck="false">Reading...</textarea>
+      <div class="actions"><button id="copy">Copy</button><button id="measure">Measure the album query</button><span class="help" id="report-note"></span></div>
+      <div class="help">The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds. Paste the block into an issue on GitHub (the About tab has the link).</div>
     </div>
   </div>
 </div>
@@ -360,7 +376,7 @@
 
   // ------------------------------------------------------------------ the tabs
 
-  const TABS = ['ignore', 'cue', 'tags', 'playlists', 'undo'];
+  const TABS = ['ignore', 'cue', 'tags', 'playlists', 'undo', 'system'];
 
   function showTab(name) {
     if (!TABS.includes(name)) name = 'ignore';
@@ -370,7 +386,42 @@
     });
     try { localStorage.setItem('mpdantic.tab', name); } catch (e) { /* no storage here */ }
     if (name === 'undo') loadUndo();
+    if (name === 'system') loadReport();
   }
+
+  // ------------------------------------------------------------ the system tab
+
+  // The player report: the block the core renders, the album query measured on a
+  // click, the copy through the selection (the page is plain HTTP, where the clipboard
+  // API is not available; the selected text is left for a copy by hand when the
+  // command is refused).
+  const reportBox = $('report');
+  const reportNote = $('report-note');
+  function showReport(r) {
+    reportBox.value = r.text || '';
+    reportBox.rows = Math.max(7, (r.text || '').split('\n').length + 1);
+  }
+  function loadReport() {
+    fetch('/api/report', { cache: 'no-store' }).then((r) => r.json()).then(showReport)
+      .catch((e) => { reportBox.value = 'The report could not be read: ' + (e.message || e); });
+  }
+  $('copy').addEventListener('click', () => {
+    reportBox.focus();
+    reportBox.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    reportNote.textContent = done ? 'Copied.' : 'Selected; copy it with Ctrl+C or Cmd+C.';
+  });
+  $('measure').addEventListener('click', () => {
+    const button = $('measure');
+    button.disabled = true;
+    reportNote.textContent = 'Asking MPD for every song...';
+    fetch('/api/report/measure', { method: 'POST' }).then((r) => r.json()).then((r) => {
+      if (r.error) { reportNote.textContent = r.error; return; }
+      showReport(r);
+      reportNote.textContent = r.album && r.album.error ? 'Not measured: ' + r.album.error : 'Measured.';
+    }).catch((e) => { reportNote.textContent = 'Not measured: ' + (e.message || e); }).then(() => { button.disabled = false; });
+  });
 
   // The tab to open: `?tab=cue` in the address, else the one open last time here.
   function savedTab() {

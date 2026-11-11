@@ -6,7 +6,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ### Added
 
-- The player report, on the About page: one block of text for an issue, with the player (model, memory, architecture, Volumio version), MPD's version and decoders, the library's size from MPD's `stats`, the shares counted by type and nothing else of them, the output buffer with the bounds the rule found, and, on a click, the album query measured: MPD asked for every song with every tag as Volumio's album view asks, the reply counted as it streams and never kept, with the time Volumio's backend would take to read it. Copy puts it on the clipboard; the issue template on GitHub asks for it. The shell writes its buffer plan beside the settings for the core (`buffer.json`); the core serves `GET /api/report` and `POST /api/report/measure`.
+- The player report, on a System tab before About: one block of text for an issue, with the player (model, memory, architecture, Volumio version), MPD's version and decoders, the library's size from MPD's `stats`, the shares counted by type and nothing else of them, the output buffer with the bounds the rule found, and, on a click, the album query measured: MPD asked for every song with every tag as Volumio's album view asks, the reply counted as it streams and never kept, with the time Volumio's backend would take to read it. Copy puts it on the clipboard; the issue template on GitHub asks for it. The shell writes its buffer plan beside the settings for the core (`buffer.json`); the core serves `GET /api/report` and `POST /api/report/measure`.
 
 ## [0.1.0] - 2026-11-10
 
