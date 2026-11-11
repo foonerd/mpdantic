@@ -70,6 +70,8 @@ pub struct Report {
     /// What ffmpeg alone claims, by suffix.
     pub ffmpeg_suffixes: BTreeMap<String, usize>,
     pub other_suffixes: Vec<(String, usize)>,
+    /// Up to two names per other suffix, so an offer explains itself.
+    pub other_examples: BTreeMap<String, Vec<String>>,
     pub in_force: Vec<InForceLines>,
     pub suggestions: Vec<Suggestion>,
     pub decoders: DecoderNote,
@@ -80,6 +82,18 @@ pub struct Report {
 }
 
 /// The analysis of `path` (MPD's form) under the music directory.
+/// What follows the last dot of a name, as written; none without a dot or with
+/// nothing after it.
+fn suffix_as_written(name: &std::ffi::OsStr) -> Option<String> {
+    let text = name.to_string_lossy();
+    let (_, after) = text.rsplit_once('.')?;
+    if after.is_empty() {
+        None
+    } else {
+        Some(after.to_string())
+    }
+}
+
 pub fn analyse(
     music: &Path,
     path: &str,
@@ -102,6 +116,7 @@ pub fn analyse(
         audio_suffixes: BTreeMap::new(),
         ffmpeg_suffixes: BTreeMap::new(),
         other_suffixes: Vec::new(),
+        other_examples: BTreeMap::new(),
         in_force: start.in_force_lines(),
         suggestions: Vec::new(),
         decoders: source,
@@ -148,8 +163,14 @@ pub fn analyse(
                     }
                 }
                 Class::Other => {
-                    let s = suffix.unwrap_or_else(|| "(none)".to_string());
+                    // As written, case kept: the line offered must match the name as
+                    // MPD matches it, and fnmatch is case-sensitive.
+                    let s = suffix_as_written(&entry.name).unwrap_or_else(|| "(none)".to_string());
                     if other_suffixes.len() < OTHER_SUFFIXES || other_suffixes.contains_key(&s) {
+                        let examples = report.other_examples.entry(s.clone()).or_default();
+                        if examples.len() < 2 {
+                            examples.push(entry.path.clone());
+                        }
                         *other_suffixes.entry(s).or_insert(0) += 1;
                     } else {
                         other_lumped += 1;

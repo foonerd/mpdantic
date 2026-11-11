@@ -43,6 +43,7 @@ mod tagcheck;
 mod tagfix;
 mod tags;
 mod undo;
+mod vlists;
 mod walk;
 mod write;
 

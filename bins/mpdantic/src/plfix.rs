@@ -60,13 +60,13 @@ pub struct Fixed {
 
 /// The audio files under the base folder, by their lowercased name, each with its
 /// library path: one bounded walk, the lines in force respected.
-struct Index {
+pub(crate) struct Index {
     by_name: HashMap<String, Vec<String>>,
-    truncated: bool,
+    pub(crate) truncated: bool,
 }
 
 impl Index {
-    fn build(music: &Path, base: &str, decoders: &Decoders) -> Result<Index, String> {
+    pub(crate) fn build(music: &Path, base: &str, decoders: &Decoders) -> Result<Index, String> {
         let start = walk::start(music, base)?;
         let rules = Rules::new();
         let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
@@ -102,7 +102,7 @@ impl Index {
 
     /// The library path whose tail matches the entry's the longest, and how many
     /// matched as well.
-    fn find(&self, parts: &[String]) -> Option<(String, usize)> {
+    pub(crate) fn find(&self, parts: &[String]) -> Option<(String, usize)> {
         let name = parts.last()?;
         let candidates = self.by_name.get(name)?;
         let mut best: Option<(&String, usize)> = None;
@@ -157,7 +157,7 @@ fn percent_decode(s: &str) -> String {
 /// The entry as components to match: the scheme and the host of a `file://` off,
 /// percent-decoding undone, backslashes turned, a drive letter dropped, dot segments
 /// out, everything lowercased.
-fn components(uri: &str) -> Vec<String> {
+pub(crate) fn components(uri: &str) -> Vec<String> {
     let mut s = uri.to_string();
     let lower = s.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix("file://") {

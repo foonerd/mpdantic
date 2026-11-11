@@ -25,6 +25,7 @@ use crate::plimport::{self, ImportEntry};
 use crate::tagfix::{self, FilePlan, KeyChange, Values};
 use crate::tags;
 use crate::undo::{Batch, Entry, Journal};
+use crate::vlists;
 
 /// What the page asks for.
 pub struct Request {
@@ -73,6 +74,9 @@ pub struct Preview {
     pub mtime: u64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub added: Vec<String>,
+    /// The lines of the file that are not in the request (`mpdignore`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub already: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -114,6 +118,12 @@ pub struct Preview {
     pub left_out: usize,
     /// The tags set by hand from the grid, not by the rules (`tagedit`).
     pub edited: bool,
+    /// One of Volumio's lists repaired: each item's fate (`volumio_list`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<vlists::ItemChange>,
+    pub kept: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_kind: Option<String>,
 }
 
 /// What an apply or an undo did.
@@ -193,6 +203,7 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         size: 0,
         mtime: 0,
         added: Vec::new(),
+        removed: Vec::new(),
         already: Vec::new(),
         refused: Vec::new(),
         repairs: Vec::new(),
@@ -213,6 +224,9 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         from: None,
         left_out: 0,
         edited: false,
+        items: Vec::new(),
+        kept: 0,
+        list_kind: None,
     }
 }
 
@@ -232,6 +246,7 @@ pub fn prepare(
         "tagedit" => prepare_tagedit(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
+        "volumio_list" => prepare_volumio_list(music, decoders, volumio_playlists, id, req),
         _ => Err("the kind is not one the core writes".to_string()),
     }
 }
@@ -317,18 +332,27 @@ fn prepare_lines(
     } else {
         String::new()
     };
+    // The file as it is, line by line, and the file as the request wants it whole:
+    // a line kept stays as written (a comment too), a line new to the file is
+    // checked, a line of the file not in the request is removed.
     let present: Vec<String> = before
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_string)
         .collect();
+    let mut wanted: Vec<String> = Vec::new();
     let mut added: Vec<String> = Vec::new();
     let mut already = Vec::new();
     let mut refused = Vec::new();
     for raw in &req.lines {
         let line = raw.trim();
-        if line.is_empty() {
+        if line.is_empty() || wanted.iter().any(|w| w == line) {
+            continue;
+        }
+        if present.iter().any(|p| p == line) {
+            already.push(line.to_string());
+            wanted.push(line.to_string());
             continue;
         }
         if let Some(rest) = line.strip_prefix('#') {
@@ -348,33 +372,42 @@ fn prepare_lines(
             refused.push((line.to_string(), "not a pattern".to_string()));
             continue;
         }
-        if present.iter().any(|p| p == line) || added.iter().any(|a| a == line) {
-            already.push(line.to_string());
-            continue;
-        }
         added.push(line.to_string());
+        wanted.push(line.to_string());
     }
-    let mut after = before.clone();
-    if !after.is_empty() && !after.ends_with('\n') {
-        after.push('\n');
-    }
-    for line in &added {
-        after.push_str(line);
-        after.push('\n');
-    }
+    let removed: Vec<String> = present
+        .iter()
+        .filter(|p| !wanted.iter().any(|w| w == *p))
+        .cloned()
+        .collect();
+    let after = if wanted.is_empty() {
+        String::new()
+    } else {
+        wanted.join("\n") + "\n"
+    };
     let file = if path.is_empty() {
         ".mpdignore".to_string()
     } else {
         format!("{path}/.mpdignore")
     };
-    let mut p = empty(id, "mpdignore", path, file, "write_text", place);
+    let op = if after.is_empty() && exists {
+        "remove"
+    } else {
+        "write_text"
+    };
+    let mut p = empty(id, "mpdignore", path, file, op, place);
     p.exists = exists;
     p.before = before;
+    p.changed = if op == "remove" {
+        true
+    } else {
+        !after.is_empty() && present != wanted
+    };
     p.after = after;
-    p.changed = !added.is_empty();
     p.size = size;
     p.mtime = mtime;
     p.added = added;
+    p.removed = removed;
     p.already = already;
     p.refused = refused;
     Ok(p)
@@ -501,6 +534,64 @@ fn prepare_tagedit(
     Ok(p)
 }
 
+/// One of Volumio's own lists repaired: the file under Volumio's data folder written
+/// whole, outside the library (no mount, no update of MPD), the journal keeping it
+/// as it was. The list is named by its id, never by a path.
+fn prepare_volumio_list(
+    music: &Path,
+    decoders: &Decoders,
+    volumio_playlists: &Path,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, String> {
+    let places = vlists::Places::beside(volumio_playlists);
+    let list_id = req.name.as_deref().unwrap_or("");
+    let list = vlists::by_id(&places, list_id).ok_or_else(|| "no such list".to_string())?;
+    let (exists, size, mtime) = stat(&list.path);
+    if !exists {
+        return Err("no such list".to_string());
+    }
+    if size > vlists::MAX_LIST {
+        return Err(format!("the list is {size} bytes; not read"));
+    }
+    let bytes = fs::read(&list.path).map_err(|e| format!("{}: {e}", list.path.display()))?;
+    let fixed = vlists::plan(music, decoders, &list, &bytes, req.repairs.as_deref())?;
+    let folder = list
+        .path
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let mut p = empty(
+        id,
+        "volumio_list",
+        folder,
+        list.path.display().to_string(),
+        "write_text",
+        "local".to_string(),
+    );
+    p.exists = true;
+    p.before = display(&bytes);
+    p.after = fixed.after;
+    p.changed = fixed.changed && p.after.as_bytes() != bytes.as_slice();
+    p.size = size;
+    p.mtime = mtime;
+    p.repairs = fixed
+        .repairs
+        .into_iter()
+        .map(|r| Repair {
+            id: r.id,
+            what: r.what,
+            on: r.on,
+        })
+        .collect();
+    p.items = fixed.changes;
+    p.kept = fixed.kept;
+    p.notes = fixed.notes;
+    p.name = Some(list.name);
+    p.list_kind = Some(list.kind);
+    Ok(p)
+}
+
 /// A playlist's repair: the entries MPD cannot find looked for under the base
 /// folder and written relative to the playlist's folder, the mark, the encoding, a
 /// PLS's count, a `.m3u` beside an m3u8 or an xspf.
@@ -581,7 +672,7 @@ fn prepare_playlist(
 /// Whether the batch's file is outside the library: a Volumio playlist, under
 /// Volumio's own folder, whose paths are absolute.
 fn outside(kind: &str) -> bool {
-    kind == "volumio_playlist"
+    matches!(kind, "volumio_playlist" | "volumio_list")
 }
 
 /// The batch's file on disk: the library path joined to the music directory, or the
@@ -707,6 +798,12 @@ fn note_for(preview: &Preview, written: usize) -> String {
             preview.name.as_deref().unwrap_or(""),
             preview.from.as_deref().unwrap_or("")
         ),
+        "volumio_list" => format!(
+            "Volumio's {} {} repaired: {}",
+            preview.list_kind.as_deref().unwrap_or("list"),
+            preview.name.as_deref().unwrap_or(""),
+            on()
+        ),
         "tags" => format!(
             "tags of {} in {}: {}",
             files_word(written),
@@ -721,14 +818,16 @@ fn note_for(preview: &Preview, written: usize) -> String {
                 on()
             }
         ),
+        _ if preview.op == "remove" => format!("{} removed", preview.file),
         _ => format!(
-            "{} {} into {}",
+            "{} {} added, {} removed in {}",
             preview.added.len(),
             if preview.added.len() == 1 {
                 "line"
             } else {
                 "lines"
             },
+            preview.removed.len(),
             preview.file
         ),
     }
@@ -807,7 +906,7 @@ pub fn apply(
     }
     let batch = journaled?;
     // A write outside the library is nothing to MPD.
-    let (updated, update_error) = if preview.kind == "volumio_playlist" {
+    let (updated, update_error) = if outside(&preview.kind) {
         (None, None)
     } else {
         update_after(mpd_address, &preview.path)
@@ -955,7 +1054,7 @@ pub fn undo(
     }
     result?;
     journal.mark_undone(id)?;
-    let (updated, update_error) = if batch.kind == "volumio_playlist" {
+    let (updated, update_error) = if outside(&batch.kind) {
         (None, None)
     } else {
         update_after(mpd_address, &batch.path)
@@ -1152,13 +1251,61 @@ mod tests {
         assert!(p.exists);
         assert_eq!(p.before, "*.iso\n#recycle");
         assert_eq!(p.added, ["*.mov", "[#]recycle"]);
-        assert_eq!(p.already, ["*.iso", "*.mov"]);
-        assert_eq!(p.refused.len(), 2);
-        assert!(p.refused[0].1.contains("[#]recycle"));
-        assert_eq!(p.after, "*.iso\n#recycle\n*.mov\n[#]recycle\n");
+        assert_eq!(
+            p.already,
+            ["*.iso", "#recycle"],
+            "a line of the file stays, a comment too"
+        );
+        assert!(p.removed.is_empty());
+        assert_eq!(p.refused.len(), 1, "{:?}", p.refused);
+        assert_eq!(p.refused[0].0, "bad\0");
+        assert_eq!(
+            p.after, "*.iso\n*.mov\n#recycle\n[#]recycle\n",
+            "in the order of the field, the file edited whole"
+        );
         assert_eq!(p.place, "local");
         assert!(p.changed);
         assert!(p.size > 0);
+        // The file edited whole: a line left out is removed; everything left out
+        // removes the file; a new comment line is refused with the line that works.
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            7,
+            &request("INTERNAL/Jazz", &["*.mov", "#snapshot"]),
+        )
+        .unwrap();
+        assert_eq!(p.removed, ["*.iso", "#recycle"]);
+        assert_eq!(p.added, ["*.mov"]);
+        assert_eq!(p.refused[0].0, "#snapshot");
+        assert!(p.refused[0].1.contains("[#]snapshot"));
+        assert_eq!(p.after, "*.mov\n");
+        assert_eq!(p.op, "write_text");
+        assert!(p.changed);
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            8,
+            &request("INTERNAL/Jazz", &["*.iso", "#recycle"]),
+        )
+        .unwrap();
+        assert!(!p.changed, "the file as it is");
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            9,
+            &request("INTERNAL/Jazz", &[]),
+        )
+        .unwrap();
+        assert_eq!(p.op, "remove");
+        assert!(p.changed);
+        assert_eq!(p.removed, ["*.iso", "#recycle"]);
         let p = prepare(
             &music,
             &shares,
@@ -1224,21 +1371,25 @@ mod tests {
         let list = journal.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, a.batch);
-        assert_eq!(list[0].note, "2 lines into INTERNAL/Jazz/.mpdignore");
+        assert_eq!(
+            list[0].note,
+            "2 lines added, 0 removed in INTERNAL/Jazz/.mpdignore"
+        );
         assert_eq!(list[0].entries[0].before, None);
         assert_eq!(list[0].entries[0].before_bytes, None);
         // The same preview again: the file moved on.
         assert!(apply(&music, &shares, &mounter, &journal, &address, &p)
             .unwrap_err()
             .contains("changed since"));
-        // A second batch on top, then both undone in order.
+        // A second batch on top (the file whole, a line added), then both undone in
+        // order.
         let p2 = prepare(
             &music,
             &shares,
             &d,
             &dir.join("playlists"),
             2,
-            &request("INTERNAL/Jazz", &["*.mov"]),
+            &request("INTERNAL/Jazz", &["*.iso", "[#]recycle", "*.mov"]),
         )
         .unwrap();
         let a2 = apply(&music, &shares, &mounter, &journal, &address, &p2).unwrap();

@@ -26,6 +26,7 @@ use crate::status::Status;
 use crate::tagcheck;
 use crate::tagfix;
 use crate::undo;
+use crate::vlists;
 use crate::write;
 
 /// The page, whole.
@@ -225,6 +226,29 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         (_, "/api/report") if get => (200, json, report_json(shared)),
         (_, "/api/tags") if get => {
             let (code, body) = folder_tags(shared, &r.query);
+            (code, json, body)
+        }
+        (_, "/api/mpdignore") if get => {
+            let (code, body) = folder_ignore(shared, &r.query);
+            (code, json, body)
+        }
+        (_, "/api/volumio/lists") if get => {
+            let places = vlists::Places::beside(&shared.volumio_playlists);
+            let (note, decoders) = shared.decoders();
+            let lists: Vec<vlists::ListReport> = vlists::lists(&places)
+                .iter()
+                .map(|l| vlists::check(shared.library.music(), &decoders, l))
+                .collect();
+            let body = serde_json::json!({
+                "decoders": { "source": note.source, "detail": note.detail },
+                "lists": lists,
+            })
+            .to_string()
+                + "\n";
+            (200, json, body)
+        }
+        ("POST", "/api/volumio/queue/check") => {
+            let (code, body) = queue_check(shared, &r.body);
             (code, json, body)
         }
         ("POST", "/api/report/measure") => {
@@ -640,6 +664,69 @@ fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
         ),
         Err(e) => (500, error(&e)),
     }
+}
+
+/// `POST /api/volumio/queue/check`: the queue's items as the page read them from
+/// Volumio, each said against the library; nothing kept.
+fn queue_check(shared: &Shared, body: &[u8]) -> (u16, String) {
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (400, error("the body is not JSON"));
+    };
+    let Some(items) = request["items"].as_array() else {
+        return (400, error("no items"));
+    };
+    let (_, decoders) = shared.decoders();
+    let mut seen = std::collections::HashSet::new();
+    let states: Vec<serde_json::Value> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let uri = item["uri"].as_str().unwrap_or("").to_string();
+            let mut state = vlists::state_of(shared.library.music(), item, &decoders);
+            if state != "broken" && !seen.insert(uri.clone()) {
+                state = "duplicate";
+            }
+            serde_json::json!({ "index": index, "uri": uri, "state": state })
+        })
+        .collect();
+    (
+        200,
+        serde_json::json!({ "items": states }).to_string() + "\n",
+    )
+}
+
+/// `GET /api/mpdignore?path=<folder>`: the folder's own `.mpdignore` as it is, line
+/// by line, for the field the user edits.
+fn folder_ignore(shared: &Shared, query: &str) -> (u16, String) {
+    let path = pairs(query)
+        .into_iter()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+    let Some(path) = Library::check(&path) else {
+        return (400, error("not a library path"));
+    };
+    let dir = if path.is_empty() {
+        shared.library.music().to_path_buf()
+    } else {
+        shared.library.music().join(&path)
+    };
+    if !dir.is_dir() {
+        return (404, error("no such folder"));
+    }
+    let file = dir.join(".mpdignore");
+    let exists = file.is_file();
+    let lines: Vec<String> = std::fs::read_to_string(&file)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    (
+        200,
+        serde_json::json!({ "path": path, "exists": exists, "lines": lines }).to_string() + "\n",
+    )
 }
 
 /// The player report as JSON, with the block rendered in it.
@@ -1073,6 +1160,108 @@ mod tests {
         let seen = crate::tags::view(&crate::tags::read(&root.join("USB/a.flac"), "flac"));
         assert_eq!(seen.title, ["One"]);
         assert!(seen.genre.is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn volumios_lists_are_checked_repaired_and_put_back_and_the_queue_is_checked() {
+        let root = temp_library("serve-vlists");
+        let data = root.join(".mpdantic-data");
+        let places = vlists::Places::beside(&data.join("volumio-playlists"));
+        std::fs::create_dir_all(&places.playlists).unwrap();
+        std::fs::create_dir_all(&places.favourites).unwrap();
+        std::fs::write(root.join("USB/a.flac"), b"x").unwrap();
+        let text = r#"[{"service":"mpd","uri":"mnt/USB/a.flac","title":"A"},{"service":"mpd","uri":"mnt/USB/gone.flac","title":"Gone"},{"service":"mpd","uri":"mnt/USB/a.flac","title":"A again"}]"#;
+        std::fs::write(places.playlists.join("Mix"), text).unwrap();
+        std::fs::write(places.favourites.join("favourites"), "[]").unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let out = talk(server.port, "GET /api/volumio/lists HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        let lists = r["lists"].as_array().unwrap();
+        assert_eq!(lists.len(), 2);
+        assert_eq!(lists[0]["id"], "playlist:Mix");
+        assert_eq!(lists[0]["items"], 3);
+        assert_eq!(lists[0]["missing"], 1);
+        assert_eq!(lists[0]["duplicates"], 1);
+        assert_eq!(lists[0]["repairable"], true);
+        assert_eq!(lists[1]["id"], "favourites");
+        assert_eq!(lists[1]["repairable"], false);
+        let post = |body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let out = post("{\"kind\":\"volumio_list\",\"name\":\"playlist:none\"}");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = post("{\"kind\":\"volumio_list\",\"name\":\"playlist:Mix\"}");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(p["kind"], "volumio_list");
+        assert_eq!(p["name"], "Mix");
+        assert_eq!(p["list_kind"], "playlist");
+        assert_eq!(p["kept"], 1);
+        assert_eq!(p["items"][1]["action"], "dropped");
+        assert_eq!(p["items"][2]["action"], "dropped");
+        assert_eq!(p["changed"], true);
+        let ids: Vec<&str> = p["repairs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["relocate", "drop", "dedupe"]);
+        let id = p["id"].as_u64().unwrap();
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let a: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert!(a["updated"].is_null(), "nothing for MPD: {a}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(places.playlists.join("Mix")).unwrap())
+                .unwrap();
+        assert_eq!(written.as_array().unwrap().len(), 1);
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(list[0]["kind"], "volumio_list");
+        assert_eq!(
+            list[0]["note"],
+            "Volumio's playlist Mix repaired: relocate, drop, dedupe"
+        );
+        let batch = list[0]["id"].as_str().unwrap().to_string();
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert_eq!(
+            std::fs::read_to_string(places.playlists.join("Mix")).unwrap(),
+            text
+        );
+        // The queue as the page read it from Volumio, checked.
+        let q = r#"{"items":[{"service":"mpd","uri":"mnt/USB/a.flac"},{"service":"mpd","uri":"mnt/USB/gone.flac"},{"service":"webradio","uri":"http://x"},{"service":"mpd","uri":"mnt/USB/a.flac"}]}"#;
+        let out = talk(
+            server.port,
+            &format!(
+                "POST /api/volumio/queue/check HTTP/1.0\r\nContent-Length: {}\r\n\r\n{q}",
+                q.len()
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        let states: Vec<&str> = r["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["ok", "missing", "stream", "duplicate"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
