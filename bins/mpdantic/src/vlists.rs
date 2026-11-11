@@ -491,7 +491,7 @@ pub fn plan(
         applicable.insert("salvage", ());
         fixed.notes.push(msg!(
             "core.vlists.salvaged",
-            "the file was cut short ({problem}); {n} items could be read and are what is written",
+            "the file was cut short ({problem}); {n} {n|item|items} could be read and {n|is|are} what is written",
             problem = read.problem.clone().unwrap_or_else(|| Msg::raw("")),
             n = read.items.len()
         ));

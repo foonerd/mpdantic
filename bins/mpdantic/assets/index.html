@@ -1185,7 +1185,9 @@
       const d = el('div', 'sugg');
       const top = el('div', 'top');
       top.appendChild(el('code', '', code));
-      top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t('page.files', { n: g.count })));
+      // A code raised once per folder counts folders, as the core says; the rest count files.
+      const unit = (r.per_folder || []).indexOf(code) >= 0 ? 'page.count.folders' : 'page.files';
+      top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t(unit, { n: g.count })));
       d.appendChild(top);
       if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
       f.appendChild(d);

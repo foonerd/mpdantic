@@ -8,6 +8,11 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 - Every surface in eleven languages: English, German, Spanish, French, Italian, Japanese, Dutch, Polish, Portuguese, Russian and Chinese. The settings page follows Volumio's language, as every plugin's does. The management pages follow the player's language too: the shell tells the core the language Volumio is set to, at start and whenever it changes, and the core serves the pages with that language's texts built in; `?lang=de` in the address opens them in a language of its own, and a language the pages do not have falls back to English. Every sentence the core writes (a finding, a repair, a note on the Written tab, an error) is a key with its arguments, rendered on the page in the language in hand with that language's plural forms. The player report on the System tab stays in English on purpose, for the maintainers who read it in issues; MPD's own terms stay as MPD writes them.
 
+### Fixed
+
+- Every count on the pages and in the core's sentences takes the singular when it is one ("1 entry could not be read", "1 folder, 4 files"), in every language with that language's forms; a walk's line says the files it met, every file of every kind, since the audio read is said on its own line under it.
+- The tag codes raised once per folder (a disc number missing where the folder looks like a disc, a folder that shows as several albums) count folders, and the page says so; they were labelled as files.
+
 ## [0.1.1] - 2026-11-11
 
 The second test cut, a pre-release as the first: what the first day of testing asked for, on the same two players. Every write is still undoable from the Written tab.

@@ -84,7 +84,7 @@ pub fn not_an_encoding(label: &str) -> Msg {
 pub fn replacement_marks(n: usize, encoding: &str) -> Msg {
     msg!(
         "core.encoding.replacement_marks",
-        "{n} characters could not be read as {encoding}; each shows as a replacement mark",
+        "{n} {n|character|characters} could not be read as {encoding}; {n|it shows|each shows} as a replacement mark",
         n = n,
         encoding = encoding
     )

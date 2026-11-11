@@ -44,12 +44,18 @@ pub struct Report {
     pub by_format: BTreeMap<String, usize>,
     pub findings: BTreeMap<String, Count>,
     pub codes: BTreeMap<String, &'static str>,
+    /// The codes raised once per folder, whose count is folders, not files.
+    pub per_folder: &'static [&'static str],
     pub splits: Vec<Split>,
     pub splits_truncated: bool,
     pub in_force: Vec<InForceLines>,
     pub decoders: DecoderNote,
     pub cancelled: bool,
 }
+
+/// The codes a folder raises once, however many files it holds: the disc number
+/// (T05) and the split (T06) are judged per folder, so their counts are folders.
+pub const PER_FOLDER: &[&str] = &["T05", "T06"];
 
 /// What each code means, for the page.
 pub fn code_text(code: &str) -> &'static str {
@@ -118,6 +124,7 @@ pub fn check(
         by_format: BTreeMap::new(),
         findings: BTreeMap::new(),
         codes: BTreeMap::new(),
+        per_folder: PER_FOLDER,
         splits: Vec::new(),
         splits_truncated: false,
         in_force: start.in_force_lines(),
@@ -253,7 +260,7 @@ fn directory(
             "T05",
             msg!(
                 "core.tagcheck.no_disc",
-                "{dir}: {n} files, no disc number",
+                "{dir}: {n} {n|file|files}, no disc number",
                 dir = dir_of(visit),
                 n = without_disc
             ),
@@ -264,7 +271,7 @@ fn directory(
             "T05",
             msg!(
                 "core.tagcheck.disc_mixed",
-                "{dir}: {with} files with a disc number, {without} without",
+                "{dir}: {with} {with|file|files} with a disc number, {without} without",
                 dir = dir_of(visit),
                 with = with_disc,
                 without = without_disc
@@ -277,7 +284,7 @@ fn directory(
             "T06",
             msg!(
                 "core.tagcheck.split",
-                "{dir}: {albums} albums, {artists} album artists in {files} files",
+                "{dir}: {albums} {albums|album|albums}, {artists} album {artists|artist|artists} in {files} {files|file|files}",
                 dir = dir_of(visit),
                 albums = albums.len(),
                 artists = album_artists.len(),
