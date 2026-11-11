@@ -124,6 +124,16 @@
   .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   button.primary:hover { border-color: var(--text); }
+  button.undo { background: var(--warn); color: #fff; border-color: var(--warn); }
+  button.undo:hover { border-color: var(--text); }
+  .stack > .panel + .panel { margin-top: 14px; }
+  .field { margin-top: 8px; }
+  .field textarea { display: block; width: 100%; box-sizing: border-box; min-width: 0; }
+  button.undo { background: var(--warn); color: #fff; border-color: var(--warn); }
+  button.undo:hover { border-color: var(--text); }
+  .stack > .panel + .panel { margin-top: 14px; }
+  .field { margin-top: 8px; }
+  .field textarea { display: block; width: 100%; box-sizing: border-box; min-width: 0; }
   .help.bad, .done.bad { color: var(--danger); }
   .done { margin-top: 10px; font-size: 14px; }
 </style>
@@ -173,10 +183,10 @@
       <div class="write">
         <b>The .mpdignore of this folder</b>
         <div class="help">The file as it is, one pattern per line; edit it here: type a line, remove one, tick a suggestion above. An empty field removes the file. Preview shows the lines added, removed and kept before anything is written, and every write can be undone from the Written tab. A line in force from a folder above is edited in that folder: the names under "Lines in force" open it.</div>
-        <div class="line">
+        <div class="field">
           <textarea id="lines" rows="3" placeholder="one pattern per line, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off"></textarea>
-          <button id="preview-ignore">Preview</button>
         </div>
+        <div class="actions"><button id="preview-ignore">Preview</button></div>
         <div id="preview-box"></div>
       </div>
     </div>
@@ -237,20 +247,28 @@
     </div>
   </div>
 
-  <div class="panel" id="panel-volumio" hidden>
-    <div class="head">
-      <b>Volumio's own lists</b>
-      <span class="sub">Volumio's playlists, favourites, radio favourites and web radios as it keeps them, each item checked against the library; and the queue as it plays now. A list simply messed up is repaired: an item whose file is gone found again by its name and folders or dropped, a uri in twice kept once, an item without a uri dropped, a file cut short written back with what could be read.</span>
-      <span class="grow"></span>
-      <button id="read-volumio">Read the lists</button>
+  <div class="stack" id="panel-volumio" hidden>
+    <div class="panel">
+      <div class="head">
+        <b>Volumio's own lists</b>
+        <span class="sub">Volumio's playlists, favourites, radio favourites and web radios as it keeps them, each item checked against the library. A list simply messed up is repaired: an item whose file is gone found again by its name and folders or dropped, a uri in twice kept once, an item without a uri dropped, a file cut short written back with what could be read.</span>
+        <span class="grow"></span>
+        <button id="read-volumio">Read the lists</button>
+      </div>
+      <div class="body">
+        <div class="progress" id="progress-volumio">Not read yet.</div>
+        <div id="report-volumio"></div>
+      </div>
     </div>
-    <div class="body">
-      <div class="progress" id="progress-volumio">Not read yet.</div>
-      <div id="report-volumio"></div>
-      <div class="write">
+    <div class="panel">
+      <div class="head">
         <b>The queue</b>
-        <div class="help">What Volumio plays now, read from the player itself and checked here. An item whose file is gone can be taken out of the queue through Volumio's own queue, as its page would; that is live state, not a file, so there is no undo for it.</div>
-        <div class="line"><button id="read-queue">Read the queue</button><span class="help" id="queue-note"></span></div>
+        <span class="sub">What Volumio plays now, read from the player itself and checked here. An item whose file is gone can be taken out through Volumio's own queue, as its page would; that is live state, not a file, so there is no undo for it.</span>
+        <span class="grow"></span>
+        <button id="read-queue">Read the queue</button>
+      </div>
+      <div class="body">
+        <div class="progress" id="queue-note">Not read yet.</div>
         <div id="queue-box"></div>
       </div>
     </div>
@@ -270,12 +288,14 @@
   <div class="panel" id="panel-system" hidden>
     <div class="head">
       <b>System</b>
-      <span class="sub">This player, as one block for an issue: what it is, and how its library sits against MPD's output buffer. It names no share, path or credential, only counts.</span>
+      <span class="sub">This player, as one block for an issue: what it is, and how its library sits against MPD's output buffer. It names no share, path or credential, only counts. The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds.</span>
+      <span class="grow"></span>
+      <button id="measure">Measure the album query</button>
     </div>
     <div class="body system">
       <textarea id="report" rows="9" readonly spellcheck="false">Reading...</textarea>
-      <div class="actions"><button id="copy">Copy</button><button id="measure">Measure the album query</button><span class="help" id="report-note"></span></div>
-      <div class="help">The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds. Paste the block into an issue on GitHub (the About tab has the link).</div>
+      <div class="actions"><button class="small" id="copy">Copy</button><span class="help" id="report-note"></span></div>
+      <div class="help">Paste the block into an issue on GitHub; the About tab has the link.</div>
     </div>
   </div>
 </div>
@@ -1534,7 +1554,8 @@
       top.appendChild(el('span', 'tag' + (b.undone ? '' : ' ok'), b.undone ? 'undone' : 'in place'));
       top.appendChild(el('span', '', when(b.when) + ': ' + b.note));
       if (!b.undone) {
-        const u = el('button', '', 'Undo');
+        top.appendChild(el('span', 'grow'));
+        const u = el('button', 'undo', 'Undo');
         u.addEventListener('click', () => undoBatch(b.id, row, u));
         top.appendChild(u);
       }
