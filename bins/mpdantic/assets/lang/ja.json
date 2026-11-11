@@ -310,6 +310,8 @@
   "page.findings.restore": "戻す",
   "page.findings.dismissed": "却下済み",
   "page.findings.close_confirm": "プレビューが開いていますが、まだ何も書き込まれていません。指摘の画面を離れますか?",
+  "page.findings.stay": "残る",
+  "page.findings.leave": "離れる",
   "page.undo.sub": "MPDantic が行ったすべての書き込みを、新しい順に表示します。取り消すとファイルは元の状態に戻ります (その後に他から変更されていない場合)。その後、MPD にフォルダーの更新を指示します。",
   "page.undo.nothing": "まだ何も書き込んでいません。",
   "page.undo.undone": "取り消し済み",

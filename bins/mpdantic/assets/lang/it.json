@@ -310,6 +310,8 @@
   "page.findings.restore": "Ripristina",
   "page.findings.dismissed": "scartato",
   "page.findings.close_confirm": "Un'anteprima è aperta e nulla è stato scritto. Lasciare i rilievi?",
+  "page.findings.stay": "Resta",
+  "page.findings.leave": "Esci",
   "page.undo.sub": "Ogni scrittura fatta da MPDantic, la più recente per prima. Un annullamento rimette il file com'era, quando nient'altro l'ha cambiato da allora; a MPD viene poi detto di aggiornare la cartella.",
   "page.undo.nothing": "Niente di scritto per ora.",
   "page.undo.undone": "annullato",

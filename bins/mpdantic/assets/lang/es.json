@@ -310,6 +310,8 @@
   "page.findings.restore": "Recuperar",
   "page.findings.dismissed": "descartado",
   "page.findings.close_confirm": "Hay una vista previa abierta y no se ha escrito nada. ¿Salir de los hallazgos?",
+  "page.findings.stay": "Quedarse",
+  "page.findings.leave": "Salir",
   "page.undo.sub": "Cada escritura que hizo MPDantic, la más reciente primero. Un deshacer devuelve el archivo a como estaba, cuando nada más lo ha cambiado desde entonces; después se pide a MPD que actualice la carpeta.",
   "page.undo.nothing": "Nada escrito todavía.",
   "page.undo.undone": "deshecho",

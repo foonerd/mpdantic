@@ -310,6 +310,8 @@
   "page.findings.restore": "Repor",
   "page.findings.dismissed": "descartado",
   "page.findings.close_confirm": "Há uma pré-visualização aberta e nada foi escrito. Sair dos achados?",
+  "page.findings.stay": "Ficar",
+  "page.findings.leave": "Sair",
   "page.undo.sub": "Cada escrita que o MPDantic fez, a mais recente primeiro. Uma anulação repõe o ficheiro como estava, quando nada mais o alterou desde então; o MPD é depois instruído a atualizar a pasta.",
   "page.undo.nothing": "Nada escrito ainda.",
   "page.undo.undone": "anulado",

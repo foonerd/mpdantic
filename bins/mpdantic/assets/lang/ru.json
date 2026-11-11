@@ -310,6 +310,8 @@
   "page.findings.restore": "Вернуть",
   "page.findings.dismissed": "отклонено",
   "page.findings.close_confirm": "Открыт предпросмотр, и ничего не записано. Покинуть замечания?",
+  "page.findings.stay": "Остаться",
+  "page.findings.leave": "Выйти",
   "page.undo.sub": "Каждая запись, сделанная MPDantic, новейшие первыми. Отмена возвращает файл таким, каким он был, если ничто другое его с тех пор не изменило; затем MPD получает команду обновить папку.",
   "page.undo.nothing": "Пока ничего не записано.",
   "page.undo.undone": "отменено",

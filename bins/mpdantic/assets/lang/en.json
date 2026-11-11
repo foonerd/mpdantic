@@ -310,6 +310,8 @@
   "page.findings.restore": "Restore",
   "page.findings.dismissed": "dismissed",
   "page.findings.close_confirm": "A preview is open and nothing has been written. Leave the findings?",
+  "page.findings.stay": "Stay",
+  "page.findings.leave": "Leave",
   "page.undo.sub": "Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.",
   "page.undo.nothing": "Nothing written yet.",
   "page.undo.undone": "undone",

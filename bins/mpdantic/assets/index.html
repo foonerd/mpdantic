@@ -162,6 +162,12 @@
   .frow.dismissed { opacity: .6; }
   .frow .file { font-weight: 600; overflow-wrap: anywhere; }
   .frow .text { flex: 1; min-width: 12em; overflow-wrap: anywhere; }
+  /* The one question the view asks, in the page's own style: closed by its two
+     buttons alone, never by a click beside it. */
+  .dialog { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .dialog .card { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; max-width: 440px; width: 100%; box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
+  .dialog .text { font-size: 15px; line-height: 1.45; }
+  .dialog .actions { justify-content: flex-end; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -347,6 +353,12 @@
     </div>
     <div class="list" id="fx-folders"></div>
     <div class="foot"><span id="fx-shown"></span><span class="grow"></span><button id="fx-more" hidden data-i18n="page.more">More</button></div>
+  </div>
+  <div class="dialog" id="fx-dialog" hidden>
+    <div class="card" role="dialog" aria-modal="true">
+      <div class="text" data-i18n="page.findings.close_confirm">A preview is open and nothing has been written. Leave the findings?</div>
+      <div class="actions"><button class="primary" id="fx-stay" data-i18n="page.findings.stay">Stay</button><button id="fx-leave" data-i18n="page.findings.leave">Leave</button></div>
+    </div>
   </div>
 </section>
 <script>
@@ -1330,7 +1342,7 @@
   // first. The position is kept per kind, so a Close costs nothing.
   const FX_KINDS = { cue: 'page.tab.cue', tags: 'page.tab.tags', playlists: 'page.tab.playlists' };
   const FX_PAGE = 50;
-  const fx = { kind: null, filter: { codes: [], dismissed: false }, offset: 0, total: 0, overview: null };
+  const fx = { kind: null, filter: { codes: [], dismissed: false }, offset: 0, total: 0, overview: null, after: null };
 
   const fxKey = (kind) => 'mpdantic.findings.' + kind;
   function fxSaved(kind) {
@@ -1379,14 +1391,16 @@
     });
   }
 
-  // Close, or the browser's back (`popped`): a preview still open asks first, and a
-  // no puts the state back so the next back asks again.
+  // Close, or the browser's back (`popped`): a preview still open asks first, in
+  // the page's own dialog; Stay puts the state back so the next back asks again.
   function closeFindings(popped) {
     if (!fx.kind) return;
-    if (document.querySelector('#findings .preview') && !window.confirm(t('page.findings.close_confirm'))) {
-      if (popped) history.pushState({ findings: fx.kind }, '');
-      return;
-    }
+    if (document.querySelector('#findings .preview')) fxAsk(popped); else fxLeave(popped);
+  }
+
+  function fxLeave(popped) {
+    const after = fx.after;
+    fx.after = null;
     fxSave();
     fx.kind = null;
     $('findings').hidden = true;
@@ -1394,6 +1408,29 @@
     document.body.classList.remove('working');
     if (!popped && history.state && history.state.findings) history.back();
     loadOverviews();
+    if (after) after();
+  }
+
+  // The question: closed by Stay or Leave alone; Escape is Stay, the safe answer.
+  function fxAsk(popped) {
+    const d = $('fx-dialog');
+    const done = (leave) => {
+      d.hidden = true;
+      $('fx-stay').onclick = null;
+      $('fx-leave').onclick = null;
+      d.onkeydown = null;
+      if (leave) {
+        fxLeave(popped);
+      } else {
+        fx.after = null;
+        if (popped) history.pushState({ findings: fx.kind }, '');
+      }
+    };
+    $('fx-stay').onclick = () => done(false);
+    $('fx-leave').onclick = () => done(true);
+    d.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(false); } };
+    d.hidden = false;
+    $('fx-stay').focus();
   }
   window.addEventListener('popstate', () => { if (fx.kind) closeFindings(true); });
   $('fx-close').addEventListener('click', () => closeFindings(false));
@@ -1579,10 +1616,8 @@
   // folder loaded.
   function leaveTo(folder) {
     const kind = fx.kind;
+    fx.after = () => { showTab(kind); location.hash = toHash(folder); };
     closeFindings(false);
-    if (fx.kind) return;
-    showTab(kind);
-    location.hash = toHash(folder);
   }
 
   // After a write or an undo the core checked the folder again: its card follows.

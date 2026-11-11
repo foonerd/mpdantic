@@ -310,6 +310,8 @@
   "page.findings.restore": "Rétablir",
   "page.findings.dismissed": "écarté",
   "page.findings.close_confirm": "Un aperçu est ouvert et rien n'a été écrit. Quitter les constats ?",
+  "page.findings.stay": "Rester",
+  "page.findings.leave": "Quitter",
   "page.undo.sub": "Chaque écriture faite par MPDantic, la plus récente d'abord. Une annulation remet le fichier tel qu'il était, quand rien d'autre ne l'a changé depuis ; MPD est ensuite invité à mettre à jour le dossier.",
   "page.undo.nothing": "Rien d'écrit pour l'instant.",
   "page.undo.undone": "annulé",

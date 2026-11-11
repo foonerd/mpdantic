@@ -310,6 +310,8 @@
   "page.findings.restore": "恢复",
   "page.findings.dismissed": "已忽略",
   "page.findings.close_confirm": "有一个预览已打开，尚未写入任何内容。要离开问题列表吗？",
+  "page.findings.stay": "留下",
+  "page.findings.leave": "离开",
   "page.undo.sub": "MPDantic 做过的每次写入，最新的在前。撤销会把文件恢复为原来的样子（前提是此后没有其他程序改动过）；之后会通知 MPD 更新该文件夹。",
   "page.undo.nothing": "尚未写入任何内容。",
   "page.undo.undone": "已撤销",

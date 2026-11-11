@@ -310,6 +310,8 @@
   "page.findings.restore": "Terughalen",
   "page.findings.dismissed": "afgewezen",
   "page.findings.close_confirm": "Er staat een voorvertoning open en er is niets geschreven. De bevindingen verlaten?",
+  "page.findings.stay": "Blijven",
+  "page.findings.leave": "Verlaten",
   "page.undo.sub": "Elke schrijfactie die MPDantic deed, nieuwste eerst. Een ongedaan maken zet het bestand terug zoals het was, wanneer niets anders het sindsdien heeft gewijzigd; MPD wordt daarna gevraagd de map bij te werken.",
   "page.undo.nothing": "Nog niets geschreven.",
   "page.undo.undone": "ongedaan",

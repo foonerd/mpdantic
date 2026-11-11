@@ -310,6 +310,8 @@
   "page.findings.restore": "Przywróć",
   "page.findings.dismissed": "odrzucona",
   "page.findings.close_confirm": "Podgląd jest otwarty i nic nie zostało zapisane. Opuścić uwagi?",
+  "page.findings.stay": "Zostań",
+  "page.findings.leave": "Opuść",
   "page.undo.sub": "Każdy zapis wykonany przez MPDantic, najnowszy pierwszy. Cofnięcie przywraca plik takim, jaki był, o ile nic innego go od tego czasu nie zmieniło; potem MPD dostaje polecenie aktualizacji folderu.",
   "page.undo.nothing": "Jeszcze nic nie zapisano.",
   "page.undo.undone": "cofnięte",
