@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::classify::{self, Class, Rules};
+use crate::classify;
 use crate::library::Library;
 use crate::mpd::Decoders;
 use crate::plfix::{self, Index};
@@ -203,14 +203,15 @@ pub fn state_of(music: &Path, item: &serde_json::Value, decoders: &Decoders) -> 
     if !full.is_file() {
         return "missing";
     }
-    let rules = Rules::new();
-    let name = full
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    match classify::classify(&rules, &name, false, decoders).0 {
-        Class::Audio => "ok",
-        _ => "not_decoded",
+    // Claimed by any of MPD's decoders, as the playlist check judges an entry: a
+    // video container the ffmpeg decoder claims plays (Glass plays it), so it is found.
+    let claimed = classify::suffix(&path)
+        .map(|s| decoders.suffixes.contains(&s))
+        .unwrap_or(false);
+    if claimed {
+        "ok"
+    } else {
+        "not_decoded"
     }
 }
 
@@ -512,7 +513,11 @@ pub mod tests {
     use crate::mpd;
 
     fn decoders() -> Decoders {
-        mpd::tests::decoders_of(&[("flac", &["flac"]), ("mad", &["mp3"])])
+        mpd::tests::decoders_of(&[
+            ("flac", &["flac"]),
+            ("mad", &["mp3"]),
+            ("ffmpeg", &["mp4", "mkv"]),
+        ])
     }
 
     fn places(root: &Path) -> Places {
@@ -558,6 +563,7 @@ pub mod tests {
         fs::create_dir_all(root.join("INTERNAL/Jazz/Live")).unwrap();
         fs::write(root.join("INTERNAL/Jazz/Live/01.flac"), b"x").unwrap();
         fs::write(root.join("INTERNAL/Jazz/Live/notes.txt"), b"x").unwrap();
+        fs::write(root.join("INTERNAL/Jazz/Live/S1.E01.mp4"), b"x").unwrap();
         let text = concat!(
             r#"[{"service":"mpd","uri":"mnt/INTERNAL/Jazz/Live/01.flac","title":"One"},"#,
             r#"{"service":"mpd","uri":"mnt/INTERNAL/Old/Live/01.flac","title":"Moved"},"#,
@@ -568,12 +574,13 @@ pub mod tests {
             r#"{"service":"spotify","uri":"spotify:track:1","title":"Spotify"},"#,
             r#"{"title":"Broken"},"#,
             r#"{"service":"mpd","uri":"mnt/INTERNAL/Jazz/Live/01.flac","title":"One again"},"#,
-            r#"{"service":"mpd","uri":"mnt/INTERNAL/Jazz","title":"A folder"}]"#
+            r#"{"service":"mpd","uri":"mnt/INTERNAL/Jazz","title":"A folder"},"#,
+            r#"{"service":"mpd","uri":"mnt/INTERNAL/Jazz/Live/S1.E01.mp4","title":"An episode Glass plays"}]"#
         );
         fs::write(p.playlists.join("Mix"), text).unwrap();
         let list = by_id(&p, "playlist:Mix").unwrap();
         let r = check(&root, &decoders(), &list);
-        assert_eq!(r.items, 10);
+        assert_eq!(r.items, 11);
         let states: Vec<&str> = r.list.iter().map(|s| s.state).collect();
         assert_eq!(
             states,
@@ -587,8 +594,10 @@ pub mod tests {
                 "other_service",
                 "broken",
                 "duplicate",
+                "ok",
                 "ok"
-            ]
+            ],
+            "a video container the ffmpeg decoder claims is found"
         );
         assert_eq!(
             (
@@ -601,7 +610,7 @@ pub mod tests {
                 r.broken,
                 r.duplicates
             ),
-            (2, 2, 1, 1, 1, 1, 1, 1)
+            (3, 2, 1, 1, 1, 1, 1, 1)
         );
         assert!(r.repairable);
         assert_eq!(r.list[1].title, "Moved");
@@ -631,12 +640,12 @@ pub mod tests {
         assert_eq!(actions[7], ("dropped", "no uri or no service"));
         assert_eq!(actions[8], ("dropped", "the same uri again"));
         assert_eq!(actions[9], ("kept", ""));
-        assert_eq!(f.kept, 6);
+        assert_eq!(f.kept, 7);
         assert!(f.changed);
         let ids: Vec<&str> = f.repairs.iter().map(|r| r.id).collect();
         assert_eq!(ids, ["relocate", "drop", "dedupe"]);
         let after: serde_json::Value = serde_json::from_str(&f.after).unwrap();
-        assert_eq!(after.as_array().unwrap().len(), 6);
+        assert_eq!(after.as_array().unwrap().len(), 7);
         assert_eq!(after[1]["uri"], "mnt/INTERNAL/Jazz/Live/01.flac");
         assert_eq!(after[1]["title"], "Moved", "the rest of the item kept");
         assert!(!f.after.contains('\n'), "compact, as Volumio writes it");
@@ -650,11 +659,11 @@ pub mod tests {
         )
         .unwrap();
         assert_eq!(f.changes[1].action, "dropped");
-        assert_eq!(f.kept, 5);
+        assert_eq!(f.kept, 6);
         // Nothing chosen: everything kept, nothing to write.
         let f = plan(&root, &decoders(), &list, text.as_bytes(), Some(&[])).unwrap();
         assert!(!f.changed);
-        assert_eq!(f.kept, 10);
+        assert_eq!(f.kept, 11);
         // A cut file: written back with what could be read, when salvage is on.
         let cut = &text[..text.len() - 40];
         let f = plan(&root, &decoders(), &list, cut.as_bytes(), None).unwrap();
