@@ -57,6 +57,13 @@
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .panel { margin-top: 12px; }
   .panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  /* The head's controls always sit on a line of their own, at the right: the spacer
+     breaks the line unconditionally, and the first control after it carries the
+     auto margin that pushes the group to the edge. A spacer that only grows lands on
+     whichever line the sub text leaves room on, and the buttons then sit left on one
+     tab and right on another, by the text's length. */
+  .panel .head .grow { flex: 0 0 100%; height: 0; margin-top: -10px; }
+  .panel .head .grow + * { margin-left: auto; }
   .panel .head b { font-size: 15px; }
   .panel .head .sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
   .panel .body { padding: 10px 12px 14px; }
