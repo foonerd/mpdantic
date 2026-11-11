@@ -542,7 +542,10 @@ mod tests {
         assert_eq!((r.shares_cifs, r.shares_nfs, r.shares_other), (1, 1, 0));
         let text = &r.text;
         assert!(
-            text.starts_with("MPDantic 0.1.0 (13c4555) on hanger, "),
+            text.starts_with(&format!(
+                "MPDantic {} (13c4555) on hanger, ",
+                crate::VERSION
+            )),
             "{text}"
         );
         assert!(

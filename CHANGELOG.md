@@ -4,6 +4,12 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.1] - 2026-11-11
+
+The second test cut, a pre-release as the first: what the first day of testing asked for, on the same two players. Every write is still undoable from the Written tab.
+
 ### Added
 
 - The buttons organised by role on every tab: a panel's head carries, on the right, the one read-only job over the folder or the library (the queue and the album query measurement moved there, each in a panel of its own); a block's buttons sit under its text on the left and change nothing (the Ignore tab's Preview moved under its field); a commit is green with a grey Cancel beside it; an undo is amber, at the end of its line.

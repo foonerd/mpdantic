@@ -1,6 +1,6 @@
 {
   "name": "mpdantic",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Audits and repairs a music library for MPD: output buffer sizing by RAM, .mpdignore management, CUE sheet repair, playlist rebasing, tag validation. Rust core, thin Node shell.",
   "main": "index.js",
   "scripts": {
@@ -20,7 +20,7 @@
     "os": ["bookworm"],
     "architectures": ["armhf", "amd64"],
     "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management page.",
-    "changelog": "0.1.0 First test cut: the management pages on the player (Ignore, CUE sheets, Tags, Playlists, Written, About), .mpdignore lines written with suggestions, CUE sheet repairs, tag edits, playlist rebasing and import into Volumio's playlists, every write undoable; MPD's output buffer sized to the player through Volumio's own MPD configuration."
+    "changelog": "0.1.1 Second test cut: the core writes files owned by another user (music copied over the network); MP3s with junk before the first frame written; the tag editor file by file; the Volumio tab checking and repairing Volumio's playlists, favourites and queue; the ignore file edited by hand; the player report on a System tab; the buttons organised by role; third-party notices in the zip."
   },
   "dependencies": {
     "kew": "^0.7.0",
