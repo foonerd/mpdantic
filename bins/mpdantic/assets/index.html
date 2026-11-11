@@ -165,8 +165,10 @@
   .frow.dismissed { opacity: .6; }
   .frow .file { font-weight: 600; overflow-wrap: anywhere; }
   .frow .text { flex: 1; min-width: 12em; overflow-wrap: anywhere; }
-  .fxeditor { margin-top: 10px; }
-  .fxeditor .line { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .fxeditor, .fxnamer { margin-top: 10px; }
+  .fxeditor .line, .fxnamer .line { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  input.pattern { width: 16em; padding: 4px 8px; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+  input.pattern:focus { outline: none; border-color: var(--accent); }
   /* The one question the view asks, in the page's own style: closed by its two
      buttons alone, never by a click beside it. */
   .dialog { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -268,6 +270,12 @@
         <div class="line"><button id="open-editor" data-i18n="page.tags.open_editor">Open the editor</button><span class="help" id="edit-count"></span><button id="preview-edits" disabled data-i18n="page.preview">Preview</button></div>
         <div id="editor-box"></div>
         <div id="preview-edits-box"></div>
+      </div>
+      <div class="write">
+        <b data-i18n="page.names.title">File names and tags</b>
+        <div class="help" data-i18n="page.names.help">One pattern, either way: the files named from their tags, or the tags read from the file names. The placeholders are the fields of the grid; the text between them is taken as it is. A name is made safe for a share: slashes, colons and the characters Windows refuses become underscores. A sheet or a playlist in the folder that names a renamed file is rewritten with it. Nothing is written before the preview and Write; the undo gives the names back.</div>
+        <div id="names-box"></div>
+        <div id="names-preview-box"></div>
       </div>
     </div>
   </div>
@@ -895,6 +903,52 @@
   // The Tags tab's editor, on the folder in hand.
   const tabEditor = makeEditor({ box: $('editor-box'), count: $('edit-count'), preview: $('preview-edits'), previewBox: $('preview-edits-box') });
   $('open-editor').addEventListener('click', () => tabEditor.open(current.path, false));
+
+  // ----------------------------------------------------- file names and tags
+
+  // One pattern, either way: the files named from their tags (the rename kind), or
+  // the tags read from the names (the tagedit kind with the pattern). The form is
+  // made on its own nodes, the Tags tab's and a findings card's alike; the folder is
+  // asked for at Preview.
+  function makeNamer(nodes, folderOf) {
+    const form = el('div', 'line');
+    const which = el('label', 'pref', t('page.names.direction') + ' ');
+    const direction = el('select');
+    [['rename', 'page.names.to_names'], ['tagedit', 'page.names.to_tags']].forEach(([value, key]) => {
+      const o = el('option', '', t(key));
+      o.value = value;
+      direction.appendChild(o);
+    });
+    which.appendChild(direction);
+    const how = el('label', 'pref', t('page.names.pattern') + ' ');
+    const pattern = el('input', 'pattern');
+    pattern.type = 'text';
+    pattern.value = '{track} {title}';
+    pattern.spellcheck = false;
+    how.appendChild(pattern);
+    const preview = el('button', '', t('page.preview'));
+    form.appendChild(which);
+    form.appendChild(how);
+    form.appendChild(preview);
+    nodes.box.appendChild(form);
+    nodes.box.appendChild(el('div', 'help', t('page.names.fields', { fields: EDIT_FIELDS.map((f) => '{' + f + '}').join(' ') })));
+    // Each click is a fresh preview, so the direction or the pattern can change
+    // while a card is open; the card follows.
+    preview.addEventListener('click', () => {
+      const body = { kind: direction.value, path: folderOf(), pattern: pattern.value };
+      const again = async () => {
+        try {
+          const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
+          renderPreview(p, nodes.previewBox, again, null);
+        } catch (e) {
+          nodes.previewBox.textContent = '';
+          nodes.previewBox.appendChild(el('div', 'help bad', String(e.message || e)));
+        }
+      };
+      again();
+    });
+  }
+  makeNamer({ box: $('names-box'), previewBox: $('names-preview-box') }, () => current.path);
 
   // ------------------------------------------------------------ the system tab
 
@@ -1607,6 +1661,9 @@
       const edit = el('button', '', t('page.findings.edit'));
       edit.addEventListener('click', () => { edit.disabled = true; fxEditor(card, inner, folder, edit); });
       actions.appendChild(edit);
+      const names = el('button', '', t('page.names.open'));
+      names.addEventListener('click', () => { names.disabled = true; fxNamer(card, inner, folder); });
+      actions.appendChild(names);
     } else {
       const codes = fx.kind === 'cue' ? REPAIRABLE : REPAIRABLE_LISTS;
       Array.from(new Set(rows.filter((r) => !r.dismissed).map((r) => r.path))).forEach((path) => {
@@ -1655,6 +1712,20 @@
       card.fxEditor = makeEditor({ box, count, preview, previewBox });
     }
     card.fxEditor.open(folder, false).then(() => { button.disabled = false; });
+  }
+
+  // The names form mounted in a folder's card, once; kept across the card's
+  // re-render after a write like the editor.
+  function fxNamer(card, inner, folder) {
+    if (card.fxNamer) return;
+    const wrap = el('div', 'fxnamer');
+    const box = el('div');
+    const previewBox = el('div');
+    wrap.appendChild(box);
+    wrap.appendChild(previewBox);
+    inner.appendChild(wrap);
+    makeNamer({ box, previewBox }, () => folder);
+    card.fxNamer = true;
   }
 
   // Leaving for a folder on the page: the view closed, the kind's tab shown, the
@@ -1822,6 +1893,10 @@
       label.appendChild(input);
       row.appendChild(label);
       card.appendChild(row);
+    } else if (p.kind === 'rename') {
+      top.appendChild(el('b', '', t('page.preview.rename_files', { folder: theLibrary(p.path) })));
+      top.appendChild(el('span', 'help', p.place === 'local' ? t('page.preview.local') : t('page.preview.on_share', { share: p.share || '', folder: p.share_folder || '/' })));
+      card.appendChild(top);
     } else {
       top.appendChild(el('b', '', p.op === 'remove' ? t('page.preview.remove_file', { file: p.file }) : p.exists ? t('page.preview.change_file', { file: p.file }) : t('page.preview.create_file', { file: p.file })));
       top.appendChild(el('span', 'help', p.place === 'local' ? t('page.preview.local') : t('page.preview.on_share', { share: p.share || '', folder: p.share_folder || '/' })));
@@ -1943,6 +2018,43 @@
       });
       card.appendChild(list);
     }
+    if (p.kind === 'rename') {
+      // Each file as it is and as it would be named, or why it is left; then the
+      // sheets and playlists that follow, each as it would be.
+      const renames = p.renames || [];
+      const moving = renames.filter((r) => r.to);
+      card.appendChild(el('div', 'help', t('page.preview.renames', { n: moving.length, total: renames.length })));
+      const list = el('div', 'files');
+      renames.forEach((r) => {
+        const row = el('div', 'sugg');
+        const line = el('div', 'top');
+        line.appendChild(el('code', '', r.name));
+        if (r.to) {
+          line.appendChild(text('  ->  '));
+          line.appendChild(el('code', '', r.to));
+        } else if (r.note) {
+          line.appendChild(el('span', 'help', tm(r.note)));
+        }
+        row.appendChild(line);
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+      const refs = p.refs || [];
+      if (refs.length) {
+        card.appendChild(el('div', 'help', t('page.preview.refs', { n: refs.length })));
+        const following = el('div', 'files');
+        refs.forEach((r) => {
+          const row = el('div', 'sugg');
+          const line = el('div', 'top');
+          line.appendChild(el('code', '', r.file.split('/').pop()));
+          line.appendChild(el('span', 'help', r.note ? tm(r.note) : t('page.preview.ref_lines', { n: r.lines })));
+          row.appendChild(line);
+          if (!r.note) row.appendChild(el('pre', 'file', r.after));
+          following.appendChild(row);
+        });
+        card.appendChild(following);
+      }
+    }
     (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', tm(n))));
     if (p.kind === 'playlist' && p.entries && p.entries.length) {
       const changed = p.entries.filter((e) => e.after).length;
@@ -2010,7 +2122,7 @@
       card.appendChild(el('pre', 'file', p.after || t('page.preview.empty')));
     } else if (p.kind === 'tags') {
       card.appendChild(el('div', 'help', t('page.preview.tags_help')));
-    } else {
+    } else if (p.kind !== 'rename') {
       if ((p.kind === 'cue' || p.kind === 'playlist') && p.exists) {
         card.appendChild(el('div', 'help', t('page.preview.as_is')));
         card.appendChild(el('pre', 'file', p.before));
@@ -2030,6 +2142,7 @@
       : p.kind === 'volumio_playlist' ? t('page.write.write_volumio_playlist')
       : p.kind === 'volumio_list' ? t('page.write.write_list')
       : p.kind === 'tags' ? t('page.write.write_files', { n: changing })
+      : p.kind === 'rename' ? t('page.write.rename_files', { n: (p.renames || []).filter((r) => r.to).length })
       : p.op === 'remove' ? t('page.write.remove_mpdignore')
       : (p.changed ? t('page.write.write_mpdignore') : t('page.write.nothing_to_change'));
     const write = el('button', 'primary', p.changed ? label : t('page.write.nothing_to_write'));
@@ -2061,8 +2174,8 @@
     try {
       const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
       box.textContent = '';
-      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : 'written', p.kind));
-      if (p.kind === 'cue' || p.kind === 'playlist') {
+      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : p.kind === 'rename' ? 'renamed' : 'written', p.kind));
+      if (p.kind === 'cue' || p.kind === 'playlist' || p.kind === 'rename') {
         box.appendChild(el('div', 'help', t('page.after.check_again')));
       } else if (p.kind === 'tags') {
         box.appendChild(el('div', 'help', t('page.after.tags_written', { n: a.count })));
@@ -2072,9 +2185,9 @@
       } else {
         box.appendChild(el('div', 'help', t('page.after.undo_tab')));
       }
-      // The core checked the folder again for the findings view, which follows
-      // with the outcome left in place to read.
-      if (a.findings) fxFolderUpdated(a.findings);
+      // The core checked the folder again for the findings view, per kind the
+      // write touched, which follows with the outcome left in place to read.
+      (a.findings || []).forEach(fxFolderUpdated);
       if (closed) closed();
       loadUndo();
     } catch (e) {
@@ -2113,7 +2226,7 @@
     const note = $('undo-note');
     try {
       const a = await api('/api/undo/' + encodeURIComponent(id), { method: 'POST' });
-      if (a.findings) fxFolderUpdated(a.findings);
+      (a.findings || []).forEach(fxFolderUpdated);
       note.textContent = '';
       note.appendChild(outcome(a, 'undone'));
       note.hidden = false;

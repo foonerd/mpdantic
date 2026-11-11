@@ -714,23 +714,29 @@ fn recheck(
     }
 }
 
-/// The kind of store a batch's kind belongs to, if any.
-fn store_kind(batch_kind: &str) -> Option<&'static str> {
+/// The kinds of store a batch's kind touches: a rename moves the paths every
+/// kind's rows name.
+fn store_kinds(batch_kind: &str) -> &'static [&'static str] {
     match batch_kind {
-        "tags" => Some("tags"),
-        "cue" => Some("cue"),
-        "playlist" => Some("playlists"),
-        _ => None,
+        "tags" => &["tags"],
+        "cue" => &["cue"],
+        "playlist" => &["playlists"],
+        "rename" => &["cue", "tags", "playlists"],
+        _ => &[],
     }
 }
 
-/// After a write or an undo in a folder: the folder checked again for the kind and
-/// the store patched, when there is a store of the kind, with the decoders last
-/// read; the folder's rows after, for the page. A failure here is said on stderr
-/// and not to the page, since the write itself is done.
+/// After a write or an undo in a folder: the folder checked again for each kind
+/// the batch touches that has a store, with the decoders last read, and the store
+/// patched; the folder's rows after, per kind, for the page. A failure here is said
+/// on stderr and not to the page, since the write itself is done.
 fn refresh_folder(shared: &Shared, batch_kind: &str, folder: &str) -> Option<serde_json::Value> {
-    let kind = store_kind(batch_kind)?;
-    if !shared.findings.has(kind) {
+    let kinds: Vec<&str> = store_kinds(batch_kind)
+        .iter()
+        .copied()
+        .filter(|k| shared.findings.has(k))
+        .collect();
+    if kinds.is_empty() {
         return None;
     }
     let kept = shared
@@ -739,20 +745,23 @@ fn refresh_folder(shared: &Shared, batch_kind: &str, folder: &str) -> Option<ser
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     let (note, decoders) = kept.unwrap_or_else(|| shared.decoders());
-    let rows = match recheck(shared.library.music(), kind, folder, &decoders, &note) {
-        Ok(rows) => rows,
-        Err(e) => {
-            eprintln!("mpdantic: the {kind} findings of {folder} were not checked again: {e}");
-            return None;
-        }
-    };
-    match shared.findings.patch(kind, folder, rows) {
-        Ok(rows) => Some(serde_json::json!({ "kind": kind, "folder": folder, "rows": rows })),
-        Err(e) => {
-            eprintln!("mpdantic: the {kind} findings of {folder} were not patched: {e}");
-            None
+    let mut out = Vec::new();
+    for kind in kinds {
+        let rows = match recheck(shared.library.music(), kind, folder, &decoders, &note) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("mpdantic: the {kind} findings of {folder} were not checked again: {e}");
+                continue;
+            }
+        };
+        match shared.findings.patch(kind, folder, rows) {
+            Ok(rows) => {
+                out.push(serde_json::json!({ "kind": kind, "folder": folder, "rows": rows }))
+            }
+            Err(e) => eprintln!("mpdantic: the {kind} findings of {folder} were not patched: {e}"),
         }
     }
+    (!out.is_empty()).then_some(serde_json::Value::Array(out))
 }
 
 /// `POST /api/batches` with `{ "kind": "mpdignore", "path": "NAS/Jazz", "lines": [...] }`:
@@ -782,6 +791,7 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         date: request["date"].as_str().map(str::to_string),
         base: request["base"].as_str().map(str::to_string),
         name: request["name"].as_str().map(str::to_string),
+        pattern: request["pattern"].as_str().map(str::to_string),
         edits: request["edits"].as_array().map(|a| {
             a.iter()
                 .filter_map(|e| {
@@ -1390,9 +1400,9 @@ mod tests {
         let out = post(&format!("/api/batches/{id}/apply"), "");
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         let applied = parsed(&out);
-        assert_eq!(applied["findings"]["kind"], "cue");
-        assert_eq!(applied["findings"]["folder"], "USB");
-        let after = applied["findings"]["rows"].as_array().unwrap();
+        assert_eq!(applied["findings"][0]["kind"], "cue");
+        assert_eq!(applied["findings"][0]["folder"], "USB");
+        let after = applied["findings"][0]["rows"].as_array().unwrap();
         assert!(
             after
                 .iter()
@@ -1409,7 +1419,7 @@ mod tests {
         let out = post(&format!("/api/undo/{batch}"), "");
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         let undone = parsed(&out);
-        let back = undone["findings"]["rows"].as_array().unwrap();
+        let back = undone["findings"][0]["rows"].as_array().unwrap();
         assert!(
             back.iter()
                 .any(|r| r["code"] == "C01" && r["dismissed"] == true),

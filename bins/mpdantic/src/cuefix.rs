@@ -105,6 +105,38 @@ pub fn bom_removed() -> Msg {
     )
 }
 
+/// The sheet's `FILE` lines that name a renamed file rewritten to the new name,
+/// quoted, the rest of the line and the line ending as they were: the text as it
+/// would be and the lines changed; none when no line names one.
+pub(crate) fn rename_files(
+    text: &str,
+    renames: &std::collections::BTreeMap<String, String>,
+) -> Option<(String, usize)> {
+    let mut out = String::with_capacity(text.len());
+    let mut changed = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let ending = &line[body.len()..];
+        match file_line(body).and_then(|f| renames.get(&f.name).map(|to| (f, to))) {
+            Some((f, to)) => {
+                out.push_str(&f.indent);
+                out.push_str("FILE \"");
+                out.push_str(to);
+                out.push('"');
+                if let Some(k) = &f.kind {
+                    out.push(' ');
+                    out.push_str(k);
+                }
+                out.push_str(&f.rest);
+                out.push_str(ending);
+                changed += 1;
+            }
+            None => out.push_str(line),
+        }
+    }
+    (changed > 0).then_some((out, changed))
+}
+
 /// What the user chose: the repairs by id (every one but `remove` when not said),
 /// and the encoding to read the sheet as.
 pub struct Choice<'a> {

@@ -36,6 +36,7 @@ mod jobs;
 mod library;
 mod mount;
 mod mpd;
+mod names;
 mod playlist;
 mod plcheck;
 mod plfix;

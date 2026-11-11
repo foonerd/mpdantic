@@ -4,6 +4,7 @@
 //! `.mpdignore` of the folder in hand; `cue`, a sheet's text repaired or the sheet
 //! removed; `tags`, the tags of the folder's audio files edited key by key.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,10 +19,12 @@ use crate::ignore::Pattern;
 use crate::library::Library;
 use crate::mount::{self, Mount, Mounter, Share, Where};
 use crate::mpd::{self, Decoders};
+use crate::names;
 use crate::playlist;
 use crate::plcheck;
 use crate::plfix::{self, EntryChange};
 use crate::plimport::{self, ImportEntry};
+use crate::tagcheck;
 use crate::tagfix::{self, FilePlan, KeyChange, Values};
 use crate::tags;
 use crate::text::{self, Msg, ToArg};
@@ -49,6 +52,33 @@ pub struct Request {
     pub name: Option<String>,
     /// The fields set by hand, file by file (`tagedit`).
     pub edits: Option<Vec<tagfix::Edit>>,
+    /// The pattern the names are made from (`rename`), or the tags read by
+    /// (`tagedit` without edits).
+    pub pattern: Option<String>,
+}
+
+/// One file of a rename: its name, the name it would take, or why it is left.
+#[derive(Serialize, Clone, Debug)]
+pub struct Rename {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<Msg>,
+}
+
+/// A sheet or a playlist of the folder that names a renamed file: as it is and as
+/// it would be, or why it is left.
+#[derive(Serialize, Clone, Debug)]
+pub struct RefChange {
+    pub file: String,
+    pub lines: usize,
+    pub before: String,
+    pub after: String,
+    pub size: u64,
+    pub mtime: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<Msg>,
 }
 
 /// The batch as it would be written, for the page to confirm.
@@ -131,6 +161,12 @@ pub struct Preview {
     pub kept: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_kind: Option<String>,
+    /// The folder's files as they are and as they would be named (`rename`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renames: Vec<Rename>,
+    /// The sheets and playlists of the folder that follow the renames.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<RefChange>,
 }
 
 /// What an apply or an undo did.
@@ -262,6 +298,8 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, placed: Plac
         items: Vec::new(),
         kept: 0,
         list_kind: None,
+        renames: Vec::new(),
+        refs: Vec::new(),
     }
 }
 
@@ -279,6 +317,7 @@ pub fn prepare(
         "cue" => prepare_cue(music, shares, decoders, id, req),
         "tags" => prepare_tags(music, shares, decoders, id, req),
         "tagedit" => prepare_tagedit(music, shares, decoders, id, req),
+        "rename" => prepare_rename(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         "volumio_list" => prepare_volumio_list(music, decoders, volumio_playlists, id, req),
@@ -584,18 +623,293 @@ fn prepare_tagedit(
     if !dir.is_dir() {
         return Err(walk::no_such_folder());
     }
-    let edits = req.edits.as_deref().unwrap_or(&[]);
-    if edits.is_empty() {
+    // The edits as the grid gave them, or read from the file names by the pattern:
+    // a file that does not fit is said and left.
+    let mut refused = Vec::new();
+    let edits: Vec<tagfix::Edit> = match (req.edits.as_deref(), req.pattern.as_deref()) {
+        (Some(edits), _) if !edits.is_empty() => edits.to_vec(),
+        (_, Some(pattern)) => {
+            let pattern = names::Pattern::parse(pattern)?;
+            let mut edits = Vec::new();
+            for file in tagfix::folder_values(&dir, &path, decoders)? {
+                let stem = match classify::suffix(&file.name) {
+                    Some(s) => &file.name[..file.name.len() - s.len() - 1],
+                    None => file.name.as_str(),
+                };
+                match pattern.capture(stem) {
+                    Some(set) if file.writable => edits.push(tagfix::Edit {
+                        name: file.name.clone(),
+                        set,
+                    }),
+                    Some(_) => refused.push((
+                        file.name.clone(),
+                        file.problem.clone().unwrap_or_else(|| {
+                            msg!(
+                                "core.tagfix.format_not_written",
+                                "{format}: not written here",
+                                format = file.format.clone()
+                            )
+                        }),
+                    )),
+                    None => refused.push((
+                        file.name.clone(),
+                        msg!("core.names.no_fit", "does not fit the pattern"),
+                    )),
+                }
+            }
+            edits
+        }
+        _ => Vec::new(),
+    };
+    if edits.is_empty() && refused.is_empty() {
         return Err(msg!("core.write.nothing_edited", "nothing edited"));
     }
     let place = placed(shares, &path)?;
-    let planned = tagfix::plan_edits(&dir, &path, decoders, edits)?;
+    let planned = tagfix::plan_edits(&dir, &path, decoders, &edits)?;
     let mut p = empty(id, "tags", path.clone(), path, "tags", place);
     p.exists = true;
     p.changed = planned.changed;
     p.files = planned.files;
+    p.refused = refused;
     p.edited = true;
     Ok(p)
+}
+
+/// The folder's audio files named from their tags by the pattern: each as it is and
+/// as it would be, the sheets and playlists of the folder that name them following;
+/// refused whole when two files would take one name or a name is taken.
+fn prepare_rename(
+    music: &Path,
+    shares: &[Share],
+    decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
+    let dir = folder_dir(music, &path);
+    if !dir.is_dir() {
+        return Err(walk::no_such_folder());
+    }
+    let pattern = names::Pattern::parse(req.pattern.as_deref().unwrap_or(""))?;
+    let place = placed(shares, &path)?;
+    let present: BTreeSet<String> = fs::read_dir(&dir)
+        .map_err(|e| text::at(dir.display(), e))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_lowercase())
+        .collect();
+    let mut renames = Vec::new();
+    let mut refused = Vec::new();
+    let mut taken: BTreeMap<String, String> = BTreeMap::new();
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for file in tagfix::folder_values(&dir, &path, decoders)? {
+        let name = file.name.clone();
+        if let Some(problem) = &file.problem {
+            renames.push(Rename {
+                name,
+                to: None,
+                note: Some(msg!(
+                    "core.tagfix.not_read",
+                    "not read: {problem}",
+                    problem = problem
+                )),
+            });
+            continue;
+        }
+        let value = |f: &str| file.values.get(f).and_then(|v| v.first()).cloned();
+        let stem = match pattern.render(&value) {
+            Ok(stem) => names::safe(&stem),
+            Err(field) => {
+                renames.push(Rename {
+                    name,
+                    to: None,
+                    note: Some(msg!(
+                        "core.names.missing",
+                        "no {field}",
+                        field = tagcheck::field_name(&field)
+                    )),
+                });
+                continue;
+            }
+        };
+        if stem.is_empty() {
+            renames.push(Rename {
+                name,
+                to: None,
+                note: Some(msg!(
+                    "core.names.empty_name",
+                    "the pattern gives an empty name"
+                )),
+            });
+            continue;
+        }
+        let to = match classify::suffix(&name) {
+            Some(s) => format!("{stem}.{}", &name[name.len() - s.len()..]),
+            None => stem,
+        };
+        if to == name {
+            renames.push(Rename {
+                name,
+                to: None,
+                note: Some(msg!("core.names.as_is", "as it is")),
+            });
+            continue;
+        }
+        let key = to.to_lowercase();
+        if let Some(other) = taken.get(&key) {
+            refused.push((
+                to.clone(),
+                msg!(
+                    "core.names.taken",
+                    "two files would take this name, {a} and {b}",
+                    a = other,
+                    b = name
+                ),
+            ));
+        } else if present.contains(&key) && key != name.to_lowercase() {
+            refused.push((
+                to.clone(),
+                msg!("core.names.exists", "a file of this name is there already"),
+            ));
+        }
+        taken.insert(key, name.clone());
+        map.insert(name.clone(), to.clone());
+        renames.push(Rename {
+            name,
+            to: Some(to),
+            note: None,
+        });
+    }
+    let refs = references(&dir, &path, &map);
+    let mut p = empty(id, "rename", path.clone(), path, "rename", place);
+    p.exists = true;
+    p.changed = !map.is_empty() && refused.is_empty();
+    p.renames = renames;
+    p.refs = refs;
+    p.refused = refused;
+    Ok(p)
+}
+
+/// The sheets and playlists of the folder that name a renamed file: a sheet's FILE
+/// lines and an m3u, m3u8 or pls entry that is the name or `./` and the name,
+/// rewritten when the file is UTF-8; otherwise, and for an xspf, said and left.
+fn references(dir: &Path, folder: &str, map: &BTreeMap<String, String>) -> Vec<RefChange> {
+    let mut out = Vec::new();
+    if map.is_empty() {
+        return out;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return out;
+    };
+    let mut names: Vec<String> = read
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    for name in names {
+        let suffix = classify::suffix(&name).unwrap_or_default();
+        if !matches!(suffix.as_str(), "cue" | "m3u" | "m3u8" | "pls" | "xspf") {
+            continue;
+        }
+        let file = dir.join(&name);
+        let Ok(bytes) = fs::read(&file) else { continue };
+        let names_it = map
+            .keys()
+            .any(|old| bytes.windows(old.len()).any(|w| w == old.as_bytes()));
+        if !names_it {
+            continue;
+        }
+        let (_, size, mtime) = stat(&file);
+        let library = walk::join(folder, &name);
+        let left = |note: Msg| RefChange {
+            file: library.clone(),
+            lines: 0,
+            before: display(&bytes),
+            after: display(&bytes),
+            size,
+            mtime,
+            note: Some(note),
+        };
+        if suffix == "xspf" {
+            out.push(left(msg!(
+                "core.names.xspf",
+                "an xspf is not rewritten; the Playlists tab repairs it"
+            )));
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            out.push(left(msg!(
+                "core.names.not_utf8",
+                "not UTF-8; its line naming the file is not changed"
+            )));
+            continue;
+        };
+        let rewritten = if suffix == "cue" {
+            cuefix::rename_files(text, map)
+        } else {
+            rename_entries(text, suffix == "pls", map)
+        };
+        if let Some((after, lines)) = rewritten {
+            out.push(RefChange {
+                file: library,
+                lines,
+                before: text.to_string(),
+                after,
+                size,
+                mtime,
+                note: None,
+            });
+        }
+    }
+    out
+}
+
+/// A playlist's entries that are a renamed file's name, or `./` and the name,
+/// rewritten; a pls entry is a `FileN=` line. The text as it would be and the lines
+/// changed; none when no entry names one.
+fn rename_entries(
+    text: &str,
+    pls: bool,
+    map: &BTreeMap<String, String>,
+) -> Option<(String, usize)> {
+    let mut out = String::with_capacity(text.len());
+    let mut changed = 0;
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let ending = &line[body.len()..];
+        let bom = if i == 0 && body.starts_with('\u{FEFF}') {
+            "\u{FEFF}"
+        } else {
+            ""
+        };
+        let body = &body[bom.len()..];
+        let (lead, entry) = if pls {
+            match body.find('=') {
+                Some(eq) if body[..eq].to_ascii_lowercase().starts_with("file") => {
+                    (&body[..eq + 1], &body[eq + 1..])
+                }
+                _ => ("", ""),
+            }
+        } else {
+            ("", body)
+        };
+        let dotted = entry.strip_prefix("./");
+        let old = dotted.unwrap_or(entry);
+        match map.get(old.trim()) {
+            Some(to) if !entry.is_empty() => {
+                out.push_str(bom);
+                out.push_str(lead);
+                if dotted.is_some() {
+                    out.push_str("./");
+                }
+                out.push_str(to);
+                out.push_str(ending);
+                changed += 1;
+            }
+            _ => out.push_str(line),
+        }
+    }
+    (changed > 0).then_some((out, changed))
 }
 
 /// One of Volumio's own lists repaired: the file under Volumio's data folder written
@@ -950,6 +1264,9 @@ pub fn apply(
     if preview.kind == "tags" {
         return apply_tags(music, shares, mounter, journal, mpd_address, preview);
     }
+    if preview.kind == "rename" {
+        return apply_rename(music, shares, mounter, journal, mpd_address, preview);
+    }
     let ro = file_on_disk(music, &preview.kind, &preview.file);
     let (exists, size, mtime) = stat(&ro);
     if exists != preview.exists || size != preview.size || mtime != preview.mtime {
@@ -1106,9 +1423,173 @@ fn apply_tags(
     })
 }
 
-/// A batch undone: each file checked to be what the batch left, the before written
-/// back byte for byte or the file removed (or the tags set back key by key), the
-/// batch marked, MPD told.
+/// The folder's files renamed one by one, then the sheets and playlists that name
+/// them written: every source still there and every target still free as the
+/// preview saw them, every reference unchanged since; a case-only change goes
+/// through a temporary name, since a share does not tell the cases apart; a
+/// failure stops the batch there, with what was done journaled.
+fn apply_rename(
+    music: &Path,
+    shares: &[Share],
+    mounter: &Mounter,
+    journal: &Journal,
+    mpd_address: &mpd::Address,
+    preview: &Preview,
+) -> Result<Applied, Msg> {
+    let todo: Vec<(&str, &str)> = preview
+        .renames
+        .iter()
+        .filter_map(|r| r.to.as_deref().map(|to| (r.name.as_str(), to)))
+        .collect();
+    let folder = folder_dir(music, &preview.path);
+    for (from, to) in &todo {
+        if !folder.join(from).exists() {
+            return Err(msg!(
+                "core.write.source_gone",
+                "{name}: not there any more; preview again",
+                name = from
+            ));
+        }
+        if !from.eq_ignore_ascii_case(to) && folder.join(to).exists() {
+            return Err(msg!(
+                "core.write.target_taken",
+                "{name}: a file of this name is there since the preview; preview again",
+                name = to
+            ));
+        }
+    }
+    for r in preview.refs.iter().filter(|r| r.note.is_none()) {
+        let (exists, size, mtime) = stat(&music.join(&r.file));
+        if !exists || size != r.size || mtime != r.mtime {
+            return Err(msg!(
+                "core.write.changed_file",
+                "{path} changed since the preview; preview it again",
+                path = r.file
+            ));
+        }
+    }
+    let id = journal.new_id();
+    let (dir, mount) = writable(music, shares, mounter, &preview.path)?;
+    let mut entries = Vec::new();
+    let mut failure = None;
+    for (from, to) in &todo {
+        match rename_in(&dir, from, to) {
+            Ok(()) => entries.push(Entry {
+                path: walk::join(&preview.path, from),
+                op: "rename".to_string(),
+                before: None,
+                before_bytes: None,
+                after: walk::join(&preview.path, to),
+            }),
+            Err(e) => {
+                failure = Some(text::at(walk::join(&preview.path, from), e));
+                break;
+            }
+        }
+    }
+    let renamed = entries.len();
+    if failure.is_none() {
+        for r in preview.refs.iter().filter(|r| r.note.is_none()) {
+            let name = file_name(&r.file);
+            let kept = journal.keep(
+                &id,
+                &format!("{}.before", entries.len()),
+                r.before.as_bytes(),
+            );
+            let written =
+                kept.and_then(|kept| write_whole(&dir, name, r.after.as_bytes()).map(|_| kept));
+            match written {
+                Ok(kept) => entries.push(Entry {
+                    path: r.file.clone(),
+                    op: "write_text".to_string(),
+                    before: Some(r.before.clone()),
+                    before_bytes: Some(kept),
+                    after: r.after.clone(),
+                }),
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(mut m) = mount {
+        mounter.unmount(&mut m);
+    }
+    let batch = if entries.is_empty() {
+        None
+    } else {
+        let batch = Batch {
+            id: id.clone(),
+            kind: "rename".to_string(),
+            path: preview.path.clone(),
+            when: now(),
+            note: msg!(
+                "core.write.note_rename",
+                "{n} {n|file|files} renamed in {folder}",
+                n = renamed,
+                folder = if preview.path.is_empty() {
+                    library_root()
+                } else {
+                    Msg::raw(preview.path.clone())
+                }
+            ),
+            entries,
+            undone: false,
+        };
+        journal.record(&batch)?;
+        Some(batch.id)
+    };
+    if let Some(e) = failure {
+        return Err(match &batch {
+            Some(id) => msg!(
+                "core.write.rename_partial",
+                "{error}; the {n} {n|file|files} before it renamed and journaled as batch {batch}",
+                error = e,
+                n = renamed,
+                batch = id
+            ),
+            None => e,
+        });
+    }
+    let (updated, update_error) = update_after(mpd_address, &preview.path);
+    Ok(Applied {
+        batch: batch.unwrap_or_default(),
+        file: preview.path.clone(),
+        written: true,
+        count: renamed,
+        updated,
+        update_error,
+    })
+}
+
+/// A file renamed within its folder; a change of case alone goes through a
+/// temporary name, since a share does not tell the cases apart.
+fn rename_in(dir: &Path, from: &str, to: &str) -> std::io::Result<()> {
+    if from != to && from.eq_ignore_ascii_case(to) {
+        let via = format!("{to}.mpdantic-renaming");
+        fs::rename(dir.join(from), dir.join(&via))?;
+        return fs::rename(dir.join(&via), dir.join(to));
+    }
+    fs::rename(dir.join(from), dir.join(to))
+}
+
+/// One step of an undo, checked before anything moves.
+enum Step {
+    /// A text file written back, or removed where the batch made it.
+    Write {
+        name: String,
+        bytes: Option<Vec<u8>>,
+    },
+    /// A file renamed back.
+    Rename { from: String, to: String },
+}
+
+/// A batch undone: every entry checked first, in reverse, to be what the batch
+/// left (a text file holds what was written, or nothing where one was removed; a
+/// renamed file is at its new name and nothing is at its old), then each put back,
+/// the before written byte for byte, the file removed, the name given back (the
+/// tags set back key by key); the batch marked, MPD told.
 pub fn undo(
     music: &Path,
     shares: &[Share],
@@ -1124,37 +1605,93 @@ pub fn undo(
     if batch.kind == "tags" {
         return undo_tags(music, shares, mounter, journal, mpd_address, &batch);
     }
-    let Some(entry) = batch.entries.first() else {
+    let Some(first) = batch.entries.first() else {
         return Err(msg!("core.write.empty_batch", "an empty batch"));
     };
-    let current = fs::read(file_on_disk(music, &batch.kind, &entry.path)).ok();
-    if entry.op == "remove" {
-        if current.is_some() {
+    let mut steps = Vec::new();
+    for entry in batch.entries.iter().rev() {
+        if entry.op == "rename" {
+            let from = file_name(&entry.path).to_string();
+            let to = file_name(&entry.after).to_string();
+            let folder = folder_dir(music, &batch.path);
+            if !folder.join(&to).exists() {
+                return Err(msg!(
+                    "core.write.not_at",
+                    "{path}: not at {after} any more; not undone",
+                    path = entry.path,
+                    after = entry.after
+                ));
+            }
+            if !from.eq_ignore_ascii_case(&to) && folder.join(&from).exists() {
+                return Err(msg!(
+                    "core.write.name_taken_since",
+                    "{path}: a file is there again at the old name; not undone",
+                    path = entry.path
+                ));
+            }
+            steps.push(Step::Rename { from: to, to: from });
+            continue;
+        }
+        let current = fs::read(file_on_disk(music, &batch.kind, &entry.path)).ok();
+        if entry.op == "remove" {
+            if current.is_some() {
+                return Err(msg!(
+                    "core.write.file_back",
+                    "a file is there again where the batch removed one; not undone"
+                ));
+            }
+        } else if current.as_deref() != Some(entry.after.as_bytes()) {
             return Err(msg!(
-                "core.write.file_back",
-                "a file is there again where the batch removed one; not undone"
+                "core.write.changed_since_batch",
+                "the file changed since the batch; not undone"
             ));
         }
-    } else if current.as_deref() != Some(entry.after.as_bytes()) {
-        return Err(msg!(
-            "core.write.changed_since_batch",
-            "the file changed since the batch; not undone"
-        ));
+        let bytes: Option<Vec<u8>> = match &entry.before_bytes {
+            Some(name) => Some(journal.kept(&batch.id, name)?),
+            None => entry.before.as_ref().map(|s| s.as_bytes().to_vec()),
+        };
+        steps.push(Step::Write {
+            name: file_name(&entry.path).to_string(),
+            bytes,
+        });
     }
-    let before: Option<Vec<u8>> = match &entry.before_bytes {
-        Some(name) => Some(journal.kept(&batch.id, name)?),
-        None => entry.before.as_ref().map(|s| s.as_bytes().to_vec()),
-    };
     let (dir, mount) = target(music, shares, mounter, &batch.kind, &batch.path)?;
-    let name = file_name(&entry.path);
-    let result = match before {
-        Some(bytes) => write_whole(&dir, name, &bytes),
-        None => fs::remove_file(dir.join(name)).map_err(|e| text::at(&entry.path, e)),
-    };
+    let mut done = 0;
+    let mut failure = None;
+    for step in &steps {
+        let result = match step {
+            Step::Write {
+                name,
+                bytes: Some(bytes),
+            } => write_whole(&dir, name, bytes),
+            Step::Write { name, bytes: None } => fs::remove_file(dir.join(name))
+                .map_err(|e| text::at(walk::join(&batch.path, name), e)),
+            Step::Rename { from, to } => {
+                rename_in(&dir, from, to).map_err(|e| text::at(walk::join(&batch.path, from), e))
+            }
+        };
+        match result {
+            Ok(()) => done += 1,
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        }
+    }
     if let Some(mut m) = mount {
         mounter.unmount(&mut m);
     }
-    result?;
+    if let Some(e) = failure {
+        if done == 0 {
+            return Err(e);
+        }
+        return Err(msg!(
+            "core.write.undo_partial",
+            "{error}; {n} {n|file|files} put back before it, the undo can be run again",
+            error = e,
+            n = done
+        ));
+    }
     journal.mark_undone(id)?;
     let (updated, update_error) = if outside(&batch.kind) {
         (None, None)
@@ -1163,12 +1700,26 @@ pub fn undo(
     };
     Ok(Applied {
         batch: id.to_string(),
-        file: entry.path.clone(),
+        file: first.path.clone(),
         written: true,
-        count: 1,
+        count: done,
         updated,
         update_error,
     })
+}
+
+/// Values the same as the batch wrote them: as they are, or as the same number,
+/// since a writer keeps a number as a number and a track written "01" reads back
+/// "1".
+fn same_values(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x == y
+                || matches!(
+                    (x.trim().parse::<u64>(), y.trim().parse::<u64>()),
+                    (Ok(p), Ok(q)) if p == q
+                )
+        })
 }
 
 /// The tags set back: each key checked to hold what the batch wrote (or what it
@@ -1199,14 +1750,14 @@ fn undo_tags(
         let mut reverse = Vec::new();
         for c in changes {
             let current = tagfix::current_values(&raw, &c.kind, &c.key);
-            if current == c.after {
+            if same_values(&current, &c.after) {
                 reverse.push(KeyChange {
                     kind: c.kind,
                     key: c.key,
                     before: c.after,
                     after: c.before,
                 });
-            } else if current != c.before {
+            } else if !same_values(&current, &c.before) {
                 return Err(msg!(
                     "core.write.changed_key",
                     "{path}: {key} changed since the batch; not undone",
@@ -1289,6 +1840,7 @@ mod tests {
             base: None,
             name: None,
             edits: None,
+            pattern: None,
         }
     }
 
@@ -1305,6 +1857,7 @@ mod tests {
             base: None,
             name: None,
             edits: None,
+            pattern: None,
         }
     }
 
@@ -1321,6 +1874,7 @@ mod tests {
             base: None,
             name: None,
             edits: None,
+            pattern: None,
         }
     }
 
@@ -1857,6 +2411,7 @@ mod tests {
             base: None,
             name: None,
             edits: None,
+            pattern: None,
         };
         let p = prepare(&music, &shares, &d, &playlists, 1, &req).unwrap();
         assert_eq!(p.kind, "volumio_playlist");
@@ -1897,6 +2452,229 @@ mod tests {
         assert!(u.written);
         assert_eq!(u.updated, None);
         assert!(!playlists.join("mix").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn by_pattern(kind: &str, pattern: &str) -> Request {
+        Request {
+            kind: kind.to_string(),
+            path: "INTERNAL/Jazz".to_string(),
+            lines: Vec::new(),
+            repairs: None,
+            encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
+            base: None,
+            name: None,
+            edits: None,
+            pattern: Some(pattern.to_string()),
+        }
+    }
+
+    #[test]
+    fn the_files_of_a_folder_are_named_from_their_tags_with_the_sheet_and_playlists_following_and_given_back(
+    ) {
+        let dir = temp("rename");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let jazz = music.join("INTERNAL/Jazz");
+        let flac = |title: Option<&str>, track: Option<&str>| {
+            let mut tags: Vec<(&str, &str)> = vec![("ARTIST", "A")];
+            if let Some(t) = title {
+                tags.push(("TITLE", t));
+            }
+            if let Some(n) = track {
+                tags.push(("TRACKNUMBER", n));
+            }
+            real_flac(&tags)
+        };
+        fs::write(
+            jazz.join("a.flac"),
+            flac(Some("One: Alpha/Beta"), Some("1")),
+        )
+        .unwrap();
+        fs::write(jazz.join("b.flac"), flac(Some("Two"), Some("2/9"))).unwrap();
+        fs::write(jazz.join("c.flac"), flac(None, Some("3"))).unwrap();
+        fs::write(jazz.join("02 Two.flac"), flac(Some("Two"), Some("2"))).unwrap();
+        let sheet = "FILE \"a.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\nFILE \"zzz.flac\" WAVE\n";
+        fs::write(jazz.join("album.cue"), sheet).unwrap();
+        fs::write(
+            jazz.join("list.m3u"),
+            "#EXTM3U\n./a.flac\nb.flac\nother.flac\n",
+        )
+        .unwrap();
+        fs::write(
+            jazz.join("list.pls"),
+            "[playlist]\nFile1=b.flac\nNumberOfEntries=1\n",
+        )
+        .unwrap();
+        let pl = dir.join("playlists");
+        // A pattern that cannot work is refused before anything is read.
+        let e = prepare(&music, &shares, &d, &pl, 1, &by_pattern("rename", "{size}")).unwrap_err();
+        assert_eq!(e.k, "core.names.bad_field");
+        // A name that is there already: refused whole, nothing moves.
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            1,
+            &by_pattern("rename", "{track} {title}"),
+        )
+        .unwrap();
+        assert!(!p.changed);
+        assert!(p
+            .refused
+            .iter()
+            .any(|(n, why)| n == "02 Two.flac" && why.k == "core.names.exists"));
+        fs::remove_file(jazz.join("02 Two.flac")).unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            2,
+            &by_pattern("rename", "{track} {title}"),
+        )
+        .unwrap();
+        assert!(p.changed);
+        assert_eq!(
+            (p.kind.as_str(), p.op.as_str(), p.path.as_str()),
+            ("rename", "rename", "INTERNAL/Jazz")
+        );
+        let by = |n: &str| p.renames.iter().find(|r| r.name == n).unwrap();
+        assert_eq!(by("a.flac").to.as_deref(), Some("01 One_ Alpha_Beta.flac"));
+        assert_eq!(by("b.flac").to.as_deref(), Some("02 Two.flac"));
+        assert!(by("c.flac").to.is_none());
+        assert_eq!(by("c.flac").note.as_ref().unwrap().k, "core.names.missing");
+        assert_eq!(by("c.flac").note.as_ref().unwrap().en, "no title");
+        // The sheet and the playlists follow; an entry naming nothing renamed stays.
+        assert_eq!(p.refs.len(), 3, "{:?}", p.refs);
+        let r = |f: &str| {
+            p.refs
+                .iter()
+                .find(|r| r.file == format!("INTERNAL/Jazz/{f}"))
+                .unwrap()
+        };
+        assert_eq!(
+            r("album.cue").after,
+            "FILE \"01 One_ Alpha_Beta.flac\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\nFILE \"zzz.flac\" WAVE\n"
+        );
+        assert_eq!(r("album.cue").lines, 1);
+        assert_eq!(
+            r("list.m3u").after,
+            "#EXTM3U\n./01 One_ Alpha_Beta.flac\n02 Two.flac\nother.flac\n"
+        );
+        assert_eq!(r("list.m3u").lines, 2);
+        assert_eq!(
+            r("list.pls").after,
+            "[playlist]\nFile1=02 Two.flac\nNumberOfEntries=1\n"
+        );
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.count, 2);
+        assert!(jazz.join("01 One_ Alpha_Beta.flac").is_file());
+        assert!(jazz.join("02 Two.flac").is_file());
+        assert!(!jazz.join("a.flac").exists() && !jazz.join("b.flac").exists());
+        assert!(jazz.join("c.flac").is_file());
+        assert_eq!(
+            fs::read_to_string(jazz.join("list.pls")).unwrap(),
+            "[playlist]\nFile1=02 Two.flac\nNumberOfEntries=1\n"
+        );
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.kind == "rename")
+            .unwrap();
+        assert_eq!(batch.entries.len(), 5);
+        assert_eq!(batch.entries[0].op, "rename");
+        assert_eq!(batch.entries[0].path, "INTERNAL/Jazz/a.flac");
+        assert_eq!(
+            batch.entries[0].after,
+            "INTERNAL/Jazz/01 One_ Alpha_Beta.flac"
+        );
+        assert_eq!(batch.entries[2].op, "write_text");
+        assert_eq!(batch.note.en, "2 files renamed in INTERNAL/Jazz");
+        // The same preview applied again: its sources are gone.
+        let e = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap_err();
+        assert_eq!(e.k, "core.write.source_gone");
+        // The undo: the playlists and the sheet written back, the names given back.
+        let u = undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        assert_eq!(u.count, 5);
+        assert!(jazz.join("a.flac").is_file() && jazz.join("b.flac").is_file());
+        assert!(!jazz.join("02 Two.flac").exists());
+        assert_eq!(
+            fs::read_to_string(jazz.join("list.m3u")).unwrap(),
+            "#EXTM3U\n./a.flac\nb.flac\nother.flac\n"
+        );
+        assert_eq!(fs::read_to_string(jazz.join("album.cue")).unwrap(), sheet);
+        assert!(journal.load(&batch.id).unwrap().undone);
+        // A change of case alone goes through a temporary name.
+        fs::write(jazz.join("Same.flac"), b"x").unwrap();
+        rename_in(&jazz, "Same.flac", "same.flac").unwrap();
+        assert!(fs::read_dir(&jazz)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name() == "same.flac"));
+        fs::remove_file(jazz.join("same.flac")).unwrap();
+        // Tags from the names by the same pattern: a file that does not fit is said.
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            3,
+            &by_pattern("tagedit", "{track} {title}"),
+        )
+        .unwrap();
+        assert!(!p.changed);
+        assert_eq!(p.refused.len(), 3);
+        assert!(p
+            .refused
+            .iter()
+            .all(|(_, why)| why.k == "core.names.no_fit"));
+        fs::rename(jazz.join("b.flac"), jazz.join("07 Seven.flac")).unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            4,
+            &by_pattern("tagedit", "{track} {title}"),
+        )
+        .unwrap();
+        assert!(p.changed);
+        assert_eq!(p.refused.len(), 2);
+        let seven = p.files.iter().find(|f| f.name == "07 Seven.flac").unwrap();
+        assert_eq!(seven.changes.len(), 2, "{:?}", seven.changes);
+        assert!(seven
+            .changes
+            .iter()
+            .any(|c| c.key == "TITLE" && c.after == vec!["Seven".to_string()]));
+        assert!(seven
+            .changes
+            .iter()
+            .any(|c| c.key == "TRACKNUMBER" && c.after == vec!["07".to_string()]));
+        // Written, then set back: the track written "07" reads back as the number, and
+        // the undo takes it for what the batch wrote.
+        apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let written = tags::view(&tags::read(&jazz.join("07 Seven.flac"), "flac"));
+        assert_eq!(written.title, vec!["Seven".to_string()]);
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.kind == "tags" && !b.undone)
+            .unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        assert_eq!(u.count, 1);
+        let back = tags::view(&tags::read(&jazz.join("07 Seven.flac"), "flac"));
+        assert_eq!(back.title, vec!["Two".to_string()]);
+        // The writer keeps the number as a number: "2/9" set back reads as 2.
+        assert!(back.track[0].starts_with('2'), "{:?}", back.track);
         fs::remove_dir_all(&dir).unwrap();
     }
 
