@@ -137,11 +137,6 @@
   .stack > .panel + .panel { margin-top: 14px; }
   .field { margin-top: 8px; }
   .field textarea { display: block; width: 100%; box-sizing: border-box; min-width: 0; }
-  button.undo { background: var(--warn); color: #fff; border-color: var(--warn); }
-  button.undo:hover { border-color: var(--text); }
-  .stack > .panel + .panel { margin-top: 14px; }
-  .field { margin-top: 8px; }
-  .field textarea { display: block; width: 100%; box-sizing: border-box; min-width: 0; }
   .help.bad, .done.bad { color: var(--danger); }
   .done { margin-top: 10px; font-size: 14px; }
 </style>
@@ -152,49 +147,49 @@
   <span class="sub" id="version"></span>
   <span class="grow"></span>
   <span class="badge" id="state">...</span>
-  <button class="small" id="close" hidden>Close</button>
+  <button class="small" id="close" hidden data-i18n="page.close">Close</button>
 </div>
 <div class="container">
   <div class="crumbs" id="crumbs"></div>
   <div class="list" id="list"></div>
-  <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden>More</button></div>
+  <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden data-i18n="page.more">More</button></div>
 
   <nav class="tabs">
-    <button class="tab" id="tab-ignore">Ignore</button>
-    <button class="tab" id="tab-cue">CUE sheets</button>
-    <button class="tab" id="tab-tags">Tags</button>
-    <button class="tab" id="tab-playlists">Playlists</button>
-    <button class="tab" id="tab-volumio">Volumio</button>
-    <button class="tab" id="tab-undo">Written</button>
-    <button class="tab" id="tab-system">System</button>
-    <a class="tab" href="/about">About</a>
+    <button class="tab" id="tab-ignore" data-i18n="page.tab.ignore">Ignore</button>
+    <button class="tab" id="tab-cue" data-i18n="page.tab.cue">CUE sheets</button>
+    <button class="tab" id="tab-tags" data-i18n="page.tab.tags">Tags</button>
+    <button class="tab" id="tab-playlists" data-i18n="page.tab.playlists">Playlists</button>
+    <button class="tab" id="tab-volumio" data-i18n="page.tab.volumio">Volumio</button>
+    <button class="tab" id="tab-undo" data-i18n="page.tab.undo">Written</button>
+    <button class="tab" id="tab-system" data-i18n="page.tab.system">System</button>
+    <a class="tab" href="/about" data-i18n="page.tab.about">About</a>
   </nav>
 
   <div class="panel" id="panel-ignore" hidden>
     <div class="head">
-      <b>Ignore</b>
-      <span class="sub">The .mpdignore files: what MPD's update would meet under this folder, the lines that would keep the junk out, and those lines written on your say.</span>
+      <b data-i18n="page.tab.ignore">Ignore</b>
+      <span class="sub" data-i18n="page.ignore.sub">The .mpdignore files: what MPD's update would meet under this folder, the lines that would keep the junk out, and those lines written on your say.</span>
       <span class="grow"></span>
-      <label class="pref" title="Glass plays video from the library; with video in use, video containers are counted and never suggested.">Video here:
+      <label class="pref" data-i18n-title="page.ignore.video_title" title="Glass plays video from the library; with video in use, video containers are counted and never suggested."><span data-i18n="page.ignore.video_label">Video here:</span>
         <select id="pref-video">
-          <option value="auto">as Glass says</option>
-          <option value="in_use">in use</option>
-          <option value="junk">not wanted</option>
+          <option value="auto" data-i18n="page.ignore.video_auto">as Glass says</option>
+          <option value="in_use" data-i18n="page.ignore.video_in_use">in use</option>
+          <option value="junk" data-i18n="page.ignore.video_junk">not wanted</option>
         </select>
       </label>
-      <button id="analyse-ignore">Analyse this folder</button>
-      <button id="cancel-ignore" hidden>Cancel</button>
+      <button id="analyse-ignore" data-i18n="page.analyse_folder">Analyse this folder</button>
+      <button id="cancel-ignore" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
-      <div class="progress" id="progress-ignore">Not analysed yet.</div>
+      <div class="progress" id="progress-ignore" data-i18n="page.ignore.not_yet">Not analysed yet.</div>
       <div id="report-ignore"></div>
       <div class="write">
-        <b>The .mpdignore of this folder</b>
-        <div class="help">The file as it is, one pattern per line; edit it here: type a line, remove one, tick a suggestion above. An empty field removes the file. Preview shows the lines added, removed and kept before anything is written, and every write can be undone from the Written tab. A line in force from a folder above is edited in that folder: the names under "Lines in force" open it.</div>
+        <b data-i18n="page.ignore.file_title">The .mpdignore of this folder</b>
+        <div class="help" data-i18n="page.ignore.file_help">The file as it is, one pattern per line; edit it here: type a line, remove one, tick a suggestion above. An empty field removes the file. Preview shows the lines added, removed and kept before anything is written, and every write can be undone from the Written tab. A line in force from a folder above is edited in that folder: the names under "Lines in force" open it.</div>
         <div class="field">
-          <textarea id="lines" rows="3" placeholder="one pattern per line, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off"></textarea>
+          <textarea id="lines" rows="3" data-i18n-placeholder="page.ignore.placeholder" placeholder="one pattern per line, as MPD reads it: *.iso, [#]recycle, @eaDir" spellcheck="false" autocomplete="off"></textarea>
         </div>
-        <div class="actions"><button id="preview-ignore">Preview</button></div>
+        <div class="actions"><button id="preview-ignore" data-i18n="page.preview">Preview</button></div>
         <div id="preview-box"></div>
       </div>
     </div>
@@ -202,39 +197,39 @@
 
   <div class="panel" id="panel-cue" hidden>
     <div class="head">
-      <b>CUE sheets</b>
-      <span class="sub">Every sheet under this folder read as MPD reads it, what MPD makes of it, and the repairs each sheet allows, written on your say.</span>
+      <b data-i18n="page.tab.cue">CUE sheets</b>
+      <span class="sub" data-i18n="page.cue.sub">Every sheet under this folder read as MPD reads it, what MPD makes of it, and the repairs each sheet allows, written on your say.</span>
       <span class="grow"></span>
-      <button id="analyse-cue">Check this folder</button>
-      <button id="cancel-cue" hidden>Cancel</button>
+      <button id="analyse-cue" data-i18n="page.check_folder">Check this folder</button>
+      <button id="cancel-cue" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
-      <div class="progress" id="progress-cue">Not checked yet.</div>
+      <div class="progress" id="progress-cue" data-i18n="page.not_checked">Not checked yet.</div>
       <div id="report-cue"></div>
     </div>
   </div>
 
   <div class="panel" id="panel-tags" hidden>
     <div class="head">
-      <b>Tags</b>
-      <span class="sub">Every audio file under this folder read for its tags, what MPD takes of them, and whether a folder shows as one album or several. Read-only; every file is opened, so a large folder takes a while.</span>
+      <b data-i18n="page.tab.tags">Tags</b>
+      <span class="sub" data-i18n="page.tags.sub">Every audio file under this folder read for its tags, what MPD takes of them, and whether a folder shows as one album or several. Read-only; every file is opened, so a large folder takes a while.</span>
       <span class="grow"></span>
-      <button id="analyse-tags">Check this folder</button>
-      <button id="cancel-tags" hidden>Cancel</button>
+      <button id="analyse-tags" data-i18n="page.check_folder">Check this folder</button>
+      <button id="cancel-tags" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
-      <div class="progress" id="progress-tags">Not checked yet.</div>
+      <div class="progress" id="progress-tags" data-i18n="page.not_checked">Not checked yet.</div>
       <div id="report-tags"></div>
       <div class="write">
-        <b>Repair tags in this folder</b>
-        <div class="help">The audio files of the folder in hand, not the folders under it. The album artist and the date written where MPD reads them, text that is UTF-8 read as Latin-1 decoded, a tag given twice kept once, an ID3v2 tag from ID3v1, and the Album, Album artist and Date every file gets where the files disagree. Each file is shown with its changes before anything is written. DSF and DFF files are read, not written.</div>
-        <div class="line"><button id="preview-tags">Preview</button></div>
+        <b data-i18n="page.tags.repair_title">Repair tags in this folder</b>
+        <div class="help" data-i18n="page.tags.repair_help">The audio files of the folder in hand, not the folders under it. The album artist and the date written where MPD reads them, text that is UTF-8 read as Latin-1 decoded, a tag given twice kept once, an ID3v2 tag from ID3v1, and the Album, Album artist and Date every file gets where the files disagree. Each file is shown with its changes before anything is written. DSF and DFF files are read, not written.</div>
+        <div class="line"><button id="preview-tags" data-i18n="page.preview">Preview</button></div>
         <div id="preview-tags-box"></div>
       </div>
       <div class="write">
-        <b>Edit tags file by file</b>
-        <div class="help">Every audio file of the folder in hand as a grid, one column per field MPD reads. Type in a cell, or set a column for every file at once; an empty cell removes the key. Nothing leaves the page until Preview, which shows every change key by key; the write and the undo are the same as for the repairs.</div>
-        <div class="line"><button id="open-editor">Open the editor</button><span class="help" id="edit-count"></span><button id="preview-edits" disabled>Preview</button></div>
+        <b data-i18n="page.tags.editor_title">Edit tags file by file</b>
+        <div class="help" data-i18n="page.tags.editor_help">Every audio file of the folder in hand as a grid, one column per field MPD reads. Type in a cell, or set a column for every file at once; an empty cell removes the key. Nothing leaves the page until Preview, which shows every change key by key; the write and the undo are the same as for the repairs.</div>
+        <div class="line"><button id="open-editor" data-i18n="page.tags.open_editor">Open the editor</button><span class="help" id="edit-count"></span><button id="preview-edits" disabled data-i18n="page.preview">Preview</button></div>
         <div id="editor-box"></div>
         <div id="preview-edits-box"></div>
       </div>
@@ -243,14 +238,14 @@
 
   <div class="panel" id="panel-playlists" hidden>
     <div class="head">
-      <b>Playlists</b>
-      <span class="sub">Every m3u, m3u8, pls and xspf under this folder read as MPD reads it, each entry resolved as a load would, and the repairs a playlist allows: its entries rebased to the files on this player, written on your say.</span>
+      <b data-i18n="page.tab.playlists">Playlists</b>
+      <span class="sub" data-i18n="page.playlists.sub">Every m3u, m3u8, pls and xspf under this folder read as MPD reads it, each entry resolved as a load would, and the repairs a playlist allows: its entries rebased to the files on this player, written on your say.</span>
       <span class="grow"></span>
-      <button id="analyse-playlists">Check this folder</button>
-      <button id="cancel-playlists" hidden>Cancel</button>
+      <button id="analyse-playlists" data-i18n="page.check_folder">Check this folder</button>
+      <button id="cancel-playlists" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
-      <div class="progress" id="progress-playlists">Not checked yet.</div>
+      <div class="progress" id="progress-playlists" data-i18n="page.not_checked">Not checked yet.</div>
       <div id="report-playlists"></div>
     </div>
   </div>
@@ -258,25 +253,25 @@
   <div class="stack" id="panel-volumio" hidden>
     <div class="panel">
       <div class="head">
-        <b>Volumio's own lists</b>
-        <span class="sub">Volumio's playlists, favourites, radio favourites and web radios as it keeps them, each item checked against the library. A list simply messed up is repaired: an item whose file is gone found again by its name and folders or dropped, a uri in twice kept once, an item without a uri dropped, a file cut short written back with what could be read.</span>
+        <b data-i18n="page.volumio.lists_title">Volumio's own lists</b>
+        <span class="sub" data-i18n="page.volumio.lists_sub">Volumio's playlists, favourites, radio favourites and web radios as it keeps them, each item checked against the library. A list simply messed up is repaired: an item whose file is gone found again by its name and folders or dropped, a uri in twice kept once, an item without a uri dropped, a file cut short written back with what could be read.</span>
         <span class="grow"></span>
-        <button id="read-volumio">Read the lists</button>
+        <button id="read-volumio" data-i18n="page.volumio.read_lists">Read the lists</button>
       </div>
       <div class="body">
-        <div class="progress" id="progress-volumio">Not read yet.</div>
+        <div class="progress" id="progress-volumio" data-i18n="page.not_read">Not read yet.</div>
         <div id="report-volumio"></div>
       </div>
     </div>
     <div class="panel">
       <div class="head">
-        <b>The queue</b>
-        <span class="sub">What Volumio plays now, read from the player itself and checked here. An item whose file is gone can be taken out through Volumio's own queue, as its page would; that is live state, not a file, so there is no undo for it.</span>
+        <b data-i18n="page.volumio.queue_title">The queue</b>
+        <span class="sub" data-i18n="page.volumio.queue_sub">What Volumio plays now, read from the player itself and checked here. An item whose file is gone can be taken out through Volumio's own queue, as its page would; that is live state, not a file, so there is no undo for it.</span>
         <span class="grow"></span>
-        <button id="read-queue">Read the queue</button>
+        <button id="read-queue" data-i18n="page.volumio.read_queue">Read the queue</button>
       </div>
       <div class="body">
-        <div class="progress" id="queue-note">Not read yet.</div>
+        <div class="progress" id="queue-note" data-i18n="page.not_read">Not read yet.</div>
         <div id="queue-box"></div>
       </div>
     </div>
@@ -284,26 +279,26 @@
 
   <div class="panel" id="panel-undo" hidden>
     <div class="head">
-      <b>Written</b>
-      <span class="sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.</span>
+      <b data-i18n="page.tab.undo">Written</b>
+      <span class="sub" data-i18n="page.undo.sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.</span>
     </div>
     <div class="body">
       <div class="done" id="undo-note" hidden></div>
-      <div class="progress" id="undo-box">Nothing written yet.</div>
+      <div class="progress" id="undo-box" data-i18n="page.undo.nothing">Nothing written yet.</div>
     </div>
   </div>
 
   <div class="panel" id="panel-system" hidden>
     <div class="head">
-      <b>System</b>
-      <span class="sub">This player, as one block for an issue: what it is, and how its library sits against MPD's output buffer. It names no share, path or credential, only counts. The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds.</span>
+      <b data-i18n="page.tab.system">System</b>
+      <span class="sub" data-i18n="page.system.sub">This player, as one block for an issue: what it is, and how its library sits against MPD's output buffer. It names no share, path or credential, only counts. The album query is measured on your say: MPD is asked for every song with every tag, as Volumio's album view asks, and the reply is counted as it streams, never kept; on a large library MPD works for a few seconds. The block is in English, for the maintainers who read it.</span>
       <span class="grow"></span>
-      <button id="measure">Measure the album query</button>
+      <button id="measure" data-i18n="page.system.measure">Measure the album query</button>
     </div>
     <div class="body system">
-      <textarea id="report" rows="9" readonly spellcheck="false">Reading...</textarea>
-      <div class="actions"><button class="small" id="copy">Copy</button><span class="help" id="report-note"></span></div>
-      <div class="help">Paste the block into an issue on GitHub; the About tab has the link.</div>
+      <textarea id="report" rows="9" readonly spellcheck="false" data-i18n="page.reading">Reading...</textarea>
+      <div class="actions"><button class="small" id="copy" data-i18n="page.copy">Copy</button><span class="help" id="report-note"></span></div>
+      <div class="help" data-i18n="page.system.paste">Paste the block into an issue on GitHub; the About tab has the link.</div>
     </div>
   </div>
 </div>
@@ -342,11 +337,36 @@
 
   // ------------------------------------------------------------ the language
 
-  // The catalogue of the page's language, put into the page by the core.
+  // The catalogue of the page's language, put into the page by the core; the
+  // language itself is the document's, set by the core with the catalogue.
   const CAT = (() => { try { return JSON.parse($('lang').textContent) || {}; } catch (e) { return {}; } })();
-  const fill = (s, vars) => Object.keys(vars || {}).reduce((out, k) => out.split('{' + k + '}').join(String(vars[k])), s);
-  // A text of the page's by its key, its {variables} filled in; the key itself when
-  // the catalogue lacks it, so that a missing text is seen, not hidden.
+  const LANG = document.documentElement.lang || 'en';
+  // Which plural form a count takes, as an index into the forms a text lists after
+  // the bar: one|other for most languages, one for 0 and 1 in French, one|few|many
+  // for Polish and Russian, one form for Japanese and Chinese.
+  const fewMany = (n) => (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 1 : 2);
+  const PLURAL = {
+    fr: (n) => (n === 0 || n === 1 ? 0 : 1),
+    ja: () => 0,
+    zh: () => 0,
+    pl: (n) => (n === 1 ? 0 : fewMany(n)),
+    ru: (n) => (n % 10 === 1 && n % 100 !== 11 ? 0 : fewMany(n))
+  };
+  const plural = (n) => (PLURAL[LANG] || ((m) => (m === 1 ? 0 : 1)))(Math.abs(Number(n)));
+  const separator = () => (typeof CAT['list.separator'] === 'string' ? CAT['list.separator'] : ', ');
+  // An argument as text: a list joined, a message of the core's rendered.
+  const argText = (v) => (Array.isArray(v) ? v.map(argText).join(separator()) : (v !== null && typeof v === 'object' ? tm(v) : String(v)));
+  // A text with its {variables} filled in and its {n|one|other} forms picked.
+  function fill(s, vars) {
+    return String(s).replace(/\{([a-z_]+)(\|[^}]*)?\}/g, (m, name, forms) => {
+      if (!vars || !(name in vars)) return m;
+      const v = vars[name];
+      if (forms) { const f = forms.slice(1).split('|'); return f[Math.min(plural(argText(v)), f.length - 1)]; }
+      return argText(v);
+    });
+  }
+  // A text of the page's by its key; the key itself when the catalogue lacks it, so
+  // that a missing text is seen, not hidden.
   const t = (key, vars) => fill(typeof CAT[key] === 'string' ? CAT[key] : key, vars);
   // A sentence of the core's: rendered from the catalogue by its key with its
   // arguments, else the English it carries; a plain string as it is.
@@ -355,6 +375,19 @@
     if (typeof m !== 'object' || typeof m.k !== 'string') return String(m);
     return typeof CAT[m.k] === 'string' ? fill(CAT[m.k], m.a) : String(m.en === undefined ? m.k : m.en);
   };
+  // A finding code's meaning, from the catalogue, else as the core says it.
+  const codeText = (code, en) => (typeof CAT['code.' + code] === 'string' ? CAT['code.' + code] : (en || code));
+  // A text with nodes in its placeholders, for a sentence that carries code.
+  function tn(key, nodes) {
+    const frag = document.createDocumentFragment();
+    const s = typeof CAT[key] === 'string' ? CAT[key] : key;
+    s.split(/(\{[a-z_]+\})/).forEach((piece) => {
+      const m = /^\{([a-z_]+)\}$/.exec(piece);
+      if (m && nodes && m[1] in nodes) { const v = nodes[m[1]]; frag.appendChild(v instanceof Node ? v : text(String(v))); }
+      else if (piece) frag.appendChild(text(piece));
+    });
+    return frag;
+  }
   // The markup's texts from the catalogue: data-i18n for the content, data-i18n-title
   // and data-i18n-placeholder for those attributes.
   function translateMarkup() {
@@ -362,12 +395,14 @@
     document.querySelectorAll('[data-i18n-title]').forEach((n) => { n.title = t(n.dataset.i18nTitle); });
     document.querySelectorAll('[data-i18n-placeholder]').forEach((n) => { n.placeholder = t(n.dataset.i18nPlaceholder); });
   }
+  const theLibrary = (path) => path || t('page.the_library');
+  const theRoot = (dir) => dir || t('page.root');
 
   async function api(url, options) {
     const r = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
     if (r.status === 204) return null;
     const body = await r.json().catch(() => ({ error: r.statusText }));
-    if (!r.ok) throw new Error(body.error || r.statusText);
+    if (!r.ok) throw new Error(tm(body.error) || r.statusText);
     return body;
   }
 
@@ -383,7 +418,7 @@
       a.href = toHash(target);
       box.appendChild(a);
     };
-    add('Library', '', parts.length === 0);
+    add(t('page.library'), '', parts.length === 0);
     parts.forEach((part, i) => {
       box.appendChild(el('span', 'sep', '/'));
       add(part, parts.slice(0, i + 1).join('/'), i === parts.length - 1);
@@ -394,7 +429,7 @@
     crumbs(current.path);
     const list = $('list');
     list.textContent = '';
-    if (!current.entries.length) list.appendChild(el('div', 'empty', 'Nothing here.'));
+    if (!current.entries.length) list.appendChild(el('div', 'empty', t('page.nothing_here')));
     current.entries.forEach((entry) => {
       const row = el('div', 'row' + (entry.dir ? ' dir' : '') + (entry.name.startsWith('.') ? ' dot' : ''));
       row.appendChild(el('span', 'icon', entry.dir ? String.fromCharCode(0x25B8) : String.fromCharCode(0xB7)));
@@ -406,13 +441,13 @@
     const dirs = current.entries.filter((e) => e.dir).length;
     const shown = current.entries.length;
     $('count').textContent = current.total
-      ? (shown < current.total ? shown + ' of ' + current.total + ' shown' : current.total + ' entries') + ', ' + dirs + ' folders'
+      ? (shown < current.total ? t('page.count.shown', { shown, total: current.total }) : t('page.count.entries', { n: current.total })) + separator() + t('page.count.folders', { n: dirs })
       : '';
     $('more').hidden = !current.more;
-    $('analyse-ignore').textContent = current.path ? 'Analyse this folder' : 'Analyse the whole library';
-    $('analyse-cue').textContent = current.path ? 'Check this folder' : 'Check the whole library';
-    $('analyse-tags').textContent = current.path ? 'Check this folder' : 'Check the whole library';
-    $('analyse-playlists').textContent = current.path ? 'Check this folder' : 'Check the whole library';
+    $('analyse-ignore').textContent = current.path ? t('page.analyse_folder') : t('page.analyse_library');
+    $('analyse-cue').textContent = current.path ? t('page.check_folder') : t('page.check_library');
+    $('analyse-tags').textContent = current.path ? t('page.check_folder') : t('page.check_library');
+    $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
   }
 
   function failed(path, message) {
@@ -481,37 +516,45 @@
 
   // ------------------------------------------------------------ the Volumio tab
 
-  const LIST_STATES = { ok: 'found', missing: 'not found under the library', not_decoded: 'found, no decoder claims it', foreign: 'a foreign path', stream: 'a stream', other_service: 'another service', broken: 'no uri or no service', duplicate: 'the same uri again' };
-  const LIST_KINDS = { playlist: 'playlist', favourites: 'favourites', 'radio-favourites': 'radio favourites', 'my-web-radio': 'web radios', queue: 'the queue as last saved' };
+  // An item's state as the lists check says it, and a list's kind.
+  const listState = (s) => t('page.list_state.' + s);
+  const listKind = (k) => t('page.kind.' + k.replace(/-/g, '_'));
 
   async function readVolumioLists() {
     const box = $('report-volumio');
     box.textContent = '';
-    $('progress-volumio').textContent = 'Reading...';
+    $('progress-volumio').textContent = t('page.reading');
     $('read-volumio').disabled = true;
     try {
       const r = await api('/api/volumio/lists');
       const lists = r.lists || [];
-      $('progress-volumio').textContent = lists.length ? lists.length + (lists.length === 1 ? ' list read.' : ' lists read.') + (r.decoders.source !== 'mpd' ? ' MPD could not be asked for its decoders; the usual audio suffixes assumed.' : '') : 'Volumio has no lists yet.';
+      $('progress-volumio').textContent = lists.length
+        ? t('page.volumio.lists_read', { n: lists.length }) + (r.decoders.source !== 'mpd' ? ' ' + t('page.decoders.assumed_short') : '')
+        : t('page.volumio.no_lists');
       lists.forEach((s) => {
         const d = el('details', 'sheet');
         const sum = el('summary');
         const bad = s.missing + s.foreign + s.broken + s.duplicates;
-        sum.appendChild(el('span', 'tag' + (s.problem && !s.salvaged ? ' bad' : s.repairable ? ' warn' : ' ok'), s.problem && !s.salvaged ? 'not read' : s.salvaged ? 'cut short' + (bad ? ', ' + bad + (bad === 1 ? ' finding' : ' findings') : '') : s.repairable ? bad + (bad === 1 ? ' finding' : ' findings') : 'clean'));
-        sum.appendChild(el('span', 'path', (s.kind === 'playlist' ? 'playlist ' : '') + s.name));
-        sum.appendChild(el('span', 'help', (LIST_KINDS[s.kind] || s.kind) + ', ' + s.items + (s.items === 1 ? ' item' : ' items') + ', ' + s.ok + ' found' + (s.streams ? ', ' + s.streams + ' streams' : '') + (s.other_services ? ', ' + s.other_services + ' of other services' : '')));
+        const findings = bad ? t('page.findings', { n: bad }) : '';
+        sum.appendChild(el('span', 'tag' + (s.problem && !s.salvaged ? ' bad' : s.repairable ? ' warn' : ' ok'),
+          s.problem && !s.salvaged ? t('page.volumio.not_read_tag') : s.salvaged ? t('page.volumio.cut_short') + (bad ? separator() + findings : '') : s.repairable ? findings : t('page.clean')));
+        sum.appendChild(el('span', 'path', s.kind === 'playlist' ? t('page.volumio.playlist_name', { name: s.name }) : s.name));
+        const parts = [listKind(s.kind), t('page.items', { n: s.items }), t('page.found', { n: s.ok })];
+        if (s.streams) parts.push(t('page.streams', { n: s.streams }));
+        if (s.other_services) parts.push(t('page.other_services', { n: s.other_services }));
+        sum.appendChild(el('span', 'help', parts.join(separator())));
         d.appendChild(sum);
         const inner = el('div', 'inner');
-        if (s.problem) inner.appendChild(el('div', 'help' + (s.salvaged ? '' : ' bad'), (s.salvaged ? 'The file is cut short: ' : 'The file could not be read: ') + s.problem + (s.salvaged ? '; ' + s.items + ' items could be read before the cut.' : '')));
+        if (s.problem) inner.appendChild(el('div', 'help' + (s.salvaged ? '' : ' bad'), s.salvaged ? t('page.volumio.cut_short_file', { problem: s.problem, n: s.items }) : t('page.volumio.not_read_file', { problem: s.problem })));
         const counts = [['missing', s.missing], ['foreign', s.foreign], ['broken', s.broken], ['duplicate', s.duplicates], ['not_decoded', s.not_decoded]].filter((c) => c[1]);
         counts.forEach((c) => {
           const row = el('div', 'why');
-          row.appendChild(el('span', 'tag warn', c[0].replace('_', ' ')));
-          row.appendChild(text(' ' + c[1] + (c[1] === 1 ? ' item: ' : ' items: ') + LIST_STATES[c[0]] + '.'));
+          row.appendChild(el('span', 'tag warn', t('page.tag.' + c[0])));
+          row.appendChild(text(' ' + t('page.volumio.count_row', { n: c[1], state: listState(c[0]) })));
           inner.appendChild(row);
         });
         if (s.repairable && s.kind !== 'queue') {
-          const fix = el('button', '', 'Repair');
+          const fix = el('button', '', t('page.repair'));
           const card = el('div');
           fix.addEventListener('click', () => { fix.disabled = true; repairWith('volumio_list', '', card, fix, { name: s.id }); });
           const actions = el('div', 'actions');
@@ -519,25 +562,25 @@
           inner.appendChild(actions);
           inner.appendChild(card);
         } else if (s.repairable) {
-          inner.appendChild(el('div', 'help', 'The saved queue is what Volumio reads at its next boot; the queue as it plays now is below.'));
+          inner.appendChild(el('div', 'help', t('page.volumio.saved_queue_note')));
         }
         if (s.list.length) {
           const rows = s.list.map((e) => {
             const cell = el('span');
-            cell.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' || e.state === 'other_service' ? ' ok' : ' warn'), LIST_STATES[e.state] || e.state));
+            cell.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' || e.state === 'other_service' ? ' ok' : ' warn'), listState(e.state)));
             cell.appendChild(text(' '));
             if (e.title) cell.appendChild(text(e.title + ' '));
             cell.appendChild(el('code', '', e.uri));
             return [cell, String(e.index + 1)];
           });
           table(inner, rows);
-          if (s.truncated) inner.appendChild(el('div', 'help', 'Only the first ' + s.list.length + ' items are listed.'));
+          if (s.truncated) inner.appendChild(el('div', 'help', t('page.volumio.only_first_items', { n: s.list.length })));
         }
         d.appendChild(inner);
         box.appendChild(d);
       });
     } catch (e) {
-      $('progress-volumio').textContent = 'The lists could not be read: ' + (e.message || e);
+      $('progress-volumio').textContent = t('page.volumio.lists_error', { error: e.message || e });
     }
     $('read-volumio').disabled = false;
   }
@@ -556,10 +599,10 @@
         try {
           volumioSocket = window.io(base, { transports: ['websocket', 'polling'] });
           volumioSocket.on('connect', () => resolve(volumioSocket));
-          volumioSocket.on('connect_error', (e) => reject(new Error('Volumio\'s socket did not answer: ' + (e.message || e))));
+          volumioSocket.on('connect_error', (e) => reject(new Error(t('page.volumio.socket_no_answer', { error: e.message || e }))));
         } catch (e) { reject(e); }
       };
-      s.onerror = () => reject(new Error('Volumio\'s socket script could not be loaded from ' + base));
+      s.onerror = () => reject(new Error(t('page.volumio.socket_no_script', { base })));
       document.head.appendChild(s);
     });
   }
@@ -574,7 +617,7 @@
     const box = $('queue-box');
     const note = $('queue-note');
     box.textContent = '';
-    note.textContent = 'Reading...';
+    note.textContent = t('page.reading');
     $('read-queue').disabled = true;
     try {
       const socket = await playerSocket();
@@ -582,22 +625,22 @@
       const r = await api('/api/volumio/queue/check', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ items: queue.map((q) => ({ uri: q.uri, service: q.service, name: q.name })) }) });
       const states = r.items || [];
       const gone = states.filter((s) => s.state === 'missing' || s.state === 'foreign' || s.state === 'broken');
-      note.textContent = queue.length + (queue.length === 1 ? ' item' : ' items') + ', ' + gone.length + ' whose file is gone.';
+      note.textContent = t('page.volumio.queue_note', { n: queue.length, gone: gone.length });
       const rows = states.map((s, i) => {
         const q = queue[i] || {};
         const cell = el('span');
-        cell.appendChild(el('span', 'tag' + (s.state === 'ok' || s.state === 'stream' || s.state === 'other_service' ? ' ok' : ' warn'), LIST_STATES[s.state] || s.state));
+        cell.appendChild(el('span', 'tag' + (s.state === 'ok' || s.state === 'stream' || s.state === 'other_service' ? ' ok' : ' warn'), listState(s.state)));
         cell.appendChild(text(' ' + (q.name || q.title || '') + ' '));
         cell.appendChild(el('code', '', q.uri || ''));
         return [cell, String(i + 1)];
       });
       if (rows.length) table(box, rows);
       if (gone.length) {
-        const b = el('button', 'primary', 'Take the ' + gone.length + (gone.length === 1 ? ' item' : ' items') + ' out of the queue');
+        const b = el('button', 'primary', t('page.volumio.take_out', { n: gone.length }));
         b.addEventListener('click', async () => {
           b.disabled = true;
           gone.map((s) => s.index).sort((a, c) => c - a).forEach((index) => socket.emit('removeFromQueue', { value: index }));
-          note.textContent = 'Taken out; reading the queue again...';
+          note.textContent = t('page.volumio.taken_out');
           setTimeout(readQueue, 1200);
         });
         const actions = el('div', 'actions');
@@ -605,7 +648,7 @@
         box.appendChild(actions);
       }
     } catch (e) {
-      note.textContent = 'The queue could not be read: ' + (e.message || e);
+      note.textContent = t('page.volumio.queue_error', { error: e.message || e });
     }
     $('read-queue').disabled = false;
   }
@@ -616,9 +659,9 @@
   // The folder's audio files as a grid, one column per field MPD reads; the edits
   // kept here until Preview, then sent as the tagedit kind and shown through the same
   // card as the repairs.
-  const EDIT_FIELDS = [['track', 'Track'], ['title', 'Title'], ['artist', 'Artist'], ['albumartist', 'Album artist'], ['album', 'Album'], ['date', 'Date'], ['disc', 'Disc'], ['genre', 'Genre'], ['composer', 'Composer'], ['comment', 'Comment']];
+  const EDIT_FIELDS = ['track', 'title', 'artist', 'albumartist', 'album', 'date', 'disc', 'genre', 'composer', 'comment'];
   const grid = { path: null, files: [], edits: {}, columns: ['track', 'title', 'artist', 'albumartist', 'album', 'date'] };
-  const fieldLabel = (f) => (EDIT_FIELDS.find((x) => x[0] === f) || [f, f])[1];
+  const fieldLabel = (f) => t('page.field.' + f);
   const original = (file, f) => (file.values[f] || []).join(' ; ');
 
   // The grid read from the folder; the preview box is cleared when the user opens
@@ -626,7 +669,7 @@
   async function openEditor(afterWrite) {
     const box = $('editor-box');
     box.textContent = '';
-    box.appendChild(el('div', 'progress', 'Reading the folder...'));
+    box.appendChild(el('div', 'progress', t('page.editor.reading')));
     try {
       const r = await api('/api/tags?path=' + encodeURIComponent(current.path));
       grid.path = r.path;
@@ -636,7 +679,7 @@
       renderGrid();
     } catch (e) {
       box.textContent = '';
-      box.appendChild(el('div', 'help bad', 'The folder could not be read: ' + (e.message || e)));
+      box.appendChild(el('div', 'help bad', t('page.editor.error', { error: e.message || e })));
     }
   }
 
@@ -659,30 +702,30 @@
   function updateEditCount() {
     const n = editsBody().length;
     $('preview-edits').disabled = n === 0;
-    $('edit-count').textContent = grid.path === null ? '' : (n ? n + (n === 1 ? ' file' : ' files') + ' changed, not written yet.' : 'Nothing changed yet.');
+    $('edit-count').textContent = grid.path === null ? '' : (n ? t('page.editor.changed', { n }) : t('page.editor.nothing_changed'));
   }
 
   function renderGrid() {
     const box = $('editor-box');
     box.textContent = '';
     if (!grid.files.length) {
-      box.appendChild(el('div', 'help', 'No audio files in this folder; the editor works on the folder in hand, not the folders under it.'));
+      box.appendChild(el('div', 'help', t('page.editor.no_files')));
       updateEditCount();
       return;
     }
     const pick = el('div', 'line');
-    pick.appendChild(el('span', 'help', 'Columns: '));
-    EDIT_FIELDS.forEach(([f, label]) => {
+    pick.appendChild(el('span', 'help', t('page.editor.columns') + ' '));
+    EDIT_FIELDS.forEach((f) => {
       const l = el('label', 'pref');
       const c = el('input');
       c.type = 'checkbox';
       c.checked = grid.columns.includes(f);
       c.addEventListener('change', () => {
-        grid.columns = EDIT_FIELDS.map((x) => x[0]).filter((x) => (x === f ? c.checked : grid.columns.includes(x)));
+        grid.columns = EDIT_FIELDS.filter((x) => (x === f ? c.checked : grid.columns.includes(x)));
         renderGrid();
       });
       l.appendChild(c);
-      l.appendChild(text(' ' + label));
+      l.appendChild(text(' ' + fieldLabel(f)));
       pick.appendChild(l);
     });
     box.appendChild(pick);
@@ -690,19 +733,19 @@
     const table = el('table', 'grid');
     const thead = el('thead');
     const h1 = el('tr');
-    h1.appendChild(el('th', '', 'File'));
+    h1.appendChild(el('th', '', t('page.editor.file')));
     grid.columns.forEach((f) => h1.appendChild(el('th', '', fieldLabel(f))));
     thead.appendChild(h1);
     const h2 = el('tr', 'setall');
-    h2.appendChild(el('th', 'help', 'every file:'));
+    h2.appendChild(el('th', 'help', t('page.editor.every_file')));
     grid.columns.forEach((f) => {
       const th = el('th');
       const i = el('input');
       i.type = 'text';
-      i.placeholder = 'one value for all';
+      i.placeholder = t('page.editor.one_value');
       i.spellcheck = false;
-      const b = el('button', 'small', 'Set');
-      b.title = 'Put this value in every file\'s ' + fieldLabel(f) + '; empty removes it from every file.';
+      const b = el('button', 'small', t('page.editor.set'));
+      b.title = t('page.editor.set_title', { field: fieldLabel(f) });
       b.addEventListener('click', () => { grid.files.filter((file) => file.writable).forEach((file) => setCell(file.name, f, i.value)); renderGrid(); });
       th.appendChild(i);
       th.appendChild(text(' '));
@@ -716,7 +759,7 @@
       const tr = el('tr');
       const name = el('td', 'file');
       name.appendChild(el('code', '', file.name));
-      if (!file.writable) name.appendChild(el('span', 'help', ' ' + (file.problem ? 'not read: ' + file.problem : 'read, not written here')));
+      if (!file.writable) name.appendChild(el('span', 'help', ' ' + (file.problem ? t('page.editor.not_read', { problem: file.problem }) : t('page.editor.read_only'))));
       name.title = file.path + ' (' + file.format + ')';
       tr.appendChild(name);
       grid.columns.forEach((f) => {
@@ -727,7 +770,7 @@
         const orig = original(file, f);
         const edited = grid.edits[file.name] && (f in grid.edits[file.name]);
         i.value = edited ? grid.edits[file.name][f] : orig;
-        if ((file.values[f] || []).length > 1) i.title = 'Several values as read; an edit replaces them with the one typed.';
+        if ((file.values[f] || []).length > 1) i.title = t('page.editor.several');
         i.disabled = !file.writable;
         if (edited) i.className = 'changed';
         i.addEventListener('input', () => {
@@ -780,24 +823,24 @@
   }
   function loadReport() {
     fetch('/api/report', { cache: 'no-store' }).then((r) => r.json()).then(showReport)
-      .catch((e) => { reportBox.value = 'The report could not be read: ' + (e.message || e); });
+      .catch((e) => { reportBox.value = t('page.system.error', { error: e.message || e }); });
   }
   $('copy').addEventListener('click', () => {
     reportBox.focus();
     reportBox.select();
     let done = false;
     try { done = document.execCommand('copy'); } catch (e) { done = false; }
-    reportNote.textContent = done ? 'Copied.' : 'Selected; copy it with Ctrl+C or Cmd+C.';
+    reportNote.textContent = done ? t('page.system.copied') : t('page.system.selected');
   });
   $('measure').addEventListener('click', () => {
     const button = $('measure');
     button.disabled = true;
-    reportNote.textContent = 'Asking MPD for every song...';
+    reportNote.textContent = t('page.system.asking');
     fetch('/api/report/measure', { method: 'POST' }).then((r) => r.json()).then((r) => {
-      if (r.error) { reportNote.textContent = r.error; return; }
+      if (r.error) { reportNote.textContent = tm(r.error); return; }
       showReport(r);
-      reportNote.textContent = r.album && r.album.error ? 'Not measured: ' + r.album.error : 'Measured.';
-    }).catch((e) => { reportNote.textContent = 'Not measured: ' + (e.message || e); }).then(() => { button.disabled = false; });
+      reportNote.textContent = r.album && r.album.error ? t('page.system.not_measured', { error: r.album.error }) : t('page.system.measured');
+    }).catch((e) => { reportNote.textContent = t('page.system.not_measured', { error: e.message || e }); }).then(() => { button.disabled = false; });
   });
 
   // The tab to open: `?tab=cue` in the address, else the one open last time here.
@@ -812,8 +855,8 @@
   function showPrefs(p) {
     const select = $('pref-video');
     select.value = p.video;
-    select.options[0].textContent = p.glass ? 'as Glass says (in use)' : 'as Glass says (not found)';
-    select.title = p.error ? 'Not kept: ' + p.error : (p.video_in_use ? 'Video containers are counted, never suggested.' : 'Video containers are suggested as lines to keep out.');
+    select.options[0].textContent = p.glass ? t('page.ignore.video_auto_in_use') : t('page.ignore.video_auto_not_found');
+    select.title = p.error ? t('page.prefs.not_kept', { error: p.error }) : (p.video_in_use ? t('page.prefs.counted') : t('page.prefs.suggested'));
   }
 
   async function loadPrefs() {
@@ -830,17 +873,13 @@
 
   // ---------------------------------------------------------------- the jobs
 
-  const CLASSES = {
-    system_folder: 'NAS and system folders', sidecar: 'Sidecar files', archive: 'Archives', video: 'Video containers',
-    ffmpeg_only: 'Claimed only by ffmpeg', audio: 'Audio', cue: 'CUE sheets', playlist: 'Playlists', image: 'Images',
-    other: 'Other', folder: 'Folders'
-  };
+  const className = (k) => t('page.class.' + k);
   // One job at a time in the core; each panel follows its own kind.
   const panels = {
-    ignore: { kind: 'ignore', job: null, verb: 'Walking', render: reportIgnore },
-    cue: { kind: 'cue', job: null, verb: 'Reading', render: reportCue },
-    tags: { kind: 'tags', job: null, verb: 'Reading', render: reportTags },
-    playlists: { kind: 'playlists', job: null, verb: 'Reading', render: reportPlaylists }
+    ignore: { kind: 'ignore', job: null, verb: 'page.job.walking', render: reportIgnore },
+    cue: { kind: 'cue', job: null, verb: 'page.job.reading', render: reportCue },
+    tags: { kind: 'tags', job: null, verb: 'page.job.reading', render: reportTags },
+    playlists: { kind: 'playlists', job: null, verb: 'page.job.reading', render: reportPlaylists }
   };
 
   function progress(p, message, bad) {
@@ -876,7 +915,7 @@
     try {
       const j = await api('/api/jobs/' + p.job.id);
       if (j.state === 'running') {
-        progress(p, p.verb + ' ' + (j.path || 'the library') + ': ' + j.directories + ' folders, ' + j.files + ' files, ' + j.seconds + ' s.');
+        progress(p, t('page.job.progress', { verb: t(p.verb), path: theLibrary(j.path), dirs: j.directories, files: j.files, seconds: j.seconds }));
         p.job.timer = setTimeout(() => poll(p), 1000);
         return;
       }
@@ -891,8 +930,9 @@
     buttons(p, false);
     p.job = null;
     if (!j) return;
-    if (j.state === 'failed') { progress(p, 'Failed: ' + j.error, true); return; }
-    progress(p, (j.state === 'cancelled' ? 'Cancelled after ' : 'Done in ') + j.seconds + ' s: ' + j.directories + ' folders, ' + j.files + ' files under ' + (j.path || 'the library') + '.');
+    if (j.state === 'failed') { progress(p, t('page.job.failed', { error: j.error }), true); return; }
+    const vars = { seconds: j.seconds, dirs: j.directories, files: j.files, path: theLibrary(j.path) };
+    progress(p, j.state === 'cancelled' ? t('page.job.cancelled', vars) : t('page.job.done', vars));
     p.render(j.result);
   }
 
@@ -923,57 +963,71 @@
     parent.appendChild(t);
   }
 
+  // The notes every report shares: the decoders, the entries not read, a cancel.
+  function decodersNote(r) {
+    return r.decoders.source === 'mpd'
+      ? t('page.decoders.from_mpd', { count: r.decoders.count, detail: r.decoders.detail })
+      : t('page.decoders.assumed', { count: r.decoders.count, detail: r.decoders.detail });
+  }
+  function commonNotes(r, notes) {
+    if (r.decoders.source !== 'mpd') notes.push(t('page.decoders.assumed_long', { detail: r.decoders.detail }));
+    if (r.unreadable) notes.push(t('page.unreadable', { n: r.unreadable }));
+    if (r.cancelled) notes.push(t('page.check_cancelled'));
+    return notes;
+  }
+  const examples = (list) => list.map(tm).join('  |  ');
+
   // ------------------------------------------------------- the .mpdignore report
 
   function reportIgnore(r) {
     const box = $('report-ignore');
     box.textContent = '';
     if (!r) return;
-    const decoders = r.decoders.source === 'mpd'
-      ? 'The decoders of the running MPD: ' + r.decoders.count + ' suffixes, ' + tm(r.decoders.detail) + '.'
-      : 'MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); ' + r.decoders.count + ' audio suffixes assumed.';
-    const notes = [decoders];
-    if (r.video_in_use) notes.push('Video is in use here: video containers are counted, not suggested.');
-    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
-    if (r.too_deep) notes.push(r.too_deep + ' folders were nested too deep to walk.');
-    if (r.cancelled) notes.push('The walk was cancelled: the counts are partial.');
-    const s = section(box, 'Suggested lines', 'Each would go into .mpdignore at ' + (r.path || 'the library root') + ' and cover everything under it. Tick the ones to write, then Preview below.');
+    const notes = [decodersNote(r)];
+    if (r.video_in_use) notes.push(t('page.ignore.video_in_use_note'));
+    if (r.unreadable) notes.push(t('page.unreadable', { n: r.unreadable }));
+    if (r.too_deep) notes.push(t('page.ignore.too_deep', { n: r.too_deep }));
+    if (r.cancelled) notes.push(t('page.ignore.cancelled'));
+    const s = section(box, t('page.ignore.suggested'), t('page.ignore.suggested_help', { path: r.path || t('page.library_root') }));
     if (!r.suggestions.length) {
-      s.appendChild(el('div', 'help', 'Nothing to keep out: MPD meets only music, playlists, sheets and pictures here.'));
+      s.appendChild(el('div', 'help', t('page.ignore.nothing')));
     } else {
       r.suggestions.forEach((g) => {
         const d = el('div', 'sugg');
         const top = el('div', 'top');
         top.appendChild(pickBox(g.pattern));
         top.appendChild(el('code', '', g.pattern));
-        top.appendChild(el('span', 'tag' + (g.class === 'video' ? ' warn' : ''), CLASSES[g.class] || g.class));
-        top.appendChild(el('span', '', g.count + (g.count === 1 ? ' entry' : ' entries') + (g.bytes ? ', ' + size(g.bytes) : '')));
+        top.appendChild(el('span', 'tag' + (g.class === 'video' ? ' warn' : ''), className(g.class)));
+        top.appendChild(el('span', '', t('page.entries', { n: g.count }) + (g.bytes ? separator() + size(g.bytes) : '')));
         d.appendChild(top);
-        d.appendChild(el('div', 'why', g.note));
+        d.appendChild(el('div', 'why', tm(g.note)));
         if (g.examples.length) d.appendChild(el('div', 'ex', g.examples.join('  |  ')));
         s.appendChild(d);
       });
     }
-    const classes = Object.keys(r.classes).map((k) => [CLASSES[k] || k, String(r.classes[k].count), r.classes[k].bytes ? size(r.classes[k].bytes) : '']);
-    const c = section(box, 'What MPD meets here', notes.join(' '));
-    table(c, classes.length ? classes : [['Nothing', '', '']]);
+    const classes = Object.keys(r.classes).map((k) => [className(k), String(r.classes[k].count), r.classes[k].bytes ? size(r.classes[k].bytes) : '']);
+    const c = section(box, t('page.ignore.meets'), notes.join(' '));
+    table(c, classes.length ? classes : [[t('page.nothing'), '', '']]);
     if (r.excluded.count) {
-      const e = section(box, 'Already kept out', r.excluded.count + ' entries match a line in force, so MPD never looks at them.');
-      e.appendChild(el('div', 'ex', r.excluded.examples.join('  |  ')));
+      const e = section(box, t('page.ignore.already'), t('page.ignore.already_help', { n: r.excluded.count }));
+      e.appendChild(el('div', 'ex', examples(r.excluded.examples)));
     }
     linesInForce(box, r.in_force);
     const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
-    if (audio.length) table(section(box, 'Audio by suffix'), audio);
+    if (audio.length) table(section(box, t('page.ignore.audio_by_suffix')), audio);
     const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => [pickRow('*.' + k), String(r.ffmpeg_suffixes[k])]);
-    if (ffmpeg.length) table(section(box, 'Claimed only by ffmpeg, by suffix', 'MPD opens and probes each of these at every update because its ffmpeg decoder claims the suffix. Text, lyrics and subtitles are suggested above; tick any other suffix to keep it out too.'), ffmpeg);
+    if (ffmpeg.length) table(section(box, t('page.ignore.ffmpeg_by_suffix'), t('page.ignore.ffmpeg_help')), ffmpeg);
     if (r.other_suffixes.length) {
-      table(section(box, 'Other files by suffix', 'Nothing claims these; MPD stats each one and moves on. Tick a suffix to spare the stat with a line; the line matches the suffix as written, since MPD matches case for case.'), r.other_suffixes.map((p) => {
-        const cell = p[0].startsWith('(') || p[0] === 'mpdignore' ? (p[0].startsWith('(') ? p[0] : '.' + p[0]) : pickRow('*.' + p[0]);
-        const examples = (r.other_examples || {})[p[0]] || [];
-        if (examples.length && !p[0].startsWith('(')) {
+      // The core says "(none)" for a name without a suffix and "(other suffixes)" for
+      // the suffixes past the ones listed; both are said in the page's language.
+      const label = (s) => (s === '(none)' ? t('page.ignore.no_suffix') : s === '(other suffixes)' ? t('page.ignore.other_suffixes') : null);
+      table(section(box, t('page.ignore.other_by_suffix'), t('page.ignore.other_help')), r.other_suffixes.map((p) => {
+        const cell = label(p[0]) !== null ? label(p[0]) : p[0] === 'mpdignore' ? '.' + p[0] : pickRow('*.' + p[0]);
+        const ex = (r.other_examples || {})[p[0]] || [];
+        if (ex.length && label(p[0]) === null) {
           const wrap = el('div');
           wrap.appendChild(typeof cell === 'string' ? text(cell) : cell);
-          wrap.appendChild(el('div', 'help', examples.join('  |  ')));
+          wrap.appendChild(el('div', 'help', ex.join('  |  ')));
           return [wrap, String(p[1])];
         }
         return [cell, String(p[1])];
@@ -987,7 +1041,7 @@
     const pick = el('input', 'pick');
     pick.type = 'checkbox';
     pick.value = pattern;
-    pick.title = 'Write ' + pattern;
+    pick.title = t('page.ignore.write_pattern', { pattern });
     pick.addEventListener('change', () => toggleLine(pattern, pick.checked));
     return pick;
   }
@@ -1000,29 +1054,26 @@
   }
 
   function linesInForce(box, inForce) {
-    const f = section(box, 'Lines in force', inForce.length ? 'The .mpdignore files from the root down to this folder, as MPD inherits them.' : 'No .mpdignore from the root down to this folder.');
+    const f = section(box, t('page.in_force.title'), inForce.length ? t('page.in_force.help') : t('page.in_force.none'));
     inForce.forEach((l) => {
       const row = el('div', 'sugg');
       const top = el('div', 'top');
-      const open = el('a', 'path', (l.dir || 'the root') + '/.mpdignore');
+      const open = el('a', 'path', theRoot(l.dir) + '/.mpdignore');
       open.href = '/?tab=ignore' + toHash(l.dir || '');
-      open.title = 'Open that folder to edit its lines.';
+      open.title = t('page.in_force.open');
       top.appendChild(open);
       row.appendChild(top);
       const lines = el('div', 'ex');
       l.lines.forEach((line, i) => { if (i) lines.appendChild(text('  |  ')); lines.appendChild(el('code', '', line)); });
-      if (!l.lines.length) lines.textContent = 'no pattern in it';
+      if (!l.lines.length) lines.textContent = t('page.in_force.no_pattern');
       row.appendChild(lines);
       // A line starting with # is a comment to MPD; one that looks like a name did
       // nothing for its writer.
       l.dead.forEach((line) => {
         const why = el('div', 'why');
-        why.appendChild(el('span', 'tag warn', 'dead line'));
+        why.appendChild(el('span', 'tag warn', t('page.in_force.dead')));
         why.appendChild(text(' '));
-        why.appendChild(el('code', '', line));
-        why.appendChild(text(' is a comment to MPD, so it keeps nothing out. For a name starting with a hash, the line that works is '));
-        why.appendChild(el('code', '', '[#]' + line.slice(1)));
-        why.appendChild(text('.'));
+        why.appendChild(tn('page.in_force.dead_line', { line: el('code', '', line), fixed: el('code', '', '[#]' + line.slice(1)) }));
         row.appendChild(why);
       });
       f.appendChild(row);
@@ -1031,57 +1082,62 @@
 
   // -------------------------------------------------------------- the CUE report
 
-  const FILE_STATES = { ok: 'beside the sheet', missing: 'not beside the sheet', case: 'there in another case', suffix: 'there with another suffix', not_decoded: 'there, but no decoder claims it', foreign: 'a foreign path' };
+  const fileState = (s) => t('page.file_state.' + s);
   // The findings a repair of the sheet's text, or its removal, answers.
   const REPAIRABLE = ['C01', 'C02', 'C04', 'C05', 'C06', 'C07', 'C11', 'C12'];
+
+  function codeRows(r) {
+    return Object.keys(r.by_code).map((code) => [code + '  ' + codeText(code, r.codes[code]), String(r.by_code[code])]);
+  }
+
+  function findingLine(f) {
+    const line = el('div', 'finding');
+    line.appendChild(el('code', '', f.code + (f.line ? ' ' + t('page.line', { n: f.line }) : '')));
+    line.appendChild(text(tm(f.text)));
+    return line;
+  }
 
   function reportCue(r) {
     const box = $('report-cue');
     box.textContent = '';
     if (!r) return;
-    const notes = [];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
-    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
-    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
-    const totals = section(box, 'Sheets under ' + (r.path || 'the library'), notes.join(' '));
-    const rows = [['Sheets', String(r.sheets)], ['Clean', String(r.clean)], ['With findings', String(r.with_findings)]];
-    Object.keys(r.by_code).forEach((code) => { rows.push([code + '  ' + (r.codes[code] || ''), String(r.by_code[code])]); });
+    const notes = commonNotes(r, []);
+    const totals = section(box, t('page.cue.sheets_under', { path: theLibrary(r.path) }), notes.join(' '));
+    const rows = [[t('page.cue.sheets'), String(r.sheets)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
-    if (!r.sheets) { totals.appendChild(el('div', 'help', 'No CUE sheet under this folder.')); linesInForce(box, r.in_force); return; }
-    const list = section(box, 'Each sheet', 'Sheets with findings first. A finding says what MPD does with the sheet as it is; Repair shows what the sheet would be with the repairs it allows, and writes it on your say.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' sheets are listed; the totals count every one.' : ''));
+    if (!r.sheets) { totals.appendChild(el('div', 'help', t('page.cue.none'))); linesInForce(box, r.in_force); return; }
+    const list = section(box, t('page.cue.each'), t('page.cue.each_help') + (r.list_truncated ? ' ' + t('page.cue.only_first_sheets', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
       const d = el('details', 'sheet');
       const sum = el('summary');
-      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? s.findings.length + (s.findings.length === 1 ? ' finding' : ' findings') : 'clean'));
+      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? t('page.findings', { n: s.findings.length }) : t('page.clean')));
       sum.appendChild(el('span', 'path', s.path));
-      sum.appendChild(el('span', 'help', s.tracks + (s.tracks === 1 ? ' track' : ' tracks') + (s.album ? ', ' + s.album : '') + (s.encoding && s.encoding !== 'utf-8' ? ', ' + s.encoding : '')));
+      const parts = [t('page.tracks', { n: s.tracks })];
+      if (s.album) parts.push(s.album);
+      if (s.encoding && s.encoding !== 'utf-8') parts.push(s.encoding);
+      sum.appendChild(el('span', 'help', parts.join(separator())));
       d.appendChild(sum);
       const inner = el('div', 'inner');
-      s.findings.forEach((f) => {
-        const line = el('div', 'finding');
-        line.appendChild(el('code', '', f.code + (f.line ? ' line ' + f.line : '')));
-        line.appendChild(text(f.text));
-        inner.appendChild(line);
-      });
+      s.findings.forEach((f) => inner.appendChild(findingLine(f)));
       s.files.forEach((f) => {
         const line = el('div', 'finding');
-        line.appendChild(el('span', 'tag ' + (f.state === 'ok' ? 'ok' : 'warn'), f.accepted ? f.kind : f.kind + ' (dropped)'));
+        line.appendChild(el('span', 'tag ' + (f.state === 'ok' ? 'ok' : 'warn'), f.accepted ? f.kind : t('page.cue.dropped', { kind: f.kind })));
         line.appendChild(text(' '));
         line.appendChild(el('code', '', f.name));
-        line.appendChild(text(' ' + (FILE_STATES[f.state] || f.state) + (f.found ? ': ' + f.found : '')));
+        line.appendChild(text(' ' + fileState(f.state) + (f.found ? ': ' + tm(f.found) : '')));
         inner.appendChild(line);
       });
       if (s.findings.some((f) => REPAIRABLE.includes(f.code))) {
-        const fix = el('button', '', 'Repair');
+        const fix = el('button', '', t('page.repair'));
         const card = el('div');
         fix.addEventListener('click', () => { fix.disabled = true; repairWith('cue', s.path, card, fix); });
         inner.appendChild(fix);
         inner.appendChild(card);
       }
       if (s.track_list.length) {
-        const rows = s.track_list.map((t) => [t.number + '  ' + (t.title || '') + (t.performer ? '  (' + t.performer + ')' : ''), ms(t.start_ms) + (t.end_ms !== null && t.end_ms !== undefined ? ' to ' + ms(t.end_ms) : ''), t.file]);
+        const rows = s.track_list.map((k) => [k.number + '  ' + (k.title || '') + (k.performer ? '  (' + k.performer + ')' : ''), k.end_ms !== null && k.end_ms !== undefined ? t('page.to', { from: ms(k.start_ms), to: ms(k.end_ms) }) : ms(k.start_ms), k.file]);
         table(inner, rows);
-        if (s.tracks_truncated) inner.appendChild(el('div', 'help', 'Only the first ' + s.track_list.length + ' tracks are listed.'));
+        if (s.tracks_truncated) inner.appendChild(el('div', 'help', t('page.cue.only_first_tracks', { n: s.track_list.length })));
       }
       d.appendChild(inner);
       list.appendChild(d);
@@ -1095,44 +1151,42 @@
     const box = $('report-tags');
     box.textContent = '';
     if (!r) return;
-    const notes = [r.read + ' audio files read' + (Object.keys(r.by_format).length ? ' (' + Object.keys(r.by_format).map((k) => k + ' ' + r.by_format[k]).join(', ') + ')' : '') + '.'];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
-    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
-    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
-    const splits = section(box, 'Folders that show as several albums', r.splits.length
-      ? 'Volumio groups an album by Album and AlbumArtist, falling back to Artist. In these folders the files disagree, so the Albums view shows the folder as more than one album, or spreads an album over several.' + (r.splits_truncated ? ' Only the first ' + r.splits.length + ' folders are listed; the totals count every one.' : '')
-      : 'Every folder under ' + (r.path || 'the library') + ' with music in it reads as one album. ' + notes.join(' '));
+    const formats = Object.keys(r.by_format).map((k) => k + ' ' + r.by_format[k]).join(separator());
+    const notes = commonNotes(r, [t('page.tags.read', { n: r.read }) + (formats ? ' (' + formats + ')' : '') + '.']);
+    const splits = section(box, t('page.tags.splits'), r.splits.length
+      ? t('page.tags.splits_help') + (r.splits_truncated ? ' ' + t('page.tags.only_first_folders', { n: r.splits.length }) : '')
+      : t('page.tags.one_album', { path: theLibrary(r.path) }) + ' ' + notes.join(' '));
     r.splits.forEach((s) => {
       const d = el('div', 'sugg');
       const top = el('div', 'top');
-      top.appendChild(el('span', 'tag warn', s.files + ' files'));
-      const open = el('a', 'path', s.dir || 'the root');
+      top.appendChild(el('span', 'tag warn', t('page.files', { n: s.files })));
+      const open = el('a', 'path', theRoot(s.dir));
       open.href = toHash(s.dir);
-      open.title = 'Open the folder; the repair below applies to the folder in hand.';
+      open.title = t('page.tags.open_folder');
       top.appendChild(open);
       d.appendChild(top);
       const line = (label, values) => {
         if (values.length < 2) return;
         const row = el('div', 'ex');
         row.appendChild(text(label + ': '));
-        values.forEach((v, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', v[0])); row.appendChild(text(' ' + v[1])); });
+        values.forEach((v, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', v[0] === '(none)' ? t('page.none') : v[0])); row.appendChild(text(' ' + v[1])); });
         d.appendChild(row);
       };
-      line('Album', s.albums);
-      line('Album artist', s.album_artists);
-      line('Date', s.dates);
+      line(t('page.field.album'), s.albums);
+      line(t('page.field.albumartist'), s.album_artists);
+      line(t('page.field.date'), s.dates);
       splits.appendChild(d);
     });
     const codes = Object.keys(r.findings);
-    const f = section(box, 'What MPD would see', codes.length ? notes.join(' ') : notes.join(' ') + ' Nothing to say about the tags.');
+    const f = section(box, t('page.tags.would_see'), codes.length ? notes.join(' ') : notes.join(' ') + ' ' + t('page.tags.nothing'));
     codes.forEach((code) => {
       const g = r.findings[code];
       const d = el('div', 'sugg');
       const top = el('div', 'top');
       top.appendChild(el('code', '', code));
-      top.appendChild(el('span', '', (r.codes[code] || code) + ': ' + g.count + (g.count === 1 ? ' file' : ' files')));
+      top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t('page.files', { n: g.count })));
       d.appendChild(top);
-      if (g.examples.length) d.appendChild(el('div', 'ex', g.examples.join('  |  ')));
+      if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
       f.appendChild(d);
     });
     linesInForce(box, r.in_force);
@@ -1140,7 +1194,7 @@
 
   // --------------------------------------------------------- the playlist report
 
-  const ENTRY_STATES = { ok: 'found', missing: 'not found where MPD looks', not_decoded: 'found, no decoder claims it', foreign: 'a foreign path', stream: 'a stream' };
+  const entryState = (s) => t('page.entry_state.' + s);
   const REPAIRABLE_LISTS = ['P01', 'P02', 'P04', 'P05', 'P06', 'P07'];
 
   function reportPlaylists(r) {
@@ -1148,40 +1202,37 @@
     box.textContent = '';
     if (!r) return;
     const notes = [];
-    if (r.decoders.source !== 'mpd') notes.push('MPD could not be asked for its decoders (' + tm(r.decoders.detail) + '); the usual audio suffixes assumed.');
-    if (r.not_read) notes.push(r.not_read + ' asx or rss files are MPD\'s too and were not read.');
-    if (r.unreadable) notes.push(r.unreadable + ' entries could not be read.');
-    if (r.cancelled) notes.push('The check was cancelled: the counts are partial.');
-    const totals = section(box, 'Playlists under ' + (r.path || 'the library'), notes.join(' '));
-    const rows = [['Playlists', String(r.playlists)], ['Clean', String(r.clean)], ['With findings', String(r.with_findings)]];
-    Object.keys(r.by_code).forEach((code) => { rows.push([code + '  ' + (r.codes[code] || ''), String(r.by_code[code])]); });
+    if (r.decoders.source !== 'mpd') notes.push(t('page.decoders.assumed_long', { detail: r.decoders.detail }));
+    if (r.not_read) notes.push(t('page.playlists.not_read', { n: r.not_read }));
+    if (r.unreadable) notes.push(t('page.unreadable', { n: r.unreadable }));
+    if (r.cancelled) notes.push(t('page.check_cancelled'));
+    const totals = section(box, t('page.playlists.under', { path: theLibrary(r.path) }), notes.join(' '));
+    const rows = [[t('page.playlists.playlists'), String(r.playlists)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
-    if (!r.playlists) { totals.appendChild(el('div', 'help', 'No playlist under this folder.')); linesInForce(box, r.in_force); return; }
-    const list = section(box, 'Each playlist', 'Playlists with findings first. A finding says what MPD, and Volumio, do with the playlist as it is; Repair shows what it would be with its entries rebased to the files under the folder in hand, and writes it on your say.' + (r.list_truncated ? ' Only the first ' + r.list.length + ' playlists are listed; the totals count every one.' : ''));
+    if (!r.playlists) { totals.appendChild(el('div', 'help', t('page.playlists.none'))); linesInForce(box, r.in_force); return; }
+    const list = section(box, t('page.playlists.each'), t('page.playlists.each_help') + (r.list_truncated ? ' ' + t('page.playlists.only_first', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
       const d = el('details', 'sheet');
       const sum = el('summary');
-      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? s.findings.length + (s.findings.length === 1 ? ' finding' : ' findings') : 'clean'));
+      sum.appendChild(el('span', 'tag ' + (s.findings.length ? 'bad' : 'ok'), s.findings.length ? t('page.findings', { n: s.findings.length }) : t('page.clean')));
       sum.appendChild(el('span', 'path', s.path));
-      sum.appendChild(el('span', 'help', s.format + ', ' + s.entries + (s.entries === 1 ? ' entry' : ' entries') + ', ' + s.found + ' found' + (s.streams ? ', ' + s.streams + ' streams' : '') + (s.encoding && s.encoding !== 'utf-8' ? ', ' + s.encoding : '')));
+      const parts = [s.format, t('page.entries', { n: s.entries }), t('page.found', { n: s.found })];
+      if (s.streams) parts.push(t('page.streams', { n: s.streams }));
+      if (s.encoding && s.encoding !== 'utf-8') parts.push(s.encoding);
+      sum.appendChild(el('span', 'help', parts.join(separator())));
       d.appendChild(sum);
       const inner = el('div', 'inner');
-      s.findings.forEach((f) => {
-        const line = el('div', 'finding');
-        line.appendChild(el('code', '', f.code + (f.line ? ' line ' + f.line : '')));
-        line.appendChild(text(f.text));
-        inner.appendChild(line);
-      });
+      s.findings.forEach((f) => inner.appendChild(findingLine(f)));
       const actions = el('div', 'actions');
       const card = el('div');
       if (s.findings.some((f) => REPAIRABLE_LISTS.includes(f.code))) {
-        const fix = el('button', '', 'Repair');
+        const fix = el('button', '', t('page.repair'));
         fix.addEventListener('click', () => { fix.disabled = true; repairWith('playlist', s.path, card, fix, { base: current.path }); });
         actions.appendChild(fix);
       }
       if (s.found || s.streams) {
-        const imp = el('button', '', 'Import into Volumio');
-        imp.title = 'Written as one of Volumio\'s own playlists, under its Playlists, with the entries MPD can load.';
+        const imp = el('button', '', t('page.playlists.import'));
+        imp.title = t('page.playlists.import_title');
         imp.addEventListener('click', () => { imp.disabled = true; repairWith('volumio_playlist', s.path, card, imp); });
         actions.appendChild(imp);
       }
@@ -1189,14 +1240,14 @@
       if (s.entry_list.length) {
         const rows = s.entry_list.map((e) => {
           const cell = el('span');
-          cell.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' ? ' ok' : ' warn'), ENTRY_STATES[e.state] || e.state));
+          cell.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' ? ' ok' : ' warn'), entryState(e.state)));
           cell.appendChild(text(' '));
           cell.appendChild(el('code', '', e.uri));
           if (e.name) cell.appendChild(text('  ' + e.name));
           return [cell, String(e.line)];
         });
         table(inner, rows);
-        if (s.entries_truncated) inner.appendChild(el('div', 'help', 'Only the first ' + s.entry_list.length + ' entries are listed.'));
+        if (s.entries_truncated) inner.appendChild(el('div', 'help', t('page.playlists.only_first_entries', { n: s.entry_list.length })));
       }
       d.appendChild(inner);
       list.appendChild(d);
@@ -1250,7 +1301,7 @@
 
   function codeList(parent, lead, lines) {
     const row = el('div', 'ex');
-    row.appendChild(text(lead));
+    row.appendChild(text(lead + ' '));
     lines.forEach((l, i) => { if (i) row.appendChild(text('  |  ')); row.appendChild(el('code', '', l)); });
     parent.appendChild(row);
   }
@@ -1261,7 +1312,7 @@
     const box = $('preview-box');
     box.textContent = '';
     const lines = lineList();
-    if (!lines.length && !ignoreFile.exists) { if (fromTick !== true) box.appendChild(el('div', 'help bad', 'Nothing to write: tick a line above or type one.')); return; }
+    if (!lines.length && !ignoreFile.exists) { if (fromTick !== true) box.appendChild(el('div', 'help bad', t('page.preview.nothing_to_write'))); return; }
     $('preview-ignore').disabled = true;
     try {
       const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'mpdignore', path: current.path, lines }) });
@@ -1298,16 +1349,17 @@
     box.textContent = '';
     const card = el('div', 'preview');
     const top = el('div', 'top');
+    const noneOr = (v) => (v === '(none)' ? t('page.none') : v);
     if (p.kind === 'volumio_list') {
-      top.appendChild(el('b', '', 'Repair Volumio\'s ' + (p.list_kind === 'playlist' ? 'playlist ' + p.name : p.list_kind)));
-      top.appendChild(el('span', 'help', 'the file Volumio keeps, written whole; the undo puts it back as it is now.'));
+      top.appendChild(el('b', '', t('page.preview.repair_volumio', { list: p.list_kind === 'playlist' ? t('page.volumio.playlist_name', { name: p.name }) : listKind(p.list_kind) })));
+      top.appendChild(el('span', 'help', t('page.preview.volumio_file_help')));
       card.appendChild(top);
     } else if (p.kind === 'volumio_playlist') {
-      top.appendChild(el('b', '', (p.exists ? 'Change ' : 'Create ') + 'the Volumio playlist ' + p.name));
-      top.appendChild(el('span', 'help', 'from ' + p.from + ', under Volumio\'s own Playlists.'));
+      top.appendChild(el('b', '', p.exists ? t('page.preview.change_volumio_playlist', { name: p.name }) : t('page.preview.create_volumio_playlist', { name: p.name })));
+      top.appendChild(el('span', 'help', t('page.preview.from', { from: p.from })));
       card.appendChild(top);
       const row = el('div', 'line');
-      const label = el('label', 'pref', 'Name: ');
+      const label = el('label', 'pref', t('page.preview.name') + ' ');
       const input = el('input');
       input.type = 'text';
       input.value = p.name;
@@ -1317,20 +1369,20 @@
       row.appendChild(label);
       card.appendChild(row);
     } else {
-      top.appendChild(el('b', '', (p.op === 'remove' ? 'Remove ' : p.exists ? 'Change ' : 'Create ') + p.file));
-      top.appendChild(el('span', 'help', p.place === 'local' ? 'on a local root, written in place.' : 'on ' + p.place + ': mounted read-write for the write and released after.'));
+      top.appendChild(el('b', '', p.op === 'remove' ? t('page.preview.remove_file', { file: p.file }) : p.exists ? t('page.preview.change_file', { file: p.file }) : t('page.preview.create_file', { file: p.file })));
+      top.appendChild(el('span', 'help', p.place === 'local' ? t('page.preview.local') : t('page.preview.on_share', { share: p.share || '', folder: p.share_folder || '/' })));
       card.appendChild(top);
     }
-    if (p.added && p.added.length) codeList(card, 'Lines added: ', p.added);
-    if (p.removed && p.removed.length) codeList(card, 'Lines removed: ', p.removed);
-    if (p.already && p.already.length) codeList(card, 'Lines kept: ', p.already);
-    if (p.kind === 'mpdignore' && p.op === 'remove') card.appendChild(el('div', 'help', 'Every line is out, so the file goes; the undo puts it back as it is now.'));
+    if (p.added && p.added.length) codeList(card, t('page.preview.lines_added'), p.added);
+    if (p.removed && p.removed.length) codeList(card, t('page.preview.lines_removed'), p.removed);
+    if (p.already && p.already.length) codeList(card, t('page.preview.lines_kept'), p.already);
+    if (p.kind === 'mpdignore' && p.op === 'remove') card.appendChild(el('div', 'help', t('page.preview.all_lines_out')));
     (p.refused || []).forEach((pair) => {
       const why = el('div', 'why');
-      why.appendChild(el('span', 'tag bad', 'not written'));
+      why.appendChild(el('span', 'tag bad', t('page.preview.not_written')));
       why.appendChild(text(' '));
       why.appendChild(el('code', '', pair[0]));
-      why.appendChild(text(': ' + pair[1] + '.'));
+      why.appendChild(text(': ' + tm(pair[1]) + '.'));
       card.appendChild(why);
     });
     if (p.repairs && p.repairs.length) {
@@ -1348,29 +1400,30 @@
         if (r.id === 'unify') {
           // The values every file gets, one select per field that the files disagree on.
           row.className = 'repair unify';
-          row.appendChild(text(r.what));
-          const fields = [['album', 'Album'], ['album_artist', 'Album artist'], ['date', 'Date']];
+          row.appendChild(text(tm(r.what)));
+          const fields = [['album', 'album'], ['album_artist', 'albumartist'], ['date', 'date']];
           fields.forEach((f) => {
             const values = (p.values && p.values[f[0]]) || [];
             if (values.length < 2 && !p[f[0]]) return;
+            const label = fieldLabel(f[1]);
             const pick = el('select');
-            const none = el('option', '', f[1] + ': leave as is');
+            const none = el('option', '', t('page.preview.leave_as_is', { field: label }));
             none.value = '';
             pick.appendChild(none);
             values.forEach((v) => {
-              const o = el('option', '', f[1] + ': ' + v[0] + ' (' + v[1] + (v[1] === 1 ? ' file)' : ' files)'));
+              const o = el('option', '', t('page.preview.value_option', { field: label, value: noneOr(v[0]), n: v[1] }));
               o.value = v[0] === '(none)' ? '' : v[0];
               o.selected = p[f[0]] === v[0];
               pick.appendChild(o);
             });
             // A value of the user's own, since the ones the files carry can all be wrong.
-            const own = el('option', '', f[1] + ': type a value');
+            const own = el('option', '', t('page.preview.type_value', { field: label }));
             own.value = '\u0000typed';
             pick.appendChild(own);
             const typed = el('input');
             typed.type = 'text';
             typed.className = 'typed';
-            typed.placeholder = f[1];
+            typed.placeholder = label;
             typed.spellcheck = false;
             const carried = values.some((v) => v[0] === p[f[0]]);
             if (p[f[0]] && !carried) { own.selected = true; typed.value = p[f[0]]; } else { typed.hidden = true; }
@@ -1396,12 +1449,12 @@
         tick.checked = r.on;
         if (r.id === 'encoding') {
           tick.disabled = true;
-          tick.title = 'The sheet is written as UTF-8 with any change.';
+          tick.title = t('page.preview.utf8');
         } else {
           tick.addEventListener('change', chosen);
         }
         row.appendChild(tick);
-        row.appendChild(text(' ' + r.what));
+        row.appendChild(text(' ' + tm(r.what)));
         if (r.id === 'encoding' && p.encodings && p.encodings.length) {
           const select = el('select');
           p.encodings.forEach((name) => { const o = el('option', '', name); o.value = name; o.selected = name === p.encoding; select.appendChild(o); });
@@ -1417,37 +1470,38 @@
     if (p.kind === 'tags') {
       const files = p.files || [];
       const changing = files.filter((f) => f.changes.length);
-      card.appendChild(el('div', 'help', changing.length + ' of ' + files.length + (files.length === 1 ? ' file changes:' : ' files change:')));
+      card.appendChild(el('div', 'help', t('page.preview.files_change', { changing: changing.length, n: files.length })));
       const list = el('div', 'files');
       files.forEach((f) => {
         const row = el('div', 'sugg');
         const top = el('div', 'top');
         top.appendChild(el('code', '', f.name));
         top.appendChild(el('span', 'tag' + (f.changes.length ? ' ok' : ''), f.format));
-        if (f.note) top.appendChild(el('span', 'help', f.note));
+        if (f.note) top.appendChild(el('span', 'help', tm(f.note)));
         row.appendChild(top);
         f.changes.forEach((c) => {
           const line = el('div', 'ex');
           line.appendChild(el('code', '', c.key));
-          line.appendChild(text(' ' + (c.before.length ? c.before.join(' | ') : '(none)') + '  ->  ' + (c.after.length ? c.after.join(' | ') : '(removed)')));
+          line.appendChild(text(' ' + (c.before.length ? c.before.join(' | ') : t('page.none')) + '  ->  ' + (c.after.length ? c.after.join(' | ') : t('page.preview.removed_value'))));
           row.appendChild(line);
         });
         list.appendChild(row);
       });
       card.appendChild(list);
     }
-    (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', n)));
+    (p.notes || []).forEach((n) => card.appendChild(el('div', 'help bad', tm(n))));
     if (p.kind === 'playlist' && p.entries && p.entries.length) {
       const changed = p.entries.filter((e) => e.after).length;
-      card.appendChild(el('div', 'help', p.entries.length + (p.entries.length === 1 ? ' entry, ' : ' entries, ') + changed + ' rewritten' + (p.not_found ? ', ' + p.not_found + ' not found under the folder in hand' : '') + ':'));
+      const vars = { n: p.entries.length, changed, not_found: p.not_found };
+      card.appendChild(el('div', 'help', p.not_found ? t('page.preview.entries_rewritten_not_found', vars) : t('page.preview.entries_rewritten', vars)));
       const list = el('div', 'files');
       p.entries.forEach((e) => {
         const row = el('div', 'sugg');
         const top = el('div', 'top');
-        top.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' || e.state === 'rebased' ? ' ok' : ' warn'), e.state.replace('_', ' ')));
+        top.appendChild(el('span', 'tag' + (e.state === 'ok' || e.state === 'stream' || e.state === 'rebased' ? ' ok' : ' warn'), t('page.entry_state.' + e.state)));
         top.appendChild(el('code', '', e.before));
         if (e.after) { top.appendChild(text(' -> ')); top.appendChild(el('code', '', e.after)); }
-        if (e.candidates) top.appendChild(el('span', 'help', e.candidates + ' other ' + (e.candidates === 1 ? 'file matches' : 'files match') + ' as well'));
+        if (e.candidates) top.appendChild(el('span', 'help', t('page.preview.candidates', { n: e.candidates })));
         row.appendChild(top);
         list.appendChild(row);
       });
@@ -1455,18 +1509,19 @@
     }
     if (p.kind === 'volumio_playlist' && p.imported && p.imported.length) {
       const kept = p.imported.filter((e) => e.state !== 'left_out').length;
-      card.appendChild(el('div', 'help', kept + ' of ' + p.imported.length + (p.imported.length === 1 ? ' entry' : ' entries') + ' imported' + (p.left_out ? ', ' + p.left_out + ' left out' : '') + ':'));
+      const vars = { kept, n: p.imported.length, left_out: p.left_out };
+      card.appendChild(el('div', 'help', p.left_out ? t('page.preview.imported_left_out', vars) : t('page.preview.imported', vars)));
       const list = el('div', 'files');
       p.imported.forEach((e) => {
         const row = el('div', 'sugg');
         const top2 = el('div', 'top');
-        top2.appendChild(el('span', 'tag' + (e.state === 'left_out' ? ' warn' : ' ok'), e.state.replace('_', ' ')));
+        top2.appendChild(el('span', 'tag' + (e.state === 'left_out' ? ' warn' : ' ok'), t('page.import_state.' + e.state)));
         if (e.state === 'left_out') {
           top2.appendChild(el('code', '', e.uri));
-          top2.appendChild(el('span', 'help', e.why || ''));
+          top2.appendChild(el('span', 'help', tm(e.why)));
         } else {
           top2.appendChild(text(e.title || e.uri));
-          const by = [e.artist, e.album].filter(Boolean).join(', ');
+          const by = [e.artist, e.album].filter(Boolean).join(separator());
           if (by) top2.appendChild(el('span', 'help', by));
           top2.appendChild(el('code', '', e.uri));
         }
@@ -1476,57 +1531,57 @@
       card.appendChild(list);
     }
     if (p.op === 'remove') {
-      card.appendChild(el('div', 'help', 'The sheet is removed; the undo puts it back as it is now.'));
+      card.appendChild(el('div', 'help', t('page.preview.sheet_removed')));
     } else if (p.kind === 'volumio_list') {
       const changes = (p.items || []).filter((c) => c.action !== 'kept');
-      card.appendChild(el('div', 'help', p.kept + (p.kept === 1 ? ' item kept' : ' items kept') + (changes.length ? ', ' + changes.length + ' changed:' : '; nothing changes.')));
+      card.appendChild(el('div', 'help', changes.length ? t('page.preview.items_kept_changed', { kept: p.kept, changed: changes.length }) : t('page.preview.items_kept_nothing', { kept: p.kept })));
       if (changes.length) {
         const list = el('div', 'files');
         changes.forEach((c) => {
           const row = el('div', 'sugg');
           const t2 = el('div', 'top');
-          t2.appendChild(el('span', 'tag' + (c.action === 'dropped' ? ' warn' : ' ok'), c.action));
+          t2.appendChild(el('span', 'tag' + (c.action === 'dropped' ? ' warn' : ' ok'), t('page.action.' + c.action)));
           t2.appendChild(text((c.title || c.uri) + ' '));
           t2.appendChild(el('code', '', c.uri));
           if (c.after) { t2.appendChild(text(' -> ')); t2.appendChild(el('code', '', c.after)); }
-          t2.appendChild(el('span', 'help', c.why));
+          t2.appendChild(el('span', 'help', tm(c.why)));
           row.appendChild(t2);
           list.appendChild(row);
         });
         card.appendChild(list);
       }
-      (p.notes || []).forEach((n) => card.appendChild(el('div', 'help', n)));
+      (p.notes || []).forEach((n) => card.appendChild(el('div', 'help', tm(n))));
     } else if (p.kind === 'volumio_playlist') {
-      card.appendChild(el('div', 'help', 'The file Volumio keeps, as it would be:'));
-      card.appendChild(el('pre', 'file', p.after || '(empty)'));
+      card.appendChild(el('div', 'help', t('page.preview.volumio_file_after')));
+      card.appendChild(el('pre', 'file', p.after || t('page.preview.empty')));
     } else if (p.kind === 'tags') {
-      card.appendChild(el('div', 'help', 'Each file is written through lofty, the audio untouched; the undo sets every key back, when nothing else has changed it since.'));
+      card.appendChild(el('div', 'help', t('page.preview.tags_help')));
     } else {
       if ((p.kind === 'cue' || p.kind === 'playlist') && p.exists) {
-        card.appendChild(el('div', 'help', 'As it is:'));
+        card.appendChild(el('div', 'help', t('page.preview.as_is')));
         card.appendChild(el('pre', 'file', p.before));
       }
-      card.appendChild(el('div', 'help', p.kind === 'cue' ? 'As it would be, ' + p.lines_changed + (p.lines_changed === 1 ? ' line changed:' : ' lines changed:') : p.kind === 'playlist' ? 'As it would be:' : 'The file as it would be:'));
-      card.appendChild(el('pre', 'file', p.after || '(empty)'));
+      card.appendChild(el('div', 'help', p.kind === 'cue' ? t('page.preview.as_would_be_lines', { n: p.lines_changed }) : p.kind === 'playlist' ? t('page.preview.as_would_be') : t('page.preview.file_as_would_be')));
+      card.appendChild(el('pre', 'file', p.after || t('page.preview.empty')));
       if (p.kind === 'cue') {
         card.appendChild(el('div', 'help', p.remaining && p.remaining.length
-          ? 'MPD would still find in the text: ' + p.remaining.map((f) => f.code + (f.line ? ' line ' + f.line : '') + ', ' + f.text).join(' ')
-          : 'MPD finds nothing more in the text. Whether the files are beside the sheet is the check\'s to say.'));
+          ? t('page.preview.remaining', { findings: p.remaining.map((f) => f.code + (f.line ? ' ' + t('page.line', { n: f.line }) : '') + separator() + tm(f.text)).join(' ') })
+          : t('page.preview.nothing_more')));
       }
     }
     const actions = el('div', 'actions');
     const changing = p.kind === 'tags' ? (p.files || []).filter((f) => f.changes.length).length : 0;
-    const label = p.kind === 'cue' ? (p.op === 'remove' ? 'Remove the sheet' : 'Write the sheet')
-      : p.kind === 'playlist' ? (p.exists ? 'Write the playlist' : 'Write ' + p.file.split('/').pop())
-      : p.kind === 'volumio_playlist' ? 'Write the Volumio playlist'
-      : p.kind === 'volumio_list' ? 'Write the list'
-      : p.kind === 'tags' ? 'Write ' + changing + (changing === 1 ? ' file' : ' files')
-      : p.op === 'remove' ? 'Remove .mpdignore'
-      : (p.changed ? 'Write .mpdignore' : 'Nothing to change');
-    const write = el('button', 'primary', p.changed ? label : 'Nothing to write');
+    const label = p.kind === 'cue' ? (p.op === 'remove' ? t('page.write.remove_sheet') : t('page.write.write_sheet'))
+      : p.kind === 'playlist' ? (p.exists ? t('page.write.write_playlist') : t('page.write.write_named', { name: p.file.split('/').pop() }))
+      : p.kind === 'volumio_playlist' ? t('page.write.write_volumio_playlist')
+      : p.kind === 'volumio_list' ? t('page.write.write_list')
+      : p.kind === 'tags' ? t('page.write.write_files', { n: changing })
+      : p.op === 'remove' ? t('page.write.remove_mpdignore')
+      : (p.changed ? t('page.write.write_mpdignore') : t('page.write.nothing_to_change'));
+    const write = el('button', 'primary', p.changed ? label : t('page.write.nothing_to_write'));
     write.disabled = !p.changed;
     write.addEventListener('click', () => applyBatch(p, write, box, closed));
-    const drop = el('button', '', 'Cancel');
+    const drop = el('button', '', t('page.cancel'));
     drop.addEventListener('click', () => { box.textContent = ''; if (closed) closed(); });
     actions.appendChild(write);
     actions.appendChild(drop);
@@ -1536,13 +1591,13 @@
 
   function outcome(a, verb, kind) {
     const done = el('div', 'done');
-    done.appendChild(el('span', 'tag ok', verb));
+    done.appendChild(el('span', 'tag ok', t('page.outcome.' + verb)));
     const update = a.updated !== null && a.updated !== undefined
-      ? 'MPD is updating the folder (job ' + a.updated + '); Volumio rebuilds its album list after every update, which takes a while on a large library.'
-      : a.update_error ? 'MPD was not told to update the folder: ' + a.update_error + '.'
-      : verb === 'undone' ? 'Volumio reads the file as it is now at its next look.'
-      : kind === 'volumio_list' ? 'Volumio reads the list as it is now at its next look.'
-      : 'Volumio lists it under its Playlists now.';
+      ? t('page.outcome.updating', { job: a.updated })
+      : a.update_error ? t('page.outcome.not_updated', { error: a.update_error })
+      : verb === 'undone' ? t('page.outcome.read_next')
+      : kind === 'volumio_list' ? t('page.outcome.list_next')
+      : t('page.outcome.listed');
     done.appendChild(text(' ' + a.file + '. ' + update));
     return done;
   }
@@ -1554,14 +1609,14 @@
       box.textContent = '';
       box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : 'written', p.kind));
       if (p.kind === 'cue' || p.kind === 'playlist') {
-        box.appendChild(el('div', 'help', 'Check the folder again to see it as it is now. The undo is on the Written tab.'));
+        box.appendChild(el('div', 'help', t('page.after.check_again')));
       } else if (p.kind === 'tags') {
-        box.appendChild(el('div', 'help', (a.count === 1 ? '1 file' : a.count + ' files') + ' written. Check the folder again to see the tags as they are now. The undo is on the Written tab.'));
+        box.appendChild(el('div', 'help', t('page.after.tags_written', { n: a.count })));
       } else if (p.kind === 'mpdignore') {
-        box.appendChild(el('div', 'help', 'The undo is on the Written tab.'));
+        box.appendChild(el('div', 'help', t('page.after.undo_tab')));
         loadIgnoreLines();
       } else {
-        box.appendChild(el('div', 'help', 'The undo is on the Written tab.'));
+        box.appendChild(el('div', 'help', t('page.after.undo_tab')));
       }
       if (closed) closed();
       loadUndo();
@@ -1578,15 +1633,15 @@
     try { list = await api('/api/undo'); } catch (e) { return; }
     box.textContent = '';
     box.className = list.length ? '' : 'progress';
-    if (!list.length) { box.textContent = 'Nothing written yet.'; return; }
+    if (!list.length) { box.textContent = t('page.undo.nothing'); return; }
     list.forEach((b) => {
       const row = el('div', 'sugg');
       const top = el('div', 'top');
-      top.appendChild(el('span', 'tag' + (b.undone ? '' : ' ok'), b.undone ? 'undone' : 'in place'));
-      top.appendChild(el('span', '', when(b.when) + ': ' + b.note));
+      top.appendChild(el('span', 'tag' + (b.undone ? '' : ' ok'), b.undone ? t('page.undo.undone') : t('page.undo.in_place')));
+      top.appendChild(el('span', '', when(b.when) + ': ' + tm(b.note)));
       if (!b.undone) {
         top.appendChild(el('span', 'grow'));
-        const u = el('button', 'undo', 'Undo');
+        const u = el('button', 'undo', t('page.undo.button'));
         u.addEventListener('click', () => undoBatch(b.id, row, u));
         top.appendChild(u);
       }

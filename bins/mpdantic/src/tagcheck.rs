@@ -13,6 +13,7 @@ use crate::analyse::{Count, DecoderNote};
 use crate::classify::{self, Class, Rules};
 use crate::mpd::Decoders;
 use crate::tags::{self, Seen};
+use crate::text::Msg;
 use crate::walk::{self, InForceLines, Progress, Visit};
 
 /// Folders with a split listed; the rest counted.
@@ -69,6 +70,20 @@ pub fn code_text(code: &str) -> &'static str {
     }
 }
 
+/// A field's name as a sentence says it: `title`, `artist`, `album`, `albumartist`
+/// (or `album artist`), `date`, `track`.
+pub fn field_name(id: &str) -> Msg {
+    match id {
+        "title" => msg!("core.field.title", "title"),
+        "artist" => msg!("core.field.artist", "artist"),
+        "album" => msg!("core.field.album", "album"),
+        "albumartist" | "album artist" => msg!("core.field.album_artist", "album artist"),
+        "date" => msg!("core.field.date", "date"),
+        "track" => msg!("core.field.track", "track"),
+        other => Msg::raw(other),
+    }
+}
+
 const PLACEHOLDERS: &[&str] = &[
     "unknown",
     "unknown artist",
@@ -90,7 +105,7 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
-) -> Result<Report, String> {
+) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = Rules::new();
     let mut report = Report {
@@ -135,12 +150,12 @@ pub fn check(
     Ok(report)
 }
 
-fn add(report: &mut Report, code: &str, example: String) {
+fn add(report: &mut Report, code: &str, example: Msg) {
     report
         .findings
         .entry(code.to_string())
         .or_default()
-        .add(&example, 0);
+        .add_example(example, 0);
 }
 
 /// The first value, trimmed.
@@ -198,7 +213,16 @@ fn directory(
         report.read += 1;
         *report.by_format.entry(raw.format.clone()).or_insert(0) += 1;
         if let Some(problem) = &raw.problem {
-            add(report, "T12", format!("{}: {problem}", entry.path));
+            add(
+                report,
+                "T12",
+                msg!(
+                    "core.tagcheck.not_read",
+                    "{path}: {problem}",
+                    path = entry.path,
+                    problem = problem
+                ),
+            );
             continue;
         }
         audio_files += 1;
@@ -227,22 +251,23 @@ fn directory(
         add(
             report,
             "T05",
-            format!(
-                "{}: {without_disc} files, no disc number",
-                visit.entries[0]
-                    .path
-                    .rsplit_once('/')
-                    .map(|(d, _)| d)
-                    .unwrap_or("")
+            msg!(
+                "core.tagcheck.no_disc",
+                "{dir}: {n} files, no disc number",
+                dir = dir_of(visit),
+                n = without_disc
             ),
         );
     } else if with_disc > 0 && without_disc > 0 {
         add(
             report,
             "T05",
-            format!(
-                "{}: {with_disc} files with a disc number, {without_disc} without",
-                dir_of(visit)
+            msg!(
+                "core.tagcheck.disc_mixed",
+                "{dir}: {with} files with a disc number, {without} without",
+                dir = dir_of(visit),
+                with = with_disc,
+                without = without_disc
             ),
         );
     }
@@ -250,11 +275,13 @@ fn directory(
         add(
             report,
             "T06",
-            format!(
-                "{}: {} albums, {} album artists in {audio_files} files",
-                dir_of(visit),
-                albums.len(),
-                album_artists.len()
+            msg!(
+                "core.tagcheck.split",
+                "{dir}: {albums} albums, {artists} album artists in {files} files",
+                dir = dir_of(visit),
+                albums = albums.len(),
+                artists = album_artists.len(),
+                files = audio_files
             ),
         );
         if report.splits.len() < SPLITS_LISTED {
@@ -281,24 +308,42 @@ fn dir_of(visit: &Visit) -> String {
 
 /// The findings of one file, from MPD's view of it.
 fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, has_cue: bool) {
-    let missing: Vec<&str> = [
+    let missing: Vec<Msg> = [
         ("title", first(&seen.title).is_none()),
         ("artist", first(&seen.artist).is_none()),
         ("album", first(&seen.album).is_none()),
     ]
     .iter()
     .filter(|(_, m)| *m)
-    .map(|(n, _)| *n)
+    .map(|(n, _)| field_name(n))
     .collect();
     if !missing.is_empty() {
-        add(report, "T01", format!("{path}: no {}", missing.join(", ")));
+        add(
+            report,
+            "T01",
+            msg!(
+                "core.tagcheck.missing",
+                "{path}: no {fields}",
+                path = path,
+                fields = missing
+            ),
+        );
     }
     let ignored_album_artist = seen.ignored.iter().find(|k| {
         k.to_lowercase().contains("album artist") || k.to_lowercase().contains("albumartist")
     });
     if seen.album_artist.is_empty() {
         if let Some(k) = ignored_album_artist {
-            add(report, "T02", format!("{path}: {k}"));
+            add(
+                report,
+                "T02",
+                msg!(
+                    "core.tagcheck.ignored_key",
+                    "{path}: {key}",
+                    path = path,
+                    key = k
+                ),
+            );
         }
     }
     let ignored_date = seen.ignored.iter().find(|k| {
@@ -307,23 +352,62 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
     match first(&seen.date) {
         None => {
             if let Some(k) = ignored_date {
-                add(report, "T03", format!("{path}: {k}"));
+                add(
+                    report,
+                    "T03",
+                    msg!(
+                        "core.tagcheck.ignored_key",
+                        "{path}: {key}",
+                        path = path,
+                        key = k
+                    ),
+                );
             }
         }
         Some(d) => {
             if d.len() < 4 || !d[..4].chars().all(|c| c.is_ascii_digit()) {
-                add(report, "T03", format!("{path}: date \"{d}\""));
+                add(
+                    report,
+                    "T03",
+                    msg!(
+                        "core.tagcheck.date",
+                        "{path}: date \"{date}\"",
+                        path = path,
+                        date = d
+                    ),
+                );
             }
         }
     }
     match first(&seen.track) {
-        None => add(report, "T04", format!("{path}: no track number")),
+        None => add(
+            report,
+            "T04",
+            msg!(
+                "core.tagcheck.no_track",
+                "{path}: no track number",
+                path = path
+            ),
+        ),
         Some(t) => {
             let n = t.split('/').next().unwrap_or("").trim();
             if n.is_empty() || n.chars().any(|c| !c.is_ascii_digit()) {
-                add(report, "T04", format!("{path}: track \"{t}\""));
+                add(
+                    report,
+                    "T04",
+                    msg!(
+                        "core.tagcheck.track",
+                        "{path}: track \"{track}\"",
+                        path = path,
+                        track = t
+                    ),
+                );
             } else if n.chars().all(|c| c == '0') {
-                add(report, "T04", format!("{path}: track 0"));
+                add(
+                    report,
+                    "T04",
+                    msg!("core.tagcheck.track_zero", "{path}: track 0", path = path),
+                );
             }
         }
     }
@@ -335,10 +419,19 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         .chain(&seen.album)
         .collect();
     if let Some(t) = texts.iter().find(|t| tags::looks_mangled(t)) {
-        add(report, "T07", format!("{path}: \"{t}\""));
+        add(
+            report,
+            "T07",
+            msg!(
+                "core.tagcheck.mangled",
+                "{path}: \"{text}\"",
+                path = path,
+                text = t
+            ),
+        );
     }
     if seen.id3v1_only {
-        add(report, "T08", path.to_string());
+        add(report, "T08", Msg::raw(path));
     }
     for (name, values) in [
         ("title", &seen.title),
@@ -355,7 +448,13 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
             add(
                 report,
                 "T09",
-                format!("{path}: {name} given {} times", values.len()),
+                msg!(
+                    "core.tagcheck.twice",
+                    "{path}: {field} given {n} times",
+                    path = path,
+                    field = field_name(name),
+                    n = values.len()
+                ),
             );
             break;
         }
@@ -373,10 +472,19 @@ fn file_findings(report: &mut Report, path: &str, raw: &tags::Raw, seen: &Seen, 
         .chain(&seen.album)
         .find(|v| placeholder(v))
     {
-        add(report, "T10", format!("{path}: \"{}\"", v.trim()));
+        add(
+            report,
+            "T10",
+            msg!(
+                "core.tagcheck.placeholder",
+                "{path}: \"{value}\"",
+                path = path,
+                value = v.trim()
+            ),
+        );
     }
     if seen.cuesheet && has_cue {
-        add(report, "T11", path.to_string());
+        add(report, "T11", Msg::raw(path));
     }
     let _ = raw;
 }
@@ -516,7 +624,7 @@ mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: crate::text::Msg::raw(""),
+            detail: Msg::raw(""),
         }
     }
 

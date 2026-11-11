@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
+use crate::text::Msg;
 use crate::walk::Progress;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
@@ -29,7 +30,7 @@ struct Job {
     progress: Arc<Progress>,
     cancel: Arc<AtomicBool>,
     result: Option<serde_json::Value>,
-    error: Option<String>,
+    error: Option<Msg>,
 }
 
 #[derive(Default)]
@@ -50,7 +51,7 @@ impl Jobs {
     /// The work started on a thread; its id, or Busy while another runs.
     pub fn start<F>(self: &Arc<Self>, kind: &str, path: &str, work: F) -> Result<u64, Busy>
     where
-        F: FnOnce(&Progress, &AtomicBool) -> Result<serde_json::Value, String> + Send + 'static,
+        F: FnOnce(&Progress, &AtomicBool) -> Result<serde_json::Value, Msg> + Send + 'static,
     {
         let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(&*current, Some(job) if job.state == State::Running) {
@@ -100,7 +101,10 @@ impl Jobs {
             let mut current = self.current.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(job) = current.as_mut().filter(|j| j.id == id) {
                 job.state = State::Failed;
-                job.error = Some("the job's thread could not be started".to_string());
+                job.error = Some(msg!(
+                    "core.jobs.no_thread",
+                    "the job's thread could not be started"
+                ));
                 job.finished = Some(Instant::now());
             }
         }
@@ -194,7 +198,7 @@ mod tests {
         assert_eq!(jobs.current().unwrap()["id"], id);
         // Done: the next job replaces it.
         let next = jobs
-            .start("ignore", "USB", |_, _| Err("no".to_string()))
+            .start("ignore", "USB", |_, _| Err(Msg::raw("no")))
             .unwrap();
         assert_eq!(next, id + 1);
         let job = wait_until_not_running(&jobs, next);

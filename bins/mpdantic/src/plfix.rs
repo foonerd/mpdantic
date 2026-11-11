@@ -14,10 +14,11 @@ use encoding_rs::Encoding;
 use serde::Serialize;
 
 use crate::classify::{self, Class, Rules};
-use crate::cuefix::{Repair, ENCODINGS};
+use crate::cuefix::{self, Repair, ENCODINGS};
 use crate::mpd::Decoders;
 use crate::playlist;
 use crate::plcheck;
+use crate::text::Msg;
 use crate::walk::{self, Progress};
 
 /// Files the base folder's index holds at most.
@@ -55,7 +56,7 @@ pub struct Fixed {
     pub entries: Vec<EntryChange>,
     pub changed: bool,
     pub not_found: usize,
-    pub notes: Vec<String>,
+    pub notes: Vec<Msg>,
 }
 
 /// The audio files under the base folder, by their lowercased name, each with its
@@ -66,7 +67,7 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub(crate) fn build(music: &Path, base: &str, decoders: &Decoders) -> Result<Index, String> {
+    pub(crate) fn build(music: &Path, base: &str, decoders: &Decoders) -> Result<Index, Msg> {
         let start = walk::start(music, base)?;
         let rules = Rules::new();
         let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
@@ -219,13 +220,14 @@ pub fn plan(
     bytes: &[u8],
     decoders: &Decoders,
     choice: &Choice,
-) -> Result<Fixed, String> {
+) -> Result<Fixed, Msg> {
     let chosen = |id: &str| match choice.repairs {
         None => true,
         Some(list) => list.iter().any(|r| r == id),
     };
     let suffix = classify::suffix(path).unwrap_or_default();
-    let format = playlist::format_of(&suffix).ok_or_else(|| "not a playlist".to_string())?;
+    let format = playlist::format_of(&suffix)
+        .ok_or_else(|| msg!("core.plfix.not_playlist", "not a playlist"))?;
     let folder = folder_of(path).to_string();
     let mut fixed = Fixed::default();
     // The bytes: a UTF-16 mark, a UTF-8 mark, UTF-8 or not; as the sheets.
@@ -243,20 +245,19 @@ pub fn plan(
                 None => {
                     let label = choice.encoding.unwrap_or(ENCODINGS[0]);
                     if !ENCODINGS.contains(&label) {
-                        return Err(format!("{label} is not an encoding offered here"));
+                        return Err(cuefix::not_offered(label));
                     }
                     let enc = Encoding::for_label(label.as_bytes())
-                        .ok_or_else(|| format!("{label}: not an encoding"))?;
+                        .ok_or_else(|| cuefix::not_an_encoding(label))?;
                     (enc, body)
                 }
             };
             let (decoded, had_errors) = enc.decode_without_bom_handling(content);
             let decoded = decoded.into_owned();
             if had_errors {
-                fixed.notes.push(format!(
-                    "{} characters could not be read as {}; each shows as a replacement mark",
+                fixed.notes.push(cuefix::replacement_marks(
                     decoded.matches('\u{FFFD}').count(),
-                    enc.name()
+                    enc.name(),
                 ));
             }
             if utf16.is_none() {
@@ -265,7 +266,7 @@ pub fn plan(
             fixed.encoding = Some(enc.name().to_ascii_lowercase());
             fixed.repairs.push(Repair {
                 id: "encoding",
-                what: format!("the text read as {} and written as UTF-8", enc.name()),
+                what: cuefix::read_as(enc.name()),
                 on: true,
             });
             decoded
@@ -274,7 +275,7 @@ pub fn plan(
     if bom {
         fixed.repairs.push(Repair {
             id: "bom",
-            what: "the byte-order mark removed, so MPD sees the first line".to_string(),
+            what: cuefix::bom_removed(),
             on: chosen("bom"),
         });
     }
@@ -322,25 +323,31 @@ pub fn plan(
     }
     if let Some(i) = &index {
         if i.truncated {
-            fixed.notes.push(format!(
-                "the base folder holds more than {INDEX_LIMIT} audio files; only the first were looked at"
+            fixed.notes.push(msg!(
+                "core.plfix.index_truncated",
+                "the base folder holds more than {limit} audio files; only the first were looked at",
+                limit = INDEX_LIMIT
             ));
         }
     }
     if rebase_applies {
-        let base_text = if choice.base.is_empty() {
-            "the library".to_string()
+        let base = if choice.base.is_empty() {
+            msg!("core.plfix.library", "the library")
         } else {
-            choice.base.to_string()
+            Msg::raw(choice.base)
         };
         fixed.repairs.push(Repair {
             id: "rebase",
             what: if chosen("rebase") {
-                format!(
-                    "the entries MPD cannot find looked for under {base_text}: {rebased} found and written relative to the playlist's folder, {not_found} not found"
+                msg!(
+                    "core.plfix.rebase_done",
+                    "the entries MPD cannot find looked for under {base}: {rebased} found and written relative to the playlist's folder, {not_found} not found",
+                    base = base,
+                    rebased = rebased,
+                    not_found = not_found
                 )
             } else {
-                format!("the entries MPD cannot find looked for under {base_text}")
+                msg!("core.plfix.rebase", "the entries MPD cannot find looked for under {base}", base = base)
             },
             on: chosen("rebase"),
         });
@@ -353,8 +360,10 @@ pub fn plan(
     if to_m3u {
         fixed.repairs.push(Repair {
             id: "m3u",
-            what: format!(
-                "a .m3u written beside the .{suffix} with the same entries, which Volumio's browser plays"
+            what: msg!(
+                "core.plfix.m3u_beside",
+                "a .m3u written beside the .{suffix} with the same entries, which Volumio's browser plays",
+                suffix = suffix
             ),
             on: chosen("m3u"),
         });
@@ -373,10 +382,10 @@ pub fn plan(
                     out.push('\n');
                 }
             } else {
-                fixed.notes.push(
+                fixed.notes.push(msg!(
+                    "core.plfix.xspf_note",
                     "an XSPF is not rewritten in place; the .m3u beside it carries the entries"
-                        .to_string(),
-                );
+                ));
             }
         }
         "pls" => {
@@ -418,8 +427,10 @@ pub fn plan(
             if pls_fix {
                 fixed.repairs.push(Repair {
                     id: "pls",
-                    what: "the [playlist] section and the NumberOfEntries line MPD requires"
-                        .to_string(),
+                    what: msg!(
+                        "core.plfix.pls",
+                        "the [playlist] section and the NumberOfEntries line MPD requires"
+                    ),
                     on: chosen("pls"),
                 });
                 if chosen("pls") {

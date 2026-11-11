@@ -25,9 +25,10 @@ use crate::report;
 use crate::status::Status;
 use crate::tagcheck;
 use crate::tagfix;
-use crate::text;
+use crate::text::{self, Msg};
 use crate::undo;
 use crate::vlists;
+use crate::walk;
 use crate::write;
 
 /// The page, whole; served with the catalogue of the language in its slot.
@@ -182,7 +183,7 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
                 &mut stream,
                 code,
                 "application/json",
-                &error(reason(code)),
+                &error(&Msg::raw(reason(code))),
                 false,
             );
             return;
@@ -217,7 +218,11 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let code = &path["/lang/".len()..path.len() - ".json".len()];
             match text::catalogue(code) {
                 Some(catalogue) => (200, json, catalogue.to_string()),
-                None => (404, json, error("no such language")),
+                None => (
+                    404,
+                    json,
+                    error(&msg!("core.api.no_language", "no such language")),
+                ),
             }
         }
         (_, "/api/status") if get => {
@@ -274,7 +279,14 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         }
         ("POST", "/api/report/measure") => {
             if shared.measuring.swap(true, Ordering::SeqCst) {
-                (409, json, error("a measurement is running; wait for it"))
+                (
+                    409,
+                    json,
+                    error(&msg!(
+                        "core.api.measuring",
+                        "a measurement is running; wait for it"
+                    )),
+                )
             } else {
                 let quadratic = report::plan(&shared.buffer_plan).and_then(|p| p.quadratic);
                 let album = report::measure(&shared.mpd, quadratic);
@@ -296,7 +308,11 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
             match id.and_then(|id| previews.get(&id)) {
                 Some(p) => (200, json, json_of(p)),
-                None => (404, json, error("no such preview")),
+                None => (
+                    404,
+                    json,
+                    error(&msg!("core.api.no_preview", "no such preview")),
+                ),
             }
         }
         ("POST", _) if r.path.starts_with("/api/batches/") && r.path.ends_with("/apply") => {
@@ -338,29 +354,44 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         }
         ("PUT", "/api/preferences") => {
             let Ok(wanted) = serde_json::from_slice::<prefs::Prefs>(&r.body) else {
-                return (400, json, error("the body is not the preferences"));
+                return (
+                    400,
+                    json,
+                    error(&msg!(
+                        "core.api.not_preferences",
+                        "the body is not the preferences"
+                    )),
+                );
             };
             let mut store = shared.prefs.lock().unwrap_or_else(|e| e.into_inner());
             match store.save(wanted) {
                 Ok(()) => (200, json, store.view().to_string() + "\n"),
-                Err(e) if e.starts_with("video must be") => (400, json, error(&e)),
+                Err(e) if e.k == prefs::VIDEO_CHOICES_KEY => (400, json, error(&e)),
                 // Kept in memory; the view says the file refused.
                 Err(_) => (200, json, store.view().to_string() + "\n"),
             }
         }
         (_, "/api/jobs") if get => match shared.jobs.current() {
             Some(job) => (200, json, job.to_string() + "\n"),
-            None => (404, json, error("no job yet")),
+            None => (404, json, error(&msg!("core.api.no_job", "no job yet"))),
         },
         (_, _) if job_id.is_some() && get => match shared.jobs.get(job_id.unwrap_or(0)) {
             Some(job) => (200, json, job.to_string() + "\n"),
-            None => (404, json, error("no such job")),
+            None => (
+                404,
+                json,
+                error(&msg!("core.api.no_such_job", "no such job")),
+            ),
         },
         ("DELETE", _) if job_id.is_some() => {
             if shared.jobs.cancel(job_id.unwrap_or(0)) {
                 (204, json, String::new())
             } else {
-                (404, json, error("no such running job"))
+                (
+                    404,
+                    json,
+                    error(&msg!("core.api.no_running_job", "no such running job")),
+                )
             }
         }
         (_, "/")
@@ -369,23 +400,36 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         | (_, "/api/status")
         | (_, "/api/preferences")
         | (_, "/api/list")
-        | (_, "/api/decoders") => (405, json, error("method not allowed")),
-        _ => (404, json, error("not found")),
+        | (_, "/api/decoders") => (
+            405,
+            json,
+            error(&msg!("core.api.method", "method not allowed")),
+        ),
+        _ => (404, json, error(&msg!("core.api.not_found", "not found"))),
     }
 }
 
 /// `POST /api/jobs` with `{ "kind": "ignore", "path": "NAS/Jazz" }`.
 fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (400, error("the body is not JSON"));
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
     };
     let kind = request["kind"].as_str().unwrap_or("").to_string();
     let path = request["path"].as_str().unwrap_or("").to_string();
     if kind != "ignore" && kind != "cue" && kind != "tags" && kind != "playlists" {
-        return (400, error("the kind is not one the core knows"));
+        return (
+            400,
+            error(&msg!(
+                "core.api.kind_unknown",
+                "the kind is not one the core knows"
+            )),
+        );
     }
     if Library::check(&path).is_none() {
-        return (400, error("not a library path"));
+        return (400, error(&walk::not_library_path()));
     }
     let music = shared.library.music().to_path_buf();
     let (note, decoders) = shared.decoders();
@@ -399,13 +443,13 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
     let started = shared.jobs.start(&kind, &path, move |progress, cancel| {
         if job_kind == "cue" {
             cuecheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
         } else if job_kind == "playlists" {
             plcheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
         } else if job_kind == "tags" {
             tagcheck::check(&music, &job_path, &decoders, note, progress, cancel)
-                .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+                .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
         } else {
             analyse::analyse(
                 &music,
@@ -416,12 +460,18 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
                 progress,
                 cancel,
             )
-            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+            .and_then(|r| serde_json::to_value(r).map_err(|e| Msg::raw(e.to_string())))
         }
     });
     match started {
         Ok(id) => (202, serde_json::json!({ "id": id }).to_string() + "\n"),
-        Err(_) => (409, error("a job is running; wait for it or cancel it")),
+        Err(_) => (
+            409,
+            error(&msg!(
+                "core.api.busy",
+                "a job is running; wait for it or cancel it"
+            )),
+        ),
     }
 }
 
@@ -433,7 +483,10 @@ fn json_of<T: Serialize>(value: &T) -> String {
 /// the preview, nothing written.
 fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (400, error("the body is not JSON"));
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
     };
     let strings = |key: &str| -> Option<Vec<String>> {
         request[key].as_array().map(|a| {
@@ -506,7 +559,7 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
         let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
         match id.and_then(|id| previews.get(&id).cloned()) {
             Some(p) => p,
-            None => return (404, error("no such preview")),
+            None => return (404, error(&msg!("core.api.no_preview", "no such preview"))),
         }
     };
     let shares = mount::shares(&shared.networkfs).unwrap_or_default();
@@ -526,8 +579,8 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
                 .remove(&preview.id);
             (200, json_of(&applied))
         }
-        Err(e) if e.contains("changed since") => (409, error(&e)),
-        Err(e) if e.contains("nothing to write") => (400, error(&e)),
+        Err(e) if e.k.starts_with("core.write.changed_") => (409, error(&e)),
+        Err(e) if e.k == "core.write.nothing_to_write" => (400, error(&e)),
         Err(e) => (500, error(&e)),
     }
 }
@@ -544,8 +597,14 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
         id,
     ) {
         Ok(applied) => (200, json_of(&applied)),
-        Err(e) if e.contains("no such") => (404, error(&e)),
-        Err(e) if e.contains("changed since") || e.contains("already") => (409, error(&e)),
+        Err(e) if e.k == "core.undo.no_such_batch" => (404, error(&e)),
+        Err(e)
+            if e.k.starts_with("core.write.changed_")
+                || e.k == "core.write.already_undone"
+                || e.k == "core.write.file_back" =>
+        {
+            (409, error(&e))
+        }
         Err(e) => (500, error(&e)),
     }
 }
@@ -615,10 +674,10 @@ fn list(library: &Library, query: &str) -> (u16, String) {
     }
     match library.list(&path, offset, limit) {
         Ok(listing) => (200, json(&listing)),
-        Err(ListError::BadPath) => (400, error("not a library path")),
-        Err(ListError::NotFound) => (404, error("no such folder")),
-        Err(ListError::NotADirectory) => (400, error("not a folder")),
-        Err(ListError::Io(e)) => (500, error(&e)),
+        Err(ListError::BadPath) => (400, error(&walk::not_library_path())),
+        Err(ListError::NotFound) => (404, error(&walk::no_such_folder())),
+        Err(ListError::NotADirectory) => (400, error(&msg!("core.api.not_folder", "not a folder"))),
+        Err(ListError::Io(e)) => (500, error(&Msg::raw(e))),
     }
 }
 
@@ -665,7 +724,7 @@ fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
         .map(|(_, v)| v)
         .unwrap_or_default();
     let Some(path) = Library::check(&path) else {
-        return (400, error("not a library path"));
+        return (400, error(&walk::not_library_path()));
     };
     let dir = if path.is_empty() {
         shared.library.music().to_path_buf()
@@ -673,7 +732,7 @@ fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
         shared.library.music().join(&path)
     };
     if !dir.is_dir() {
-        return (404, error("no such folder"));
+        return (404, error(&walk::no_such_folder()));
     }
     let (_, decoders) = shared.decoders();
     match tagfix::folder_values(&dir, &path, &decoders) {
@@ -691,10 +750,13 @@ fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
 /// Volumio, each said against the library; nothing kept.
 fn queue_check(shared: &Shared, body: &[u8]) -> (u16, String) {
     let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return (400, error("the body is not JSON"));
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
     };
     let Some(items) = request["items"].as_array() else {
-        return (400, error("no items"));
+        return (400, error(&msg!("core.api.no_items", "no items")));
     };
     let (_, decoders) = shared.decoders();
     let mut seen = std::collections::HashSet::new();
@@ -725,7 +787,7 @@ fn folder_ignore(shared: &Shared, query: &str) -> (u16, String) {
         .map(|(_, v)| v)
         .unwrap_or_default();
     let Some(path) = Library::check(&path) else {
-        return (400, error("not a library path"));
+        return (400, error(&walk::not_library_path()));
     };
     let dir = if path.is_empty() {
         shared.library.music().to_path_buf()
@@ -733,7 +795,7 @@ fn folder_ignore(shared: &Shared, query: &str) -> (u16, String) {
         shared.library.music().join(&path)
     };
     if !dir.is_dir() {
-        return (404, error("no such folder"));
+        return (404, error(&walk::no_such_folder()));
     }
     let file = dir.join(".mpdignore");
     let exists = file.is_file();
@@ -765,10 +827,10 @@ fn report_json(shared: &Shared) -> String {
         (&note.source, decoders.suffixes.len()),
         album,
     );
-    serde_json::to_string(&r).unwrap_or_else(|e| error(&e.to_string())) + "\n"
+    serde_json::to_string(&r).unwrap_or_else(|e| error(&Msg::raw(e.to_string()))) + "\n"
 }
 
-fn error(message: &str) -> String {
+fn error(message: &Msg) -> String {
     serde_json::json!({ "error": message }).to_string() + "\n"
 }
 
@@ -968,7 +1030,8 @@ mod tests {
         let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
         let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(list[0]["kind"], "cue");
-        assert_eq!(list[0]["note"], "sheet USB/a.cue repaired: name");
+        assert_eq!(list[0]["note"]["en"], "sheet USB/a.cue repaired: name");
+        assert_eq!(list[0]["note"]["k"], "core.write.note_sheet_repaired");
         // A bad encoding label is refused before anything is read into a preview.
         let out = post("{\"kind\":\"cue\",\"path\":\"USB/a.cue\",\"encoding\":\"utf-7\"}");
         assert!(
@@ -1003,7 +1066,7 @@ mod tests {
         assert_eq!(p["op"], "tags");
         assert_eq!(p["files"][0]["name"], "a.flac");
         assert_eq!(p["files"][0]["changes"][0]["key"], "ALBUMARTIST");
-        assert_eq!(p["files"][1]["note"], "nothing to change");
+        assert_eq!(p["files"][1]["note"]["en"], "nothing to change");
         assert_eq!(p["values"]["album"][0][0], "One");
         assert!(p.get("after").is_some());
         let out =
@@ -1023,7 +1086,7 @@ mod tests {
         let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
         let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(list[0]["kind"], "tags");
-        assert_eq!(list[0]["note"], "tags of 1 file in USB: unify");
+        assert_eq!(list[0]["note"]["en"], "tags of 1 file in USB: unify");
         let batch = list[0]["id"].as_str().unwrap().to_string();
         let out = talk(
             server.port,
@@ -1106,7 +1169,7 @@ mod tests {
         let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(list[0]["kind"], "volumio_playlist");
         assert_eq!(
-            list[0]["note"],
+            list[0]["note"]["en"],
             "Volumio playlist \"mix\" written from USB/mix.m3u"
         );
         let batch = list[0]["id"].as_str().unwrap().to_string();
@@ -1170,9 +1233,10 @@ mod tests {
         let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
         let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(
-            list[0]["note"],
+            list[0]["note"]["en"],
             "tags of 1 file in USB: edited file by file"
         );
+        assert_eq!(list[0]["note"]["a"]["n"], "1");
         let batch = list[0]["id"].as_str().unwrap().to_string();
         let out = talk(
             server.port,
@@ -1253,7 +1317,7 @@ mod tests {
         let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
         assert_eq!(list[0]["kind"], "volumio_list");
         assert_eq!(
-            list[0]["note"],
+            list[0]["note"]["en"],
             "Volumio's playlist Mix repaired: relocate, drop, dedupe"
         );
         let batch = list[0]["id"].as_str().unwrap().to_string();

@@ -10,6 +10,8 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::text::{self, Msg};
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Where MPD listens: a unix socket path, or host:port.
@@ -49,16 +51,16 @@ pub struct Connection {
     pub version: String,
 }
 
-pub fn connect(address: &Address) -> Result<Connection, String> {
+pub fn connect(address: &Address) -> Result<Connection, Msg> {
     let socket: Box<dyn Socket> = match address {
         Address::Unix(path) => {
-            let s = UnixStream::connect(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let s = UnixStream::connect(path).map_err(|e| text::at(path.display(), e))?;
             let _ = s.set_read_timeout(Some(TIMEOUT));
             let _ = s.set_write_timeout(Some(TIMEOUT));
             Box::new(s)
         }
         Address::Tcp(addr) => {
-            let s = TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;
+            let s = TcpStream::connect(addr).map_err(|e| text::at(addr, e))?;
             let _ = s.set_read_timeout(Some(TIMEOUT));
             let _ = s.set_write_timeout(Some(TIMEOUT));
             Box::new(s)
@@ -68,37 +70,44 @@ pub fn connect(address: &Address) -> Result<Connection, String> {
     let mut line = String::new();
     socket
         .read_line(&mut line)
-        .map_err(|e| format!("{address}: {e}"))?;
+        .map_err(|e| text::at(address, e))?;
     let version = line
         .strip_prefix("OK MPD ")
         .map(|v| v.trim().to_string())
-        .ok_or_else(|| format!("{address}: not MPD: {}", line.trim()))?;
+        .ok_or_else(|| {
+            msg!(
+                "core.mpd.not_mpd",
+                "{address}: not MPD: {line}",
+                address = address.to_string(),
+                line = line.trim()
+            )
+        })?;
     Ok(Connection { socket, version })
 }
 
 impl Connection {
-    /// One command, its `key: value` lines; an ACK is the error.
-    pub fn command(&mut self, command: &str) -> Result<Vec<(String, String)>, String> {
+    /// One command, its `key: value` lines; an ACK is the error, in MPD's words.
+    pub fn command(&mut self, command: &str) -> Result<Vec<(String, String)>, Msg> {
         self.socket
             .get_mut()
             .write_all(format!("{command}\n").as_bytes())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Msg::raw(e.to_string()))?;
         let mut out = Vec::new();
         loop {
             let mut line = String::new();
             let n = self
                 .socket
                 .read_line(&mut line)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Msg::raw(e.to_string()))?;
             if n == 0 {
-                return Err("MPD closed the connection".to_string());
+                return Err(msg!("core.mpd.closed", "MPD closed the connection"));
             }
             let line = line.trim_end_matches(['\r', '\n']);
             if line == "OK" {
                 return Ok(out);
             }
             if let Some(ack) = line.strip_prefix("ACK ") {
-                return Err(ack.to_string());
+                return Err(Msg::raw(ack));
             }
             if let Some((key, value)) = line.split_once(": ") {
                 out.push((key.to_string(), value.to_string()));
@@ -194,7 +203,7 @@ impl Decoders {
 }
 
 /// What the running MPD says it decodes.
-pub fn decoders(address: &Address) -> Result<Decoders, String> {
+pub fn decoders(address: &Address) -> Result<Decoders, Msg> {
     let mut c = connect(address)?;
     let lines = c.command("decoders")?;
     let mut plugins: Vec<(String, BTreeSet<String>)> = Vec::new();
@@ -213,7 +222,7 @@ pub fn decoders(address: &Address) -> Result<Decoders, String> {
 }
 
 /// MPD told to update one folder, nothing wider; the job number it answers with.
-pub fn update(address: &Address, path: &str) -> Result<u64, String> {
+pub fn update(address: &Address, path: &str) -> Result<u64, Msg> {
     let mut c = connect(address)?;
     let quoted = format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""));
     let lines = c.command(&format!("update {quoted}"))?;
@@ -221,7 +230,7 @@ pub fn update(address: &Address, path: &str) -> Result<u64, String> {
         .iter()
         .find(|(k, _)| k == "updating_db")
         .and_then(|(_, v)| v.parse().ok())
-        .ok_or_else(|| "MPD answered without a job number".to_string())
+        .ok_or_else(|| msg!("core.mpd.no_job", "MPD answered without a job number"))
 }
 
 /// When MPD cannot be asked: the suffixes Volumio's MPD build commonly claims, so the

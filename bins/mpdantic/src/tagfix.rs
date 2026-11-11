@@ -38,7 +38,9 @@ use serde::{Deserialize, Serialize};
 use crate::classify::{self, Class, Rules};
 use crate::cuefix::Repair;
 use crate::mpd::Decoders;
+use crate::tagcheck::field_name;
 use crate::tags::{self, Block, Kind, Raw};
+use crate::text::{self, Msg};
 
 /// One key of one tag block set to a list of values; the undo is the same change
 /// the other way round.
@@ -59,10 +61,29 @@ pub struct FilePlan {
     pub format: String,
     pub changes: Vec<KeyChange>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub note: Option<Msg>,
     /// As read, for the check at apply.
     pub size: u64,
     pub mtime: u64,
+}
+
+fn not_read(problem: &Msg) -> Msg {
+    msg!(
+        "core.tagfix.not_read",
+        "not read: {problem}",
+        problem = problem
+    )
+}
+
+fn not_written_dsd() -> Msg {
+    msg!(
+        "core.tagfix.not_written_dsd",
+        "not written here: no writer for DSF and DFF in this version"
+    )
+}
+
+fn nothing_to_change() -> Msg {
+    msg!("core.tagfix.nothing", "nothing to change")
 }
 
 /// The distinct values the folder's files carry, with their counts, most common
@@ -310,7 +331,7 @@ pub fn plan(
     folder: &str,
     decoders: &Decoders,
     choice: &Choice,
-) -> Result<Planned, String> {
+) -> Result<Planned, Msg> {
     let chosen = |id: &str| match choice.repairs {
         None => id != "unify",
         Some(list) => list.iter().any(|r| r == id),
@@ -321,17 +342,7 @@ pub fn plan(
         ("date", choice.date),
     ];
     let unify_on = chosen("unify") && wanted.iter().any(|(_, v)| v.is_some());
-    let rules = Rules::new();
-    let mut names: Vec<String> = fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .flatten()
-        .filter(|e| e.path().is_file())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| {
-            classify::classify(&rules, std::ffi::OsStr::new(n), false, decoders).0 == Class::Audio
-        })
-        .collect();
-    names.sort();
+    let names = audio_names(dir, decoders)?;
     let mut planned = Planned::default();
     let mut applicable: BTreeMap<&str, usize> = BTreeMap::new();
     let mut albums: BTreeMap<String, usize> = BTreeMap::new();
@@ -356,7 +367,7 @@ pub fn plan(
             mtime,
         };
         if let Some(p) = &raw.problem {
-            fp.note = Some(format!("not read: {p}"));
+            fp.note = Some(not_read(p));
             planned.files.push(fp);
             continue;
         }
@@ -376,8 +387,7 @@ pub fn plan(
             .entry(first(&seen.date).unwrap_or("(none)").to_string())
             .or_insert(0) += 1;
         if !writable_format(&raw.format) {
-            fp.note =
-                Some("not written here: no writer for DSF and DFF in this version".to_string());
+            fp.note = Some(not_written_dsd());
             planned.files.push(fp);
             continue;
         }
@@ -557,10 +567,13 @@ pub fn plan(
                 }
             }
         } else if fp.note.is_none() && !seen.id3v1_only {
-            fp.note = Some("no tag block MPD reads and lofty writes".to_string());
+            fp.note = Some(msg!(
+                "core.tagfix.no_block",
+                "no tag block MPD reads and lofty writes"
+            ));
         }
         if changes.is_empty() && fp.note.is_none() {
-            fp.note = Some("nothing to change".to_string());
+            fp.note = Some(nothing_to_change());
         }
         fp.changes = changes;
         planned.files.push(fp);
@@ -576,42 +589,34 @@ pub fn plan(
     if split {
         applicable.insert("unify", planned.files.len());
     }
-    let unified: Vec<String> = wanted
+    let unified: Vec<Msg> = wanted
         .iter()
-        .filter_map(|(f, v)| v.map(|v| format!("{f} \"{v}\"")))
+        .filter_map(|(f, v)| {
+            v.map(|v| {
+                msg!(
+                    "core.tagfix.value",
+                    "{field} \"{value}\"",
+                    field = field_name(f),
+                    value = v
+                )
+            })
+        })
         .collect();
     for id in REPAIR_IDS {
         let Some(n) = applicable.get(id) else {
             continue;
         };
-        let files = |n: usize| {
-            if n == 1 {
-                "1 file".to_string()
-            } else {
-                format!("{n} files")
-            }
-        };
         let what = match id {
-            "albumartist" => format!(
-                "the album artist written where MPD reads it, beside the key it does not ({})",
-                files(*n)
-            ),
-            "date" => format!(
-                "the date written where MPD reads it, beside YEAR ({})",
-                files(*n)
-            ),
-            "text" => format!(
-                "text that is UTF-8 read as Latin-1 decoded back ({})",
-                files(*n)
-            ),
-            "twice" => format!("a tag given twice kept as its first value ({})", files(*n)),
-            "id3v2" => format!("an ID3v2 tag written from the ID3v1 fields ({})", files(*n)),
+            "albumartist" => msg!("core.tagfix.albumartist", "the album artist written where MPD reads it, beside the key it does not ({n} {n|file|files})", n = n),
+            "date" => msg!("core.tagfix.date", "the date written where MPD reads it, beside YEAR ({n} {n|file|files})", n = n),
+            "text" => msg!("core.tagfix.text", "text that is UTF-8 read as Latin-1 decoded back ({n} {n|file|files})", n = n),
+            "twice" => msg!("core.tagfix.twice", "a tag given twice kept as its first value ({n} {n|file|files})", n = n),
+            "id3v2" => msg!("core.tagfix.id3v2", "an ID3v2 tag written from the ID3v1 fields ({n} {n|file|files})", n = n),
             _ => {
                 if unified.is_empty() {
-                    "the files disagree; pick the Album, Album artist or Date every file gets"
-                        .to_string()
+                    msg!("core.tagfix.unify_pick", "the files disagree; pick the Album, Album artist or Date every file gets")
                 } else {
-                    format!("every file gets {}", unified.join(", "))
+                    msg!("core.tagfix.unify_values", "every file gets {values}", values = unified)
                 }
             }
         };
@@ -628,20 +633,27 @@ pub fn plan(
 // ------------------------------------------------------------------ the writes
 
 /// `n` or `n/total` as a pair; nothing from an empty value.
-fn number_pair(text: &str) -> Result<(u32, Option<u32>), String> {
+fn number_pair(text: &str) -> Result<(u32, Option<u32>), Msg> {
     let text = text.trim();
     let (n, total) = match text.split_once('/') {
         Some((n, t)) => (n.trim(), Some(t.trim())),
         None => (text, None),
     };
-    let n = n
-        .parse::<u32>()
-        .map_err(|_| format!("{text}: not a number, or a number with its total as n/total"))?;
+    let n = n.parse::<u32>().map_err(|_| {
+        msg!(
+            "core.tagfix.not_number",
+            "{text}: not a number, or a number with its total as n/total",
+            text = text
+        )
+    })?;
     let total = match total {
-        Some(t) if !t.is_empty() => Some(
-            t.parse::<u32>()
-                .map_err(|_| format!("{text}: the total is not a number"))?,
-        ),
+        Some(t) if !t.is_empty() => Some(t.parse::<u32>().map_err(|_| {
+            msg!(
+                "core.tagfix.total_not_number",
+                "{text}: the total is not a number",
+                text = text
+            )
+        })?),
         _ => None,
     };
     Ok((n, total))
@@ -677,14 +689,14 @@ pub struct FileValues {
     pub writable: bool,
     pub values: BTreeMap<String, Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub problem: Option<String>,
+    pub problem: Option<Msg>,
 }
 
 /// The audio files of a folder, sorted, as the check and the repairs take them.
-fn audio_names(dir: &Path, decoders: &Decoders) -> Result<Vec<String>, String> {
+fn audio_names(dir: &Path, decoders: &Decoders) -> Result<Vec<String>, Msg> {
     let rules = Rules::new();
     let mut names: Vec<String> = fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .map_err(|e| text::at(dir.display(), e))?
         .flatten()
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -709,7 +721,7 @@ pub fn folder_values(
     dir: &Path,
     folder: &str,
     decoders: &Decoders,
-) -> Result<Vec<FileValues>, String> {
+) -> Result<Vec<FileValues>, Msg> {
     Ok(audio_names(dir, decoders)?
         .into_iter()
         .map(|name| {
@@ -801,12 +813,16 @@ pub fn plan_edits(
     folder: &str,
     decoders: &Decoders,
     edits: &[Edit],
-) -> Result<Planned, String> {
+) -> Result<Planned, Msg> {
     let names = audio_names(dir, decoders)?;
     let mut planned = Planned::default();
     for e in edits {
         if !names.contains(&e.name) {
-            return Err(format!("{}: not an audio file of the folder", e.name));
+            return Err(msg!(
+                "core.tagfix.not_audio_of_folder",
+                "{name}: not an audio file of the folder",
+                name = e.name
+            ));
         }
         let path = dir.join(&e.name);
         let suffix = classify::suffix(&e.name).unwrap_or_default();
@@ -822,13 +838,12 @@ pub fn plan_edits(
             mtime,
         };
         if let Some(p) = &raw.problem {
-            fp.note = Some(format!("not read: {p}"));
+            fp.note = Some(not_read(p));
             planned.files.push(fp);
             continue;
         }
         if !writable_format(&raw.format) {
-            fp.note =
-                Some("not written here: no writer for DSF and DFF in this version".to_string());
+            fp.note = Some(not_written_dsd());
             planned.files.push(fp);
             continue;
         }
@@ -887,7 +902,15 @@ pub fn plan_edits(
                 vec![value.to_string()]
             };
             if (key == "trkn" || key == "disk") && !after.is_empty() {
-                number_pair(value).map_err(|e| format!("{}: {field}: {e}", fp.name))?;
+                number_pair(value).map_err(|e| {
+                    msg!(
+                        "core.tagfix.field_error",
+                        "{name}: {field}: {error}",
+                        name = fp.name,
+                        field = field,
+                        error = e
+                    )
+                })?;
             }
             if current != after {
                 supersede(
@@ -902,12 +925,14 @@ pub fn plan_edits(
             }
         }
         if !refused.is_empty() {
-            fp.note = Some(format!(
-                "no key for {} in a {kind:?} block",
-                refused.join(", ")
+            fp.note = Some(msg!(
+                "core.tagfix.no_key",
+                "no key for {fields} in a {kind} block",
+                fields = refused,
+                kind = format!("{kind:?}")
             ));
         } else if changes.is_empty() {
-            fp.note = Some("nothing to change".to_string());
+            fp.note = Some(nothing_to_change());
         }
         if !changes.is_empty() {
             planned.changed = true;
@@ -950,22 +975,24 @@ fn set_id3v2(tag: &mut Id3v2Tag, key: &str, values: &[String]) {
     tag.insert(frame);
 }
 
-fn set_ape(tag: &mut ApeTag, key: &str, values: &[String]) -> Result<(), String> {
+fn set_ape(tag: &mut ApeTag, key: &str, values: &[String]) -> Result<(), Msg> {
     tag.remove(key);
     if values.is_empty() {
         return Ok(());
     }
     let item = ApeItem::new(key.to_string(), ItemValue::Text(values.join("\0")))
-        .map_err(|e| format!("{key}: {e}"))?;
+        .map_err(|e| text::at(key, e))?;
     tag.insert(item);
     Ok(())
 }
 
-fn atom_ident(key: &str) -> Result<AtomIdent<'static>, String> {
+fn not_an_atom(key: &str) -> Msg {
+    msg!("core.tagfix.not_atom", "{key}: not an atom", key = key)
+}
+
+fn atom_ident(key: &str) -> Result<AtomIdent<'static>, Msg> {
     if let Some(rest) = key.strip_prefix("----:") {
-        let (mean, name) = rest
-            .split_once(':')
-            .ok_or_else(|| format!("{key}: not an atom"))?;
+        let (mean, name) = rest.split_once(':').ok_or_else(|| not_an_atom(key))?;
         return Ok(AtomIdent::Freeform {
             mean: Cow::Owned(mean.to_string()),
             name: Cow::Owned(name.to_string()),
@@ -975,17 +1002,15 @@ fn atom_ident(key: &str) -> Result<AtomIdent<'static>, String> {
     for c in key.chars() {
         let n = c as u32;
         if n > 0xFF {
-            return Err(format!("{key}: not an atom"));
+            return Err(not_an_atom(key));
         }
         bytes.push(n as u8);
     }
-    let four: [u8; 4] = bytes
-        .try_into()
-        .map_err(|_| format!("{key}: not an atom"))?;
+    let four: [u8; 4] = bytes.try_into().map_err(|_| not_an_atom(key))?;
     Ok(AtomIdent::Fourcc(four))
 }
 
-fn set_ilst(tag: &mut Ilst, key: &str, values: &[String]) -> Result<(), String> {
+fn set_ilst(tag: &mut Ilst, key: &str, values: &[String]) -> Result<(), Msg> {
     // The track and disc numbers are binary pairs (number, total), not text.
     if key == "trkn" || key == "disk" {
         let pair = values.first().map(|v| number_pair(v)).transpose()?;
@@ -1028,12 +1053,14 @@ fn set_ilst(tag: &mut Ilst, key: &str, values: &[String]) -> Result<(), String> 
     Ok(())
 }
 
-fn save<T: AudioFile>(file: &mut File, f: &T) -> Result<(), String> {
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+fn save<T: AudioFile>(file: &mut File, f: &T) -> Result<(), Msg> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| Msg::raw(e.to_string()))?;
     // lofty checks the file's format again before it writes, with these options: the
     // reach past junk must be the reader's, or a file the check read is refused here.
     let options = WriteOptions::default().parse_options(tags::parse_options());
-    f.save_to(file, options).map_err(|e| described(&e))
+    f.save_to(file, options)
+        .map_err(|e| Msg::raw(described(&e)))
 }
 
 /// An error with its causes after it: lofty's "failed to write to file" says nothing
@@ -1052,8 +1079,13 @@ fn described(e: &dyn std::error::Error) -> String {
     text
 }
 
-fn not_here(kind: &Kind, format: &str) -> String {
-    format!("a {kind:?} block is not written in a {format} file")
+fn not_here(kind: &Kind, format: &str) -> Msg {
+    msg!(
+        "core.tagfix.block_not_written",
+        "a {kind} block is not written in a {format} file",
+        kind = format!("{kind:?}"),
+        format = format
+    )
 }
 
 /// The audio of a file as the span between its tags, with a hash of its first and
@@ -1071,13 +1103,15 @@ pub struct Audio {
 
 const AUDIO_HASHED: u64 = 64 * 1024;
 
-fn read_at(file: &mut File, offset: u64, buf: &mut [u8]) -> Result<usize, String> {
+fn read_at(file: &mut File, offset: u64, buf: &mut [u8]) -> Result<usize, Msg> {
     use std::io::Read as _;
     file.seek(SeekFrom::Start(offset))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Msg::raw(e.to_string()))?;
     let mut got = 0;
     while got < buf.len() {
-        let n = file.read(&mut buf[got..]).map_err(|e| e.to_string())?;
+        let n = file
+            .read(&mut buf[got..])
+            .map_err(|e| Msg::raw(e.to_string()))?;
         if n == 0 {
             break;
         }
@@ -1087,7 +1121,7 @@ fn read_at(file: &mut File, offset: u64, buf: &mut [u8]) -> Result<usize, String
 }
 
 /// FNV-1a over a stretch of the file: a change detector, not a signature.
-fn hash_at(file: &mut File, offset: u64, len: u64) -> Result<u64, String> {
+fn hash_at(file: &mut File, offset: u64, len: u64) -> Result<u64, Msg> {
     let mut buf = vec![0u8; len as usize];
     let got = read_at(file, offset, &mut buf)?;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1098,12 +1132,12 @@ fn hash_at(file: &mut File, offset: u64, len: u64) -> Result<u64, String> {
     Ok(h)
 }
 
-pub fn audio_region(path: &Path, format: &str) -> Result<Option<Audio>, String> {
+pub fn audio_region(path: &Path, format: &str) -> Result<Option<Audio>, Msg> {
     if !matches!(format, "flac" | "mp3" | "aac" | "ape" | "mpc" | "wavpack") {
         return Ok(None);
     }
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let file_len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut file = File::open(path).map_err(|e| Msg::raw(e.to_string()))?;
+    let file_len = file.metadata().map_err(|e| Msg::raw(e.to_string()))?.len();
     let mut start: u64 = 0;
     let mut head = [0u8; 10];
     if read_at(&mut file, 0, &mut head)? == 10 && &head[0..3] == b"ID3" {
@@ -1117,13 +1151,16 @@ pub fn audio_region(path: &Path, format: &str) -> Result<Option<Audio>, String> 
     if format == "flac" {
         let mut marker = [0u8; 4];
         if read_at(&mut file, start, &mut marker)? < 4 || &marker != b"fLaC" {
-            return Err("not a FLAC stream".to_string());
+            return Err(msg!("core.tagfix.not_flac", "not a FLAC stream"));
         }
         start += 4;
         loop {
             let mut header = [0u8; 4];
             if read_at(&mut file, start, &mut header)? < 4 {
-                return Err("the metadata runs past the end of the file".to_string());
+                return Err(msg!(
+                    "core.tagfix.metadata_past_end",
+                    "the metadata runs past the end of the file"
+                ));
             }
             let block_len =
                 ((header[1] as u64) << 16) | ((header[2] as u64) << 8) | header[3] as u64;
@@ -1161,7 +1198,7 @@ pub fn audio_region(path: &Path, format: &str) -> Result<Option<Audio>, String> 
 
 /// The audio's length alone, for the tests.
 #[cfg(test)]
-pub fn audio_len(path: &Path, format: &str) -> Result<Option<u64>, String> {
+pub fn audio_len(path: &Path, format: &str) -> Result<Option<u64>, Msg> {
     Ok(audio_region(path, format)?.map(|a| a.len))
 }
 
@@ -1170,31 +1207,35 @@ pub fn audio_len(path: &Path, format: &str) -> Result<Option<u64>, String> {
 /// and last 64 KiB. A file with no audio between its tags is not written: lofty
 /// 0.25.5 truncates such a file when the tag shrinks (its `replace_range` fast
 /// path, fixed upstream after that release), and there is nothing in it to keep.
-pub fn apply_file(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), String> {
+pub fn apply_file(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), Msg> {
     let before = audio_region(path, format)?;
     if matches!(&before, Some(a) if a.len == 0) {
-        return Err("no audio between the tags; not written".to_string());
+        return Err(msg!(
+            "core.tagfix.no_audio",
+            "no audio between the tags; not written"
+        ));
     }
     write_changes(path, format, changes)?;
     let after = audio_region(path, format)?;
     if before != after {
-        return Err(format!(
-            "the audio is not the same after the write ({} bytes, then {}); the file needs a look",
-            before.map(|a| a.len).unwrap_or(0),
-            after.map(|a| a.len).unwrap_or(0)
+        return Err(msg!(
+            "core.tagfix.audio_changed",
+            "the audio is not the same after the write ({before} bytes, then {after}); the file needs a look",
+            before = before.map(|a| a.len).unwrap_or(0),
+            after = after.map(|a| a.len).unwrap_or(0)
         ));
     }
     Ok(())
 }
 
-fn write_changes(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), String> {
+fn write_changes(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(), Msg> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Msg::raw(e.to_string()))?;
     let opts = ParseOptions::new().read_properties(false);
-    let e = |e: lofty::error::FileParseError| e.to_string();
+    let e = |e: lofty::error::FileParseError| Msg::raw(e.to_string());
     macro_rules! with_id3v2 {
         ($f:expr, $c:expr) => {{
             if $f.id3v2().is_none() {
@@ -1350,7 +1391,11 @@ fn write_changes(path: &Path, format: &str, changes: &[KeyChange]) -> Result<(),
             }
             save(&mut file, &f)
         }
-        other => Err(format!("{other}: not written here")),
+        other => Err(msg!(
+            "core.tagfix.format_not_written",
+            "{format}: not written here",
+            format = other
+        )),
     }
 }
 

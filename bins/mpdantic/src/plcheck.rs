@@ -15,6 +15,7 @@ use crate::classify::{self, Class, Rules};
 use crate::cue::Finding;
 use crate::mpd::Decoders;
 use crate::playlist::{self, Place};
+use crate::text::Msg;
 use crate::walk::{self, InForceLines, Progress, Visit};
 
 /// A playlist larger than this is not read; a finding says so.
@@ -96,7 +97,7 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
-) -> Result<Report, String> {
+) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = Rules::new();
     let mut report = Report {
@@ -202,7 +203,11 @@ fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Repo
                 vec![Finding {
                     code: "P09",
                     line: 0,
-                    text: format!("The playlist is {} bytes; not read.", entry.size),
+                    text: msg!(
+                        "core.plcheck.too_large",
+                        "The playlist is {bytes} bytes; not read.",
+                        bytes = entry.size
+                    ),
                 }],
                 true,
             )
@@ -221,7 +226,11 @@ fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Repo
                         vec![Finding {
                             code: "P09",
                             line: 0,
-                            text: format!("The playlist could not be read: {e}"),
+                            text: msg!(
+                                "core.plcheck.not_read",
+                                "The playlist could not be read: {error}",
+                                error = e
+                            ),
                         }],
                         true,
                     )
@@ -253,9 +262,9 @@ fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Repo
         }
         for (state, (n, first)) in &counts {
             let (code, text) = match *state {
-                "missing" => ("P01", format!("{n} {} not found where MPD looks (joined to the playlist's folder), the first \"{first}\": skipped at load without a word.", if *n == 1 { "entry" } else { "entries" })),
-                "foreign" => ("P02", format!("{n} {} a foreign path (absolute, a drive letter, backslashes or file://), the first \"{first}\": nothing on this player.", if *n == 1 { "entry is" } else { "entries are" })),
-                _ => ("P03", format!("{n} {} a file no decoder of this MPD claims, the first \"{first}\": not in the database, skipped.", if *n == 1 { "entry names" } else { "entries name" })),
+                "missing" => ("P01", msg!("core.plcheck.missing", "{n} {n|entry|entries} not found where MPD looks (joined to the playlist's folder), the first \"{first}\": skipped at load without a word.", n = n, first = first)),
+                "foreign" => ("P02", msg!("core.plcheck.foreign", "{n} {n|entry is|entries are} a foreign path (absolute, a drive letter, backslashes or file://), the first \"{first}\": nothing on this player.", n = n, first = first)),
+                _ => ("P03", msg!("core.plcheck.not_decoded", "{n} {n|entry names|entries name} a file no decoder of this MPD claims, the first \"{first}\": not in the database, skipped.", n = n, first = first)),
             };
             findings.push(Finding {
                 code,
@@ -267,7 +276,7 @@ fn directory(music: &Path, visit: &Visit, decoders: &Decoders, report: &mut Repo
             findings.push(Finding {
                 code: "P07",
                 line: 0,
-                text: format!("Volumio's browser plays .cue, .pls and .m3u only; a .{suffix} is never sent to MPD, which could play it."),
+                text: msg!("core.plcheck.volumio_never", "Volumio's browser plays .cue, .pls and .m3u only; a .{suffix} is never sent to MPD, which could play it.", suffix = suffix),
             });
         }
         findings.sort_by_key(|f| (f.line == 0, f.line, f.code));
@@ -342,7 +351,7 @@ pub mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: crate::text::Msg::raw(""),
+            detail: Msg::raw(""),
         }
     }
 

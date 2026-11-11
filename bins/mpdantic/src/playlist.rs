@@ -42,9 +42,7 @@ pub fn decode(bytes: &[u8]) -> (String, String, Vec<Finding>) {
         findings.push(Finding {
             code: "P05",
             line: 1,
-            text:
-                "The playlist is UTF-16; MPD reads it as bytes and no entry matches a name on disk."
-                    .to_string(),
+            text: msg!("core.playlist.utf16", "The playlist is UTF-16; MPD reads it as bytes and no entry matches a name on disk."),
         });
         let text: String = bytes.iter().map(|&b| b as char).collect();
         return ("utf-16".to_string(), text, findings);
@@ -59,7 +57,7 @@ pub fn decode(bytes: &[u8]) -> (String, String, Vec<Finding>) {
             findings.push(Finding {
                 code: "P05",
                 line: 1,
-                text: "The playlist is not UTF-8 (read here as Latin-1); MPD takes the bytes as written, so an entry with an accented letter matches no name on disk.".to_string(),
+                text: msg!("core.playlist.not_utf8", "The playlist is not UTF-8 (read here as Latin-1); MPD takes the bytes as written, so an entry with an accented letter matches no name on disk."),
             });
             ("latin-1", body.iter().map(|&b| b as char).collect())
         }
@@ -102,7 +100,10 @@ pub fn parse_text(text: &str, suffix: &str, bom: bool, mut findings: Vec<Finding
         findings.push(Finding {
             code: "P08",
             line: 0,
-            text: "No entry in the playlist: nothing to play.".to_string(),
+            text: msg!(
+                "core.playlist.no_entry",
+                "No entry in the playlist: nothing to play."
+            ),
         });
     }
     findings.sort_by_key(|f| (f.line == 0, f.line, f.code));
@@ -131,14 +132,15 @@ fn parse_m3u(text: &str, bom: bool, out: &mut Playlist, findings: &mut Vec<Findi
         .map(|l| l.trim_end_matches(|c: char| c.is_ascii_whitespace()));
     let extm3u = !bom && first == Some("#EXTM3U");
     if bom {
+        let line = strip(first.unwrap_or(""));
         findings.push(Finding {
             code: "P04",
             line: 1,
-            text: format!(
-                "A byte-order mark starts the playlist, so MPD takes the first line ({}) as an entry{}",
-                strip(first.unwrap_or("")),
-                if first == Some("#EXTM3U") { " and the EXTINF names are lost" } else { "" }
-            ),
+            text: if first == Some("#EXTM3U") {
+                msg!("core.playlist.bom_extm3u", "A byte-order mark starts the playlist, so MPD takes the first line ({first}) as an entry and the EXTINF names are lost", first = line)
+            } else {
+                msg!("core.playlist.bom", "A byte-order mark starts the playlist, so MPD takes the first line ({first}) as an entry", first = line)
+            },
         });
     }
     if extm3u {
@@ -222,7 +224,10 @@ fn parse_pls(text: &str, out: &mut Playlist, findings: &mut Vec<Finding>) {
         findings.push(Finding {
             code: "P06",
             line: 0,
-            text: "No [playlist] section: MPD rejects the file.".to_string(),
+            text: msg!(
+                "core.playlist.no_section",
+                "No [playlist] section: MPD rejects the file."
+            ),
         });
         return;
     }
@@ -233,7 +238,10 @@ fn parse_pls(text: &str, out: &mut Playlist, findings: &mut Vec<Finding>) {
             findings.push(Finding {
                 code: "P06",
                 line: 0,
-                text: "No NumberOfEntries line: MPD rejects the whole file.".to_string(),
+                text: msg!(
+                    "core.playlist.no_count",
+                    "No NumberOfEntries line: MPD rejects the whole file."
+                ),
             });
         }
         Some(0) => {}

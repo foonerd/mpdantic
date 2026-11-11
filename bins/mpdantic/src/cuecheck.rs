@@ -13,6 +13,7 @@ use crate::analyse::DecoderNote;
 use crate::classify;
 use crate::cue::{self, Finding, Track};
 use crate::mpd::Decoders;
+use crate::text::Msg;
 use crate::walk::{self, InForceLines, Progress, Visit};
 
 /// A sheet larger than this is not read; a finding says so.
@@ -31,7 +32,9 @@ pub struct FileState {
     /// `ok`, `missing`, `case` (found in another case), `suffix` (found with another
     /// suffix), `not_decoded` (there, but no decoder claims it), `foreign`.
     pub state: &'static str,
-    pub found: Option<String>,
+    /// The name found, as it is, for `case` and `suffix`; what kind of path, for
+    /// `foreign`.
+    pub found: Option<Msg>,
 }
 
 #[derive(Serialize, Debug)]
@@ -151,21 +154,21 @@ impl Beside {
     }
 
     /// Where a `FILE` name stands beside the sheet: `ok`; `not_decoded` (there, but
-    /// no decoder claims it); `case` and `suffix` (there under the name said); `foreign`
-    /// (what kind of path); `missing`.
+    /// no decoder claims it); `case` and `suffix` (there under the name said, as it
+    /// is); `foreign` (what kind of path); `missing`.
     pub fn locate(
         &self,
         name: &str,
         dir: &Path,
         decoders: &Decoders,
-    ) -> (&'static str, Option<String>) {
+    ) -> (&'static str, Option<Msg>) {
         let claimed = |n: &str| {
             classify::suffix(n)
                 .map(|s| decoders.suffixes.contains(&s))
                 .unwrap_or(false)
         };
         if let Some(what) = cue::foreign_path(name) {
-            return ("foreign", Some(what.to_string()));
+            return ("foreign", Some(what));
         }
         if self.names.iter().any(|n| n == name) || dir.join(name).is_file() {
             return if claimed(name) {
@@ -175,7 +178,7 @@ impl Beside {
             };
         }
         if let Some(n) = self.by_lower.get(&name.to_lowercase()) {
-            return ("case", Some(n.clone()));
+            return ("case", Some(Msg::raw(n.clone())));
         }
         // The same stem with another suffix: an audio file first, never a sheet.
         if let Some(candidates) = name
@@ -189,7 +192,7 @@ impl Beside {
                     .find(|n| classify::suffix(n).as_deref() != Some(classify::CUE_SUFFIX))
             });
             if let Some(n) = found {
-                return ("suffix", Some(n.clone()));
+                return ("suffix", Some(Msg::raw(n.clone())));
             }
         }
         ("missing", None)
@@ -204,7 +207,7 @@ pub fn check(
     source: DecoderNote,
     progress: &Progress,
     cancel: &AtomicBool,
-) -> Result<Report, String> {
+) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = classify::Rules::new();
     let mut report = Report {
@@ -298,7 +301,11 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                     findings: vec![Finding {
                         code: "C13",
                         line: 0,
-                        text: format!("The sheet is {} bytes; not read.", entry.size),
+                        text: msg!(
+                            "core.cuecheck.too_large",
+                            "The sheet is {bytes} bytes; not read.",
+                            bytes = entry.size
+                        ),
                     }],
                 },
                 Vec::new(),
@@ -320,7 +327,11 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                         findings: vec![Finding {
                             code: "C13",
                             line: 0,
-                            text: format!("The sheet could not be read: {e}"),
+                            text: msg!(
+                                "core.cuecheck.not_read",
+                                "The sheet could not be read: {error}",
+                                error = e
+                            ),
                         }],
                     },
                     Vec::new(),
@@ -354,11 +365,11 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                 continue;
             }
             let finding = match (f.state, &f.found) {
-                ("missing", _) => Some(("C02", format!("FILE \"{}\" is not beside the sheet: MPD adds the tracks and purges them at the end of every update.", f.name))),
-                ("case", Some(n)) => Some(("C02", format!("FILE \"{}\" is not beside the sheet; \"{n}\" is, in another case: MPD looks the name up exactly and purges the tracks.", f.name))),
-                ("suffix", Some(n)) => Some(("C02", format!("FILE \"{}\" is not beside the sheet; \"{n}\" is: MPD purges the tracks.", f.name))),
-                ("not_decoded", _) => Some(("C03", format!("FILE \"{}\" is there but no decoder of this MPD claims its suffix: MPD purges the tracks.", f.name))),
-                ("foreign", Some(what)) => Some(("C04", format!("FILE \"{}\" is {what}: nothing beside the sheet on this player.", f.name))),
+                ("missing", _) => Some(("C02", msg!("core.cuecheck.missing", "FILE \"{name}\" is not beside the sheet: MPD adds the tracks and purges them at the end of every update.", name = f.name))),
+                ("case", Some(n)) => Some(("C02", msg!("core.cuecheck.case", "FILE \"{name}\" is not beside the sheet; \"{found}\" is, in another case: MPD looks the name up exactly and purges the tracks.", name = f.name, found = n))),
+                ("suffix", Some(n)) => Some(("C02", msg!("core.cuecheck.suffix", "FILE \"{name}\" is not beside the sheet; \"{found}\" is: MPD purges the tracks.", name = f.name, found = n))),
+                ("not_decoded", _) => Some(("C03", msg!("core.cuecheck.not_decoded", "FILE \"{name}\" is there but no decoder of this MPD claims its suffix: MPD purges the tracks.", name = f.name))),
+                ("foreign", Some(what)) => Some(("C04", msg!("core.cuecheck.foreign", "FILE \"{name}\" is {what}: nothing beside the sheet on this player.", name = f.name, what = what))),
                 _ => None,
             };
             if let Some((code, text)) = finding {
@@ -378,10 +389,11 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                     sheet.findings.push(Finding {
                         code: "C11",
                         line: 0,
-                        text: format!(
-                            "\"{}\" is also named by {}: MPD indexes its tracks twice.",
-                            f.name,
-                            names.join(", ")
+                        text: msg!(
+                            "core.cuecheck.named_twice",
+                            "\"{name}\" is also named by {others}: MPD indexes its tracks twice.",
+                            name = f.name,
+                            others = names
                         ),
                     });
                 }
@@ -403,13 +415,12 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                     sheet.findings.push(Finding {
                         code: "C14",
                         line: 0,
-                        text: format!(
-                            "The last INDEX in \"{}\" is at {}:{:02}, past the file's length of {}:{:02}: MPD makes a track it cannot play.",
-                            f.name,
-                            start / 60_000,
-                            (start / 1000) % 60,
-                            length / 60_000,
-                            (length / 1000) % 60
+                        text: msg!(
+                            "core.cuecheck.index_past_length",
+                            "The last INDEX in \"{name}\" is at {at}, past the file's length of {length}: MPD makes a track it cannot play.",
+                            name = f.name,
+                            at = format!("{}:{:02}", start / 60_000, (start / 1000) % 60),
+                            length = format!("{}:{:02}", length / 60_000, (length / 1000) % 60)
                         ),
                     });
                 }
@@ -429,7 +440,7 @@ fn directory(visit: &Visit, decoders: &Decoders, report: &mut Report) {
                 sheet.findings.push(Finding {
                     code: "C12",
                     line: 0,
-                    text: format!("The sheet names one file and {unreferenced} audio files beside it belong to no sheet: the album may be here twice, as an image and as tracks."),
+                    text: msg!("core.cuecheck.split_tracks", "The sheet names one file and {n} audio files beside it belong to no sheet: the album may be here twice, as an image and as tracks.", n = unreferenced),
                 });
             }
         }
@@ -538,7 +549,7 @@ mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: crate::text::Msg::raw(""),
+            detail: Msg::raw(""),
         }
     }
 

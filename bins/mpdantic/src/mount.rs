@@ -14,6 +14,8 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::text::{self, Msg};
+
 /// A share as Volumio knows it (`networkfs`, `NasMounts`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Share {
@@ -28,10 +30,10 @@ pub struct Share {
 }
 
 /// The shares from Volumio's configuration file.
-pub fn shares(config: &Path) -> Result<Vec<Share>, String> {
-    let text = fs::read_to_string(config).map_err(|e| format!("{}: {e}", config.display()))?;
+pub fn shares(config: &Path) -> Result<Vec<Share>, Msg> {
+    let text = fs::read_to_string(config).map_err(|e| text::at(config.display(), e))?;
     let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", config.display()))?;
+        serde_json::from_str(&text).map_err(|e| text::at(config.display(), e))?;
     let Some(mounts) = value.get("NasMounts").and_then(|m| m.as_object()) else {
         return Ok(Vec::new());
     };
@@ -68,17 +70,20 @@ pub enum Where<'a> {
 
 /// The place of a folder: `NAS/<share name>/<folder>` is on that share, anything
 /// else is local.
-pub fn place<'a>(shares: &'a [Share], folder: &str) -> Result<Where<'a>, String> {
+pub fn place<'a>(shares: &'a [Share], folder: &str) -> Result<Where<'a>, Msg> {
     let mut parts = folder.splitn(3, '/');
     let root = parts.next().unwrap_or("");
     if root != "NAS" {
         return Ok(Where::Local);
     }
     let name = parts.next().unwrap_or("");
-    let share = shares
-        .iter()
-        .find(|s| s.name == name)
-        .ok_or_else(|| format!("no share named {name} in Volumio's configuration"))?;
+    let share = shares.iter().find(|s| s.name == name).ok_or_else(|| {
+        msg!(
+            "core.mount.no_share",
+            "no share named {name} in Volumio's configuration",
+            name = name
+        )
+    })?;
     Ok(Where::Nas {
         share,
         folder: parts.next().unwrap_or("").to_string(),
@@ -139,21 +144,22 @@ impl Mounter {
 
     /// The folder mounted read-write under the run folder; the mount proved writable
     /// by a hidden file created and removed, else taken down again with the reason.
-    pub fn mount(&self, share: &Share, folder: &str) -> Result<Mount, String> {
+    pub fn mount(&self, share: &Share, folder: &str) -> Result<Mount, Msg> {
         if !matches!(share.fstype.as_str(), "cifs" | "nfs") {
-            return Err(format!(
-                "a share of type {} is not mounted here",
-                share.fstype
+            return Err(msg!(
+                "core.mount.type_not_mounted",
+                "a share of type {fstype} is not mounted here",
+                fstype = share.fstype
             ));
         }
         let mounts = self.run.join("mounts").join(&share.key);
-        fs::create_dir_all(&mounts).map_err(|e| format!("{}: {e}", mounts.display()))?;
+        fs::create_dir_all(&mounts).map_err(|e| text::at(mounts.display(), e))?;
         let target = mounts.join(if folder.is_empty() {
             "root".to_string()
         } else {
             folder.replace('/', "~")
         });
-        fs::create_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        fs::create_dir_all(&target).map_err(|e| text::at(target.display(), e))?;
         let (source, fstype, options) = self.plan(share, folder);
         let result = if fstype == "cifs" {
             let credentials = match self.credentials_file(share) {
@@ -189,7 +195,12 @@ impl Mounter {
         };
         if let Err(e) = result {
             let _ = fs::remove_dir(&target);
-            return Err(format!("mount {source}: {e}"));
+            return Err(msg!(
+                "core.mount.failed",
+                "mount {source}: {error}",
+                source = source,
+                error = e
+            ));
         }
         let mut mount = Mount {
             target: target.clone(),
@@ -198,9 +209,11 @@ impl Mounter {
         };
         if let Err(e) = write_test(&target) {
             self.unmount(&mut mount);
-            return Err(format!(
-                "{}: the account cannot write there: {e}",
-                share.name
+            return Err(msg!(
+                "core.mount.cannot_write",
+                "{share}: the account cannot write there: {error}",
+                share = share.name,
+                error = e
             ));
         }
         Ok(mount)
@@ -247,7 +260,7 @@ impl Mounter {
 
     /// The credentials for the mount call, in a file of the run folder only its
     /// owner reads; root reads anything. Removed by the caller right after.
-    fn credentials_file(&self, share: &Share) -> Result<PathBuf, String> {
+    fn credentials_file(&self, share: &Share) -> Result<PathBuf, Msg> {
         let path = self
             .run
             .join(format!("cred.{}.{}", share.key, std::process::id()));
@@ -257,13 +270,13 @@ impl Mounter {
             .truncate(true)
             .mode(0o600)
             .open(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+            .map_err(|e| text::at(path.display(), e))?;
         write!(
             file,
             "username={}\npassword={}\n",
             share.user, share.password
         )
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|e| text::at(path.display(), e))?;
         Ok(path)
     }
 

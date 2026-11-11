@@ -8,6 +8,8 @@
 
 use serde::Serialize;
 
+use crate::text::Msg;
+
 /// What MPD takes as a `FILE` type; anything else drops the file's tracks.
 pub const FILE_TYPES: &[&str] = &["WAVE", "FLAC", "MP3", "AIFF"];
 
@@ -15,7 +17,7 @@ pub const FILE_TYPES: &[&str] = &["WAVE", "FLAC", "MP3", "AIFF"];
 pub struct Finding {
     pub code: &'static str,
     pub line: usize,
-    pub text: String,
+    pub text: Msg,
 }
 
 /// A `FILE` line as written.
@@ -116,7 +118,10 @@ fn decode(bytes: &[u8]) -> (String, String, Vec<Finding>) {
         findings.push(Finding {
             code: "C07",
             line: 1,
-            text: "The sheet is UTF-16; MPD reads it as bytes and makes nothing of it.".to_string(),
+            text: msg!(
+                "core.cue.utf16",
+                "The sheet is UTF-16; MPD reads it as bytes and makes nothing of it."
+            ),
         });
         let text: String = bytes.iter().map(|&b| b as char).collect();
         return ("utf-16".to_string(), text, findings);
@@ -131,7 +136,7 @@ fn decode(bytes: &[u8]) -> (String, String, Vec<Finding>) {
             findings.push(Finding {
                 code: "C07",
                 line: 1,
-                text: "The sheet is not UTF-8 (read here as Latin-1); MPD replaces what does not decode, so the names show mangled.".to_string(),
+                text: msg!("core.cue.not_utf8", "The sheet is not UTF-8 (read here as Latin-1); MPD replaces what does not decode, so the names show mangled."),
             });
             ("latin-1", body.iter().map(|&b| b as char).collect())
         }
@@ -169,10 +174,11 @@ pub fn parse(bytes: &[u8]) -> Sheet {
             findings.push(Finding {
                 code: "C06",
                 line: 1,
-                text: format!(
-                    "A byte-order mark starts the sheet, so MPD does not see the first line ({first} ...){}",
-                    if first.eq_ignore_ascii_case("FILE") { "; that line is the FILE, so every track is lost" } else { "" }
-                ),
+                text: if first.eq_ignore_ascii_case("FILE") {
+                    msg!("core.cue.bom_file", "A byte-order mark starts the sheet, so MPD does not see the first line ({first} ...); that line is the FILE, so every track is lost", first = first)
+                } else {
+                    msg!("core.cue.bom", "A byte-order mark starts the sheet, so MPD does not see the first line ({first} ...)", first = first)
+                },
             });
             continue;
         }
@@ -213,7 +219,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                     findings.push(Finding {
                         code: "C01",
                         line: number,
-                        text: format!("FILE \"{name}\" has no type, so MPD ignores the line and the tracks after it belong to the file before, or to none."),
+                        text: msg!("core.cue.file_no_type", "FILE \"{name}\" has no type, so MPD ignores the line and the tracks after it belong to the file before, or to none.", name = name),
                     });
                     continue;
                 };
@@ -221,7 +227,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                     findings.push(Finding {
                         code: "C05",
                         line: number,
-                        text: format!("The FILE name is not quoted and has a space in it: MPD takes \"{name}\" as the name and \"{kind}\" as the type."),
+                        text: msg!("core.cue.file_not_quoted", "The FILE name is not quoted and has a space in it: MPD takes \"{name}\" as the name and \"{kind}\" as the type.", name = name, kind = kind),
                     });
                 }
                 let accepted = FILE_TYPES.contains(&kind);
@@ -229,7 +235,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                     findings.push(Finding {
                         code: "C01",
                         line: number,
-                        text: format!("FILE type {kind} is not WAVE, FLAC, MP3 or AIFF: MPD drops every track under this FILE."),
+                        text: msg!("core.cue.file_type", "FILE type {kind} is not WAVE, FLAC, MP3 or AIFF: MPD drops every track under this FILE.", kind = kind),
                     });
                 }
                 sheet.files.push(FileRef {
@@ -265,7 +271,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                     findings.push(Finding {
                         code: "C09",
                         line: number,
-                        text: format!("TRACK {nr} comes before any FILE MPD takes: it has no file and is purged."),
+                        text: msg!("core.cue.track_before_file", "TRACK {nr} comes before any FILE MPD takes: it has no file and is purged.", nr = nr),
                     });
                 }
                 current = Some(Track {
@@ -293,7 +299,12 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                     findings.push(Finding {
                         code: "C08",
                         line: number,
-                        text: format!("INDEX {nr} {position} is not mm:ss:ff; MPD ignores it."),
+                        text: msg!(
+                            "core.cue.index_not_time",
+                            "INDEX {nr} {position} is not mm:ss:ff; MPD ignores it.",
+                            nr = nr,
+                            position = position
+                        ),
                     });
                     continue;
                 };
@@ -306,7 +317,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                         findings.push(Finding {
                             code: "C08",
                             line: number,
-                            text: format!("INDEX {nr} {position}: {frames} frames in a second of 75; MPD takes it as written."),
+                            text: msg!("core.cue.index_frames", "INDEX {nr} {position}: {frames} frames in a second of 75; MPD takes it as written.", nr = nr, position = position, frames = frames),
                         });
                     }
                 }
@@ -318,7 +329,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
                             findings.push(Finding {
                                 code: "C08",
                                 line: number,
-                                text: format!("INDEX {nr} {position} is not after the previous track's start; MPD gives that track no end here."),
+                                text: msg!("core.cue.index_not_after", "INDEX {nr} {position} is not after the previous track's start; MPD gives that track no end here.", nr = nr, position = position),
                             });
                         }
                     }
@@ -339,9 +350,10 @@ pub fn parse(bytes: &[u8]) -> Sheet {
             findings.push(Finding {
                 code: "C08",
                 line: t.line,
-                text: format!(
-                    "TRACK {} has no INDEX MPD can read: it starts at zero.",
-                    t.number
+                text: msg!(
+                    "core.cue.track_no_index",
+                    "TRACK {nr} has no INDEX MPD can read: it starts at zero.",
+                    nr = t.number
                 ),
             });
         }
@@ -350,7 +362,10 @@ pub fn parse(bytes: &[u8]) -> Sheet {
         findings.push(Finding {
             code: "C09",
             line: 0,
-            text: "No AUDIO track in the sheet: MPD makes nothing of it.".to_string(),
+            text: msg!(
+                "core.cue.no_track",
+                "No AUDIO track in the sheet: MPD makes nothing of it."
+            ),
         });
     }
     let accepted = sheet.files.iter().filter(|f| f.accepted).count();
@@ -358,7 +373,7 @@ pub fn parse(bytes: &[u8]) -> Sheet {
         findings.push(Finding {
             code: "C10",
             line: 0,
-            text: format!("{accepted} FILE entries: fine for MPD; Volumio's own browse shows only the first file's tracks."),
+            text: msg!("core.cue.several_files", "{n} FILE entries: fine for MPD; Volumio's own browse shows only the first file's tracks.", n = accepted),
         });
     }
     // By line; what concerns the whole sheet (no line) last.
@@ -375,23 +390,26 @@ fn commit(sheet: &mut Sheet, current: &mut Option<Track>) {
 }
 
 /// A `FILE` name that cannot be beside the sheet on a player: absolute, a URL, or a
-/// Windows path.
-pub fn foreign_path(name: &str) -> Option<&'static str> {
+/// Windows path; what kind it is, for a sentence.
+pub fn foreign_path(name: &str) -> Option<Msg> {
     if name.starts_with('/') {
-        return Some("an absolute path");
+        return Some(msg!("core.cue.foreign_absolute", "an absolute path"));
     }
     if name.contains("://") {
-        return Some("a URL");
+        return Some(msg!("core.cue.foreign_url", "a URL"));
     }
     if name.contains('\\')
         || (name.len() > 1
             && name.as_bytes()[1] == b':'
             && name.as_bytes()[0].is_ascii_alphabetic())
     {
-        return Some("a Windows path");
+        return Some(msg!("core.cue.foreign_windows", "a Windows path"));
     }
     if name.split('/').any(|c| c == "..") {
-        return Some("a path above the sheet's folder");
+        return Some(msg!(
+            "core.cue.foreign_above",
+            "a path above the sheet's folder"
+        ));
     }
     None
 }
@@ -520,17 +538,23 @@ mod tests {
         assert_eq!(foreign_path("album.flac"), None);
         assert_eq!(foreign_path("disc1/album.flac"), None);
         assert_eq!(
-            foreign_path("/mnt/NAS/album.flac"),
+            foreign_path("/mnt/NAS/album.flac").as_deref(),
             Some("an absolute path")
         );
-        assert_eq!(foreign_path("http://x/album.flac"), Some("a URL"));
         assert_eq!(
-            foreign_path("D:\\Music\\album.flac"),
+            foreign_path("http://x/album.flac").as_deref(),
+            Some("a URL")
+        );
+        assert_eq!(
+            foreign_path("D:\\Music\\album.flac").as_deref(),
             Some("a Windows path")
         );
-        assert_eq!(foreign_path("..\\album.flac"), Some("a Windows path"));
         assert_eq!(
-            foreign_path("../album.flac"),
+            foreign_path("..\\album.flac").as_deref(),
+            Some("a Windows path")
+        );
+        assert_eq!(
+            foreign_path("../album.flac").as_deref(),
             Some("a path above the sheet's folder")
         );
     }

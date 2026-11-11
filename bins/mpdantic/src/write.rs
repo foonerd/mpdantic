@@ -24,8 +24,10 @@ use crate::plfix::{self, EntryChange};
 use crate::plimport::{self, ImportEntry};
 use crate::tagfix::{self, FilePlan, KeyChange, Values};
 use crate::tags;
-use crate::undo::{Batch, Entry, Journal};
+use crate::text::{self, Msg, ToArg};
+use crate::undo::{self, Batch, Entry, Journal};
 use crate::vlists;
+use crate::walk;
 
 /// What the page asks for.
 pub struct Request {
@@ -67,8 +69,12 @@ pub struct Preview {
     pub after: String,
     /// Whether the write would change anything.
     pub changed: bool,
-    /// `local`, or the share and the folder that would be mounted.
+    /// `local`, or `nas` with the share and the folder on it that would be mounted.
     pub place: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_folder: Option<String>,
     /// The file as read: its size and modification time, 0 when it is not there.
     pub size: u64,
     pub mtime: u64,
@@ -79,8 +85,9 @@ pub struct Preview {
     pub removed: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub already: Vec<String>,
+    /// A line not taken, and why.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub refused: Vec<(String, String)>,
+    pub refused: Vec<(String, Msg)>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<Repair>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +97,7 @@ pub struct Preview {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub remaining: Vec<Finding>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub notes: Vec<String>,
+    pub notes: Vec<Msg>,
     pub lines_changed: usize,
     /// The folder's files and their changes (`tags`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -136,7 +143,7 @@ pub struct Applied {
     pub count: usize,
     /// MPD's update job for the folder, or why there is none.
     pub updated: Option<u64>,
-    pub update_error: Option<String>,
+    pub update_error: Option<Msg>,
 }
 
 fn stat(path: &Path) -> (bool, u64, u64) {
@@ -169,15 +176,41 @@ fn folder_dir(music: &Path, folder: &str) -> PathBuf {
     }
 }
 
-fn place_text(shares: &[Share], folder: &str) -> Result<String, String> {
+/// Where a batch's folder is written, as the preview says it: local, or on a share
+/// at a folder.
+struct Placed {
+    place: String,
+    share: Option<String>,
+    share_folder: Option<String>,
+}
+
+impl Placed {
+    fn local() -> Placed {
+        Placed {
+            place: "local".to_string(),
+            share: None,
+            share_folder: None,
+        }
+    }
+}
+
+fn placed(shares: &[Share], folder: &str) -> Result<Placed, Msg> {
     Ok(match mount::place(shares, folder)? {
-        Where::Local => "local".to_string(),
-        Where::Nas { share, folder } => format!(
-            "the share {}, folder {}",
-            share.name,
-            if folder.is_empty() { "/" } else { &folder }
-        ),
+        Where::Local => Placed::local(),
+        Where::Nas { share, folder } => Placed {
+            place: "nas".to_string(),
+            share: Some(share.name.clone()),
+            share_folder: Some(if folder.is_empty() {
+                "/".to_string()
+            } else {
+                folder
+            }),
+        },
     })
+}
+
+fn library_root() -> Msg {
+    msg!("core.write.library_root", "the library root")
 }
 
 /// Bytes as the page shows them: UTF-8 as it is, anything else read as Latin-1.
@@ -188,7 +221,7 @@ fn display(bytes: &[u8]) -> String {
     }
 }
 
-fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: String) -> Preview {
+fn empty(id: u64, kind: &str, path: String, file: String, op: &str, placed: Placed) -> Preview {
     Preview {
         id,
         kind: kind.to_string(),
@@ -199,7 +232,9 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         before: String::new(),
         after: String::new(),
         changed: false,
-        place,
+        place: placed.place,
+        share: placed.share,
+        share_folder: placed.share_folder,
         size: 0,
         mtime: 0,
         added: Vec::new(),
@@ -238,7 +273,7 @@ pub fn prepare(
     volumio_playlists: &Path,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
+) -> Result<Preview, Msg> {
     match req.kind.as_str() {
         "mpdignore" => prepare_lines(music, shares, id, req),
         "cue" => prepare_cue(music, shares, decoders, id, req),
@@ -247,8 +282,27 @@ pub fn prepare(
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         "volumio_list" => prepare_volumio_list(music, decoders, volumio_playlists, id, req),
-        _ => Err("the kind is not one the core writes".to_string()),
+        _ => Err(msg!(
+            "core.write.kind_unknown",
+            "the kind is not one the core writes"
+        )),
     }
+}
+
+fn not_a_playlist() -> Msg {
+    msg!("core.write.not_playlist", "not a playlist MPDantic reads")
+}
+
+fn no_such_playlist() -> Msg {
+    msg!("core.write.no_such_playlist", "no such playlist")
+}
+
+fn playlist_too_large(size: u64) -> Msg {
+    msg!(
+        "core.write.playlist_too_large",
+        "the playlist is {size} bytes; not read",
+        size = size
+    )
 }
 
 /// A library playlist imported as one of Volumio's own: the JSON file Volumio reads,
@@ -260,27 +314,27 @@ fn prepare_volumio(
     volumio_playlists: &Path,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     let suffix = classify::suffix(&path).unwrap_or_default();
     if !playlist::SUFFIXES.contains(&suffix.as_str()) {
-        return Err("not a playlist MPDantic reads".to_string());
+        return Err(not_a_playlist());
     }
     let full = music.join(&path);
     if !full.is_file() {
-        return Err("no such playlist".to_string());
+        return Err(no_such_playlist());
     }
     let (_, size, _) = stat(&full);
     if size > plcheck::MAX_PLAYLIST {
-        return Err(format!("the playlist is {size} bytes; not read"));
+        return Err(playlist_too_large(size));
     }
-    let bytes = fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+    let bytes = fs::read(&full).map_err(|e| text::at(full.display(), e))?;
     let imported = plimport::plan(music, &path, &bytes, decoders, req.name.as_deref())?;
     let folder = volumio_playlists.display().to_string();
     let target = volumio_playlists.join(&imported.name);
     let (exists, tsize, tmtime) = stat(&target);
     let current = if exists {
-        fs::read(&target).map_err(|e| format!("{}: {e}", target.display()))?
+        fs::read(&target).map_err(|e| text::at(target.display(), e))?
     } else {
         Vec::new()
     };
@@ -292,7 +346,7 @@ fn prepare_volumio(
         folder,
         target.display().to_string(),
         "write_text",
-        "local".to_string(),
+        Placed::local(),
     );
     p.exists = exists;
     p.before = display(&current);
@@ -305,30 +359,28 @@ fn prepare_volumio(
     p.from = Some(path);
     p.left_out = imported.left_out;
     if imported.songs + imported.streams == 0 {
-        p.notes
-            .push("no entry MPD can load: nothing to import".to_string());
+        p.notes.push(msg!(
+            "core.write.nothing_to_import",
+            "no entry MPD can load: nothing to import"
+        ));
     }
     Ok(p)
 }
 
 /// `.mpdignore` lines into the folder in hand, against the file as it is.
-fn prepare_lines(
-    music: &Path,
-    shares: &[Share],
-    id: u64,
-    req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+fn prepare_lines(music: &Path, shares: &[Share], id: u64, req: &Request) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     let dir = folder_dir(music, &path);
     if !dir.is_dir() {
-        return Err("no such folder".to_string());
+        return Err(walk::no_such_folder());
     }
-    let place = place_text(shares, &path)?;
+    let place = placed(shares, &path)?;
     let file_path = dir.join(".mpdignore");
     let (exists, size, mtime) = stat(&file_path);
     let before = if exists {
-        let bytes = fs::read(&file_path).map_err(|e| format!("{}: {e}", file_path.display()))?;
-        String::from_utf8(bytes).map_err(|_| "the file is not UTF-8; not touched".to_string())?
+        let bytes = fs::read(&file_path).map_err(|e| text::at(file_path.display(), e))?;
+        String::from_utf8(bytes)
+            .map_err(|_| msg!("core.write.not_utf8", "the file is not UTF-8; not touched"))?
     } else {
         String::new()
     };
@@ -358,18 +410,26 @@ fn prepare_lines(
         if let Some(rest) = line.strip_prefix('#') {
             refused.push((
                 line.to_string(),
-                format!(
-                    "a line starting with # is a comment to MPD; for a name starting with a hash write [#]{rest}"
+                msg!(
+                    "core.write.comment_line",
+                    "a line starting with # is a comment to MPD; for a name starting with a hash write [#]{rest}",
+                    rest = rest
                 ),
             ));
             continue;
         }
         if line.contains('\n') || line.contains('\r') {
-            refused.push((line.to_string(), "one line at a time".to_string()));
+            refused.push((
+                line.to_string(),
+                msg!("core.write.one_line", "one line at a time"),
+            ));
             continue;
         }
         if Pattern::new(line).is_none() {
-            refused.push((line.to_string(), "not a pattern".to_string()));
+            refused.push((
+                line.to_string(),
+                msg!("core.write.not_pattern", "not a pattern"),
+            ));
             continue;
         }
         added.push(line.to_string());
@@ -421,26 +481,30 @@ fn prepare_cue(
     decoders: &Decoders,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     if classify::suffix(&path).as_deref() != Some(classify::CUE_SUFFIX) {
-        return Err("not a CUE sheet".to_string());
+        return Err(msg!("core.write.not_cue", "not a CUE sheet"));
     }
     let full = music.join(&path);
     if !full.is_file() {
-        return Err("no such sheet".to_string());
+        return Err(msg!("core.write.no_such_sheet", "no such sheet"));
     }
     let (folder, name) = match path.rsplit_once('/') {
         Some((f, n)) => (f.to_string(), n.to_string()),
         None => (String::new(), path.clone()),
     };
     let dir = folder_dir(music, &folder);
-    let place = place_text(shares, &folder)?;
+    let place = placed(shares, &folder)?;
     let (exists, size, mtime) = stat(&full);
     if size > MAX_SHEET {
-        return Err(format!("the sheet is {size} bytes; not read"));
+        return Err(msg!(
+            "core.write.sheet_too_large",
+            "the sheet is {size} bytes; not read",
+            size = size
+        ));
     }
-    let bytes = fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+    let bytes = fs::read(&full).map_err(|e| text::at(full.display(), e))?;
     let beside = Beside::read(&dir);
     let choice = Choice {
         repairs: req.repairs.as_deref(),
@@ -471,13 +535,13 @@ fn prepare_tags(
     decoders: &Decoders,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     let dir = folder_dir(music, &path);
     if !dir.is_dir() {
-        return Err("no such folder".to_string());
+        return Err(walk::no_such_folder());
     }
-    let place = place_text(shares, &path)?;
+    let place = placed(shares, &path)?;
     let choice = tagfix::Choice {
         repairs: req.repairs.as_deref(),
         album: req
@@ -514,17 +578,17 @@ fn prepare_tagedit(
     decoders: &Decoders,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     let dir = folder_dir(music, &path);
     if !dir.is_dir() {
-        return Err("no such folder".to_string());
+        return Err(walk::no_such_folder());
     }
     let edits = req.edits.as_deref().unwrap_or(&[]);
     if edits.is_empty() {
-        return Err("nothing edited".to_string());
+        return Err(msg!("core.write.nothing_edited", "nothing edited"));
     }
-    let place = place_text(shares, &path)?;
+    let place = placed(shares, &path)?;
     let planned = tagfix::plan_edits(&dir, &path, decoders, edits)?;
     let mut p = empty(id, "tags", path.clone(), path, "tags", place);
     p.exists = true;
@@ -543,18 +607,23 @@ fn prepare_volumio_list(
     volumio_playlists: &Path,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
+) -> Result<Preview, Msg> {
     let places = vlists::Places::beside(volumio_playlists);
     let list_id = req.name.as_deref().unwrap_or("");
-    let list = vlists::by_id(&places, list_id).ok_or_else(|| "no such list".to_string())?;
+    let no_such_list = || msg!("core.write.no_such_list", "no such list");
+    let list = vlists::by_id(&places, list_id).ok_or_else(no_such_list)?;
     let (exists, size, mtime) = stat(&list.path);
     if !exists {
-        return Err("no such list".to_string());
+        return Err(no_such_list());
     }
     if size > vlists::MAX_LIST {
-        return Err(format!("the list is {size} bytes; not read"));
+        return Err(msg!(
+            "core.write.list_too_large",
+            "the list is {size} bytes; not read",
+            size = size
+        ));
     }
-    let bytes = fs::read(&list.path).map_err(|e| format!("{}: {e}", list.path.display()))?;
+    let bytes = fs::read(&list.path).map_err(|e| text::at(list.path.display(), e))?;
     let fixed = vlists::plan(music, decoders, &list, &bytes, req.repairs.as_deref())?;
     let folder = list
         .path
@@ -567,7 +636,7 @@ fn prepare_volumio_list(
         folder,
         list.path.display().to_string(),
         "write_text",
-        "local".to_string(),
+        Placed::local(),
     );
     p.exists = true;
     p.before = display(&bytes);
@@ -601,32 +670,37 @@ fn prepare_playlist(
     decoders: &Decoders,
     id: u64,
     req: &Request,
-) -> Result<Preview, String> {
-    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+) -> Result<Preview, Msg> {
+    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
     let suffix = classify::suffix(&path).unwrap_or_default();
     if !playlist::SUFFIXES.contains(&suffix.as_str()) {
-        return Err("not a playlist MPDantic reads".to_string());
+        return Err(not_a_playlist());
     }
     let full = music.join(&path);
     if !full.is_file() {
-        return Err("no such playlist".to_string());
+        return Err(no_such_playlist());
     }
     let folder = path
         .rsplit_once('/')
         .map(|(f, _)| f.to_string())
         .unwrap_or_default();
-    let place = place_text(shares, &folder)?;
+    let place = placed(shares, &folder)?;
     let (_, size, _) = stat(&full);
     if size > plcheck::MAX_PLAYLIST {
-        return Err(format!("the playlist is {size} bytes; not read"));
+        return Err(playlist_too_large(size));
     }
-    let bytes = fs::read(&full).map_err(|e| format!("{}: {e}", full.display()))?;
+    let bytes = fs::read(&full).map_err(|e| text::at(full.display(), e))?;
     let base = match &req.base {
-        Some(b) => Library::check(b).ok_or_else(|| "the base is not a library path".to_string())?,
+        Some(b) => Library::check(b).ok_or_else(|| {
+            msg!(
+                "core.write.base_not_library",
+                "the base is not a library path"
+            )
+        })?,
         None => folder.clone(),
     };
     if !folder_dir(music, &base).is_dir() {
-        return Err("no such base folder".to_string());
+        return Err(msg!("core.write.no_such_base", "no such base folder"));
     }
     let choice = plfix::Choice {
         repairs: req.repairs.as_deref(),
@@ -637,7 +711,7 @@ fn prepare_playlist(
     let target_full = music.join(&fixed.target);
     let (exists, tsize, tmtime) = stat(&target_full);
     let current = if exists {
-        fs::read(&target_full).map_err(|e| format!("{}: {e}", target_full.display()))?
+        fs::read(&target_full).map_err(|e| text::at(target_full.display(), e))?
     } else {
         Vec::new()
     };
@@ -693,14 +767,23 @@ fn target(
     mounter: &Mounter,
     kind: &str,
     path: &str,
-) -> Result<(PathBuf, Option<Mount>), String> {
+) -> Result<(PathBuf, Option<Mount>), Msg> {
     if !outside(kind) {
         return writable(music, shares, mounter, path);
     }
     let dir = PathBuf::from(path);
-    fs::create_dir_all(&dir).map_err(|e| format!("{path}: {e}"))?;
-    mount::write_test(&dir).map_err(|e| format!("{path}: cannot write there: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| text::at(path, e))?;
+    mount::write_test(&dir).map_err(|e| cannot_write(Msg::raw(path), e))?;
     Ok((dir, None))
+}
+
+fn cannot_write(place: Msg, error: String) -> Msg {
+    msg!(
+        "core.write.cannot_write",
+        "{path}: cannot write there: {error}",
+        path = place,
+        error = error
+    )
 }
 
 /// Where the folder is written: the folder itself for a local root, the mount's
@@ -710,18 +793,18 @@ fn writable(
     shares: &[Share],
     mounter: &Mounter,
     path: &str,
-) -> Result<(PathBuf, Option<Mount>), String> {
+) -> Result<(PathBuf, Option<Mount>), Msg> {
     match mount::place(shares, path)? {
         Where::Local => {
             let dir = folder_dir(music, path);
             mount::write_test(&dir).map_err(|e| {
-                format!(
-                    "{}: cannot write there: {e}",
+                cannot_write(
                     if path.is_empty() {
-                        "the library root"
+                        library_root()
                     } else {
-                        path
-                    }
+                        Msg::raw(path)
+                    },
+                    e,
                 )
             })?;
             Ok((dir, None))
@@ -738,7 +821,7 @@ fn writable(
 /// writes, so music copied over the network is nobody's), and the core writes them
 /// through the capabilities its unit grants, leaving each file that user's. A new file
 /// takes its folder's owner and the folder's mode without the search bits.
-fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), Msg> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let part = dir.join(format!("{name}.part"));
     let file = dir.join(name);
@@ -747,7 +830,7 @@ fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
         Ok(m) => Some((m.mode() & 0o666, m.uid(), m.gid())),
         Err(_) => None,
     };
-    fs::write(&part, bytes).map_err(|e| format!("{}: {e}", part.display()))?;
+    fs::write(&part, bytes).map_err(|e| text::at(part.display(), e))?;
     if let Some((mode, uid, gid)) = owner {
         let kept = fs::set_permissions(&part, fs::Permissions::from_mode(mode))
             .and_then(|_| std::os::unix::fs::chown(&part, Some(uid), Some(gid)));
@@ -762,7 +845,7 @@ fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     }
     fs::rename(&part, &file).map_err(|e| {
         let _ = fs::remove_file(&part);
-        format!("{}: {e}", file.display())
+        text::at(file.display(), e)
     })
 }
 
@@ -770,70 +853,80 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn files_word(n: usize) -> String {
-    if n == 1 {
-        "1 file".to_string()
-    } else {
-        format!("{n} files")
-    }
-}
-
-/// What the batch did, in a line.
-fn note_for(preview: &Preview, written: usize) -> String {
+/// What the batch did, in a line; the repairs by their ids.
+fn note_for(preview: &Preview, written: usize) -> Msg {
     let on = || {
         preview
             .repairs
             .iter()
             .filter(|r| r.on)
-            .map(|r| r.id)
-            .collect::<Vec<_>>()
-            .join(", ")
+            .map(|r| r.id.to_string())
+            .collect::<Vec<String>>()
     };
     match preview.kind.as_str() {
-        "cue" if preview.op == "remove" => format!("sheet {} removed", preview.file),
-        "cue" => format!("sheet {} repaired: {}", preview.file, on()),
-        "playlist" => format!("playlist {} written: {}", preview.file, on()),
-        "volumio_playlist" => format!(
-            "Volumio playlist \"{}\" written from {}",
-            preview.name.as_deref().unwrap_or(""),
-            preview.from.as_deref().unwrap_or("")
+        "cue" if preview.op == "remove" => {
+            msg!(
+                "core.write.note_sheet_removed",
+                "sheet {file} removed",
+                file = preview.file
+            )
+        }
+        "cue" => msg!(
+            "core.write.note_sheet_repaired",
+            "sheet {file} repaired: {repairs}",
+            file = preview.file,
+            repairs = on()
         ),
-        "volumio_list" => format!(
-            "Volumio's {} {} repaired: {}",
-            preview.list_kind.as_deref().unwrap_or("list"),
-            preview.name.as_deref().unwrap_or(""),
-            on()
+        "playlist" => msg!(
+            "core.write.note_playlist",
+            "playlist {file} written: {repairs}",
+            file = preview.file,
+            repairs = on()
         ),
-        "tags" => format!(
-            "tags of {} in {}: {}",
-            files_word(written),
-            if preview.path.is_empty() {
-                "the library root"
+        "volumio_playlist" => msg!(
+            "core.write.note_volumio_playlist",
+            "Volumio playlist \"{name}\" written from {from}",
+            name = preview.name.as_deref().unwrap_or(""),
+            from = preview.from.as_deref().unwrap_or("")
+        ),
+        "volumio_list" => msg!(
+            "core.write.note_volumio_list",
+            "Volumio's {kind} {name} repaired: {repairs}",
+            kind = preview.list_kind.as_deref().unwrap_or("list"),
+            name = preview.name.as_deref().unwrap_or(""),
+            repairs = on()
+        ),
+        "tags" => msg!(
+            "core.write.note_tags",
+            "tags of {n} {n|file|files} in {folder}: {what}",
+            n = written,
+            folder = if preview.path.is_empty() {
+                library_root()
             } else {
-                &preview.path
+                Msg::raw(preview.path.clone())
             },
-            if preview.edited {
-                "edited file by file".to_string()
+            what = if preview.edited {
+                msg!("core.write.note_edited", "edited file by file").to_arg()
             } else {
-                on()
+                on().to_arg()
             }
         ),
-        _ if preview.op == "remove" => format!("{} removed", preview.file),
-        _ => format!(
-            "{} {} added, {} removed in {}",
-            preview.added.len(),
-            if preview.added.len() == 1 {
-                "line"
-            } else {
-                "lines"
-            },
-            preview.removed.len(),
-            preview.file
+        _ if preview.op == "remove" => msg!(
+            "core.write.note_removed",
+            "{file} removed",
+            file = preview.file
+        ),
+        _ => msg!(
+            "core.write.note_lines",
+            "{added} {added|line|lines} added, {removed} removed in {file}",
+            added = preview.added.len(),
+            removed = preview.removed.len(),
+            file = preview.file
         ),
     }
 }
 
-fn update_after(mpd_address: &mpd::Address, folder: &str) -> (Option<u64>, Option<String>) {
+fn update_after(mpd_address: &mpd::Address, folder: &str) -> (Option<u64>, Option<Msg>) {
     match mpd::update(mpd_address, folder) {
         Ok(n) => (Some(n), None),
         Err(e) => (None, Some(e)),
@@ -850,9 +943,9 @@ pub fn apply(
     journal: &Journal,
     mpd_address: &mpd::Address,
     preview: &Preview,
-) -> Result<Applied, String> {
+) -> Result<Applied, Msg> {
     if !preview.changed {
-        return Err("nothing to write".to_string());
+        return Err(msg!("core.write.nothing_to_write", "nothing to write"));
     }
     if preview.kind == "tags" {
         return apply_tags(music, shares, mounter, journal, mpd_address, preview);
@@ -860,17 +953,20 @@ pub fn apply(
     let ro = file_on_disk(music, &preview.kind, &preview.file);
     let (exists, size, mtime) = stat(&ro);
     if exists != preview.exists || size != preview.size || mtime != preview.mtime {
-        return Err("the file changed since the preview; preview it again".to_string());
+        return Err(msg!(
+            "core.write.changed_since_preview",
+            "the file changed since the preview; preview it again"
+        ));
     }
     let before_bytes = if exists {
-        Some(fs::read(&ro).map_err(|e| format!("{}: {e}", preview.file))?)
+        Some(fs::read(&ro).map_err(|e| text::at(&preview.file, e))?)
     } else {
         None
     };
     let name = file_name(&preview.file);
     let (dir, mount) = target(music, shares, mounter, &preview.kind, &preview.path)?;
     let result = if preview.op == "remove" {
-        fs::remove_file(dir.join(name)).map_err(|e| format!("{}: {e}", preview.file))
+        fs::remove_file(dir.join(name)).map_err(|e| text::at(&preview.file, e))
     } else {
         write_whole(&dir, name, preview.after.as_bytes())
     };
@@ -931,7 +1027,7 @@ fn apply_tags(
     journal: &Journal,
     mpd_address: &mpd::Address,
     preview: &Preview,
-) -> Result<Applied, String> {
+) -> Result<Applied, Msg> {
     let todo: Vec<&FilePlan> = preview
         .files
         .iter()
@@ -940,9 +1036,10 @@ fn apply_tags(
     for fp in &todo {
         let (exists, size, mtime) = stat(&music.join(&fp.path));
         if !exists || size != fp.size || mtime != fp.mtime {
-            return Err(format!(
-                "{} changed since the preview; preview it again",
-                fp.path
+            return Err(msg!(
+                "core.write.changed_file",
+                "{path} changed since the preview; preview it again",
+                path = fp.path
             ));
         }
     }
@@ -962,7 +1059,7 @@ fn apply_tags(
                 });
             }
             Err(e) => {
-                failure = Some(format!("{}: {e}", fp.path));
+                failure = Some(text::at(&fp.path, e));
                 break;
             }
         }
@@ -988,9 +1085,12 @@ fn apply_tags(
     };
     if let Some(e) = failure {
         return Err(match &batch {
-            Some(id) => format!(
-                "{e}; the {} before it written and journaled as batch {id}",
-                files_word(written)
+            Some(id) => msg!(
+                "core.write.tags_partial",
+                "{error}; the {n} {n|file|files} before it written and journaled as batch {batch}",
+                error = e,
+                n = written,
+                batch = id
             ),
             None => e,
         });
@@ -1016,28 +1116,30 @@ pub fn undo(
     journal: &Journal,
     mpd_address: &mpd::Address,
     id: &str,
-) -> Result<Applied, String> {
-    let batch = journal
-        .load(id)
-        .ok_or_else(|| "no such batch".to_string())?;
+) -> Result<Applied, Msg> {
+    let batch = journal.load(id).ok_or_else(undo::no_such_batch)?;
     if batch.undone {
-        return Err("already undone".to_string());
+        return Err(msg!("core.write.already_undone", "already undone"));
     }
     if batch.kind == "tags" {
         return undo_tags(music, shares, mounter, journal, mpd_address, &batch);
     }
     let Some(entry) = batch.entries.first() else {
-        return Err("an empty batch".to_string());
+        return Err(msg!("core.write.empty_batch", "an empty batch"));
     };
     let current = fs::read(file_on_disk(music, &batch.kind, &entry.path)).ok();
     if entry.op == "remove" {
         if current.is_some() {
-            return Err(
-                "a file is there again where the batch removed one; not undone".to_string(),
-            );
+            return Err(msg!(
+                "core.write.file_back",
+                "a file is there again where the batch removed one; not undone"
+            ));
         }
     } else if current.as_deref() != Some(entry.after.as_bytes()) {
-        return Err("the file changed since the batch; not undone".to_string());
+        return Err(msg!(
+            "core.write.changed_since_batch",
+            "the file changed since the batch; not undone"
+        ));
     }
     let before: Option<Vec<u8>> = match &entry.before_bytes {
         Some(name) => Some(journal.kept(&batch.id, name)?),
@@ -1047,7 +1149,7 @@ pub fn undo(
     let name = file_name(&entry.path);
     let result = match before {
         Some(bytes) => write_whole(&dir, name, &bytes),
-        None => fs::remove_file(dir.join(name)).map_err(|e| format!("{}: {e}", entry.path)),
+        None => fs::remove_file(dir.join(name)).map_err(|e| text::at(&entry.path, e)),
     };
     if let Some(mut m) = mount {
         mounter.unmount(&mut m);
@@ -1078,16 +1180,21 @@ fn undo_tags(
     journal: &Journal,
     mpd_address: &mpd::Address,
     batch: &Batch,
-) -> Result<Applied, String> {
+) -> Result<Applied, Msg> {
     let mut todo: Vec<(String, String, Vec<KeyChange>)> = Vec::new();
     for entry in &batch.entries {
         let changes: Vec<KeyChange> =
-            serde_json::from_str(&entry.after).map_err(|e| format!("{}: {e}", entry.path))?;
+            serde_json::from_str(&entry.after).map_err(|e| text::at(&entry.path, e))?;
         let suffix = classify::suffix(&entry.path).unwrap_or_default();
         let format = tags::format_of(&suffix).unwrap_or("").to_string();
         let raw = tags::read(&music.join(&entry.path), &suffix);
         if let Some(p) = &raw.problem {
-            return Err(format!("{}: {p}; not undone", entry.path));
+            return Err(msg!(
+                "core.write.not_undone",
+                "{path}: {problem}; not undone",
+                path = entry.path,
+                problem = p
+            ));
         }
         let mut reverse = Vec::new();
         for c in changes {
@@ -1100,9 +1207,11 @@ fn undo_tags(
                     after: c.before,
                 });
             } else if current != c.before {
-                return Err(format!(
-                    "{}: {} changed since the batch; not undone",
-                    entry.path, c.key
+                return Err(msg!(
+                    "core.write.changed_key",
+                    "{path}: {key} changed since the batch; not undone",
+                    path = entry.path,
+                    key = c.key
                 ));
             }
         }
@@ -1117,7 +1226,7 @@ fn undo_tags(
         match tagfix::apply_file(&dir.join(file_name(path)), format, reverse) {
             Ok(()) => put_back += 1,
             Err(e) => {
-                failure = Some(format!("{path}: {e}"));
+                failure = Some(text::at(path, e));
                 break;
             }
         }
@@ -1126,9 +1235,11 @@ fn undo_tags(
         mounter.unmount(&mut m);
     }
     if let Some(e) = failure {
-        return Err(format!(
-            "{e}; {} put back before it, the undo can be run again",
-            files_word(put_back)
+        return Err(msg!(
+            "core.write.undo_partial",
+            "{error}; {n} {n|file|files} put back before it, the undo can be run again",
+            error = e,
+            n = put_back
         ));
     }
     journal.mark_undone(&batch.id)?;
@@ -1317,7 +1428,9 @@ mod tests {
         .unwrap();
         assert!(!p.exists);
         assert_eq!(p.after, "*.srt\n");
-        assert_eq!(p.place, "the share multimedia, folder Dune");
+        assert_eq!(p.place, "nas");
+        assert_eq!(p.share.as_deref(), Some("multimedia"));
+        assert_eq!(p.share_folder.as_deref(), Some("Dune"));
         assert!(prepare(
             &music,
             &shares,

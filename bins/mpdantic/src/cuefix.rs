@@ -17,6 +17,7 @@ use crate::classify;
 use crate::cue::{self, Finding, FILE_TYPES};
 use crate::cuecheck::{Beside, MAX_SHEET};
 use crate::mpd::Decoders;
+use crate::text::Msg;
 
 /// The encodings a sheet that is not UTF-8 is offered to be read as, the first the
 /// default. Every one a WHATWG label encoding_rs knows.
@@ -40,7 +41,7 @@ pub const ENCODINGS: &[&str] = &[
 pub struct Repair {
     /// `bom`, `encoding`, `type`, `name`, `quote`, `remove`.
     pub id: &'static str,
-    pub what: String,
+    pub what: Msg,
     pub on: bool,
 }
 
@@ -58,9 +59,50 @@ pub struct Fixed {
     pub lines_changed: usize,
     /// What MPD's parser would still find in the text after.
     pub remaining: Vec<Finding>,
-    pub notes: Vec<String>,
+    pub notes: Vec<Msg>,
     /// Whether anything would be written at all.
     pub changed: bool,
+}
+
+/// The encodings' repairs and notes, the same for a sheet and a playlist.
+pub fn not_offered(label: &str) -> Msg {
+    msg!(
+        "core.encoding.not_offered",
+        "{label} is not an encoding offered here",
+        label = label
+    )
+}
+
+pub fn not_an_encoding(label: &str) -> Msg {
+    msg!(
+        "core.encoding.not_encoding",
+        "{label}: not an encoding",
+        label = label
+    )
+}
+
+pub fn replacement_marks(n: usize, encoding: &str) -> Msg {
+    msg!(
+        "core.encoding.replacement_marks",
+        "{n} characters could not be read as {encoding}; each shows as a replacement mark",
+        n = n,
+        encoding = encoding
+    )
+}
+
+pub fn read_as(encoding: &str) -> Msg {
+    msg!(
+        "core.encoding.read_as",
+        "the text read as {encoding} and written as UTF-8",
+        encoding = encoding
+    )
+}
+
+pub fn bom_removed() -> Msg {
+    msg!(
+        "core.encoding.bom_removed",
+        "the byte-order mark removed, so MPD sees the first line"
+    )
 }
 
 /// What the user chose: the repairs by id (every one but `remove` when not said),
@@ -151,8 +193,9 @@ fn keyword_for(name: &str) -> &'static str {
 /// name in its own case, with its own suffix, or the last part of a foreign path
 /// found beside the sheet.
 fn target_for(name: &str, dir: &Path, beside: &Beside, decoders: &Decoders) -> Option<String> {
+    // For `case` and `suffix` the name found is carried as it is.
     match beside.locate(name, dir, decoders) {
-        ("case", found) | ("suffix", found) => found,
+        ("case", found) | ("suffix", found) => found.map(|m| m.en),
         ("foreign", _) => {
             let base = name.rsplit(['/', '\\']).next().unwrap_or("");
             if base.is_empty() || base == name {
@@ -160,7 +203,7 @@ fn target_for(name: &str, dir: &Path, beside: &Beside, decoders: &Decoders) -> O
             }
             match beside.locate(base, dir, decoders) {
                 ("ok", _) | ("not_decoded", _) => Some(base.to_string()),
-                ("case", found) | ("suffix", found) => found,
+                ("case", found) | ("suffix", found) => found.map(|m| m.en),
                 _ => None,
             }
         }
@@ -220,7 +263,7 @@ pub fn plan(
     beside: &Beside,
     decoders: &Decoders,
     choice: &Choice,
-) -> Result<Fixed, String> {
+) -> Result<Fixed, Msg> {
     let chosen = |id: &str| match choice.repairs {
         None => id != "remove",
         Some(list) => list.iter().any(|r| r == id),
@@ -240,20 +283,19 @@ pub fn plan(
                 None => {
                     let label = choice.encoding.unwrap_or(ENCODINGS[0]);
                     if !ENCODINGS.contains(&label) {
-                        return Err(format!("{label} is not an encoding offered here"));
+                        return Err(not_offered(label));
                     }
                     let enc = Encoding::for_label(label.as_bytes())
-                        .ok_or_else(|| format!("{label}: not an encoding"))?;
+                        .ok_or_else(|| not_an_encoding(label))?;
                     (enc, body)
                 }
             };
             let (decoded, had_errors) = enc.decode_without_bom_handling(content);
             let decoded = decoded.into_owned();
             if had_errors {
-                fixed.notes.push(format!(
-                    "{} characters could not be read as {}; each shows as a replacement mark",
+                fixed.notes.push(replacement_marks(
                     decoded.matches('\u{FFFD}').count(),
-                    enc.name()
+                    enc.name(),
                 ));
             }
             if utf16.is_none() {
@@ -263,7 +305,7 @@ pub fn plan(
             // Forced: the sheet is written as UTF-8 with any change.
             fixed.repairs.push(Repair {
                 id: "encoding",
-                what: format!("the text read as {} and written as UTF-8", enc.name()),
+                what: read_as(enc.name()),
                 on: true,
             });
             decoded
@@ -272,14 +314,14 @@ pub fn plan(
     if bom {
         fixed.repairs.push(Repair {
             id: "bom",
-            what: "the byte-order mark removed, so MPD sees the first line".to_string(),
+            what: bom_removed(),
             on: chosen("bom"),
         });
     }
     // The FILE lines, each against what is beside the sheet.
-    let mut types = Vec::new();
-    let mut names = Vec::new();
-    let mut quotes = Vec::new();
+    let mut types: Vec<Msg> = Vec::new();
+    let mut names: Vec<Msg> = Vec::new();
+    let mut quotes: Vec<Msg> = Vec::new();
     let mut out = String::with_capacity(text.len() + 64);
     let mut lines_changed = 0;
     for (i, raw) in text.split('\n').enumerate() {
@@ -299,7 +341,13 @@ pub fn plan(
         let mut kind = f.kind.clone();
         let mut quoted = f.quoted;
         if let Some(target) = target_for(&f.name, dir, beside, decoders) {
-            names.push(format!("line {line_no}: \"{}\" to \"{target}\"", f.name));
+            names.push(msg!(
+                "core.cuefix.name_change",
+                "line {line}: \"{from}\" to \"{to}\"",
+                line = line_no,
+                from = f.name,
+                to = target
+            ));
             if chosen("name") {
                 name = target;
             }
@@ -312,15 +360,31 @@ pub fn plan(
         if bad_type {
             let keyword = keyword_for(&name);
             types.push(match &f.kind {
-                Some(k) => format!("line {line_no}: {k} to {keyword}"),
-                None => format!("line {line_no}: no type, {keyword} added"),
+                Some(k) => msg!(
+                    "core.cuefix.type_change",
+                    "line {line}: {from} to {to}",
+                    line = line_no,
+                    from = k,
+                    to = keyword
+                ),
+                None => msg!(
+                    "core.cuefix.type_added",
+                    "line {line}: no type, {keyword} added",
+                    line = line_no,
+                    keyword = keyword
+                ),
             });
             if chosen("type") {
                 kind = Some(keyword.to_string());
             }
         }
         if !f.quoted && f.name.contains(char::is_whitespace) {
-            quotes.push(format!("line {line_no}: \"{}\"", f.name));
+            quotes.push(msg!(
+                "core.cuefix.quote_line",
+                "line {line}: \"{name}\"",
+                line = line_no,
+                name = f.name
+            ));
             if chosen("quote") {
                 quoted = true;
             }
@@ -345,16 +409,21 @@ pub fn plan(
     if !types.is_empty() {
         fixed.repairs.push(Repair {
             id: "type",
-            what: format!("the FILE type MPD takes: {}", types.join("; ")),
+            what: msg!(
+                "core.cuefix.type",
+                "the FILE type MPD takes: {changes}",
+                changes = types
+            ),
             on: chosen("type"),
         });
     }
     if !names.is_empty() {
         fixed.repairs.push(Repair {
             id: "name",
-            what: format!(
-                "the FILE name as the file beside the sheet: {}",
-                names.join("; ")
+            what: msg!(
+                "core.cuefix.name",
+                "the FILE name as the file beside the sheet: {changes}",
+                changes = names
             ),
             on: chosen("name"),
         });
@@ -362,9 +431,10 @@ pub fn plan(
     if !quotes.is_empty() {
         fixed.repairs.push(Repair {
             id: "quote",
-            what: format!(
-                "the FILE name quoted, so MPD takes all of it: {}",
-                quotes.join("; ")
+            what: msg!(
+                "core.cuefix.quote",
+                "the FILE name quoted, so MPD takes all of it: {changes}",
+                changes = quotes
             ),
             on: chosen("quote"),
         });
@@ -372,15 +442,23 @@ pub fn plan(
     let parsed = cue::parse(bytes);
     let (twice, split) = doubled(dir, sheet_name, &parsed, beside, decoders);
     if twice || split {
+        let why = if twice {
+            msg!(
+                "core.cuefix.remove_twice",
+                "another sheet beside it names the same file, so MPD indexes the tracks twice"
+            )
+        } else {
+            msg!(
+                "core.cuefix.remove_split",
+                "it names one file and the album's tracks are beside it as files too"
+            )
+        };
         fixed.repairs.push(Repair {
             id: "remove",
-            what: format!(
-                "the sheet removed: {}; the undo puts it back",
-                if twice {
-                    "another sheet beside it names the same file, so MPD indexes the tracks twice"
-                } else {
-                    "it names one file and the album's tracks are beside it as files too"
-                }
+            what: msg!(
+                "core.cuefix.remove",
+                "the sheet removed: {why}; the undo puts it back",
+                why = why
             ),
             on: chosen("remove"),
         });

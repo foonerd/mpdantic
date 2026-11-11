@@ -201,9 +201,9 @@ pub fn plan(path: &Path) -> Option<Plan> {
 }
 
 fn stats(address: &Address) -> Result<(Stats, String), String> {
-    let mut c = mpd::connect(address)?;
+    let mut c = mpd::connect(address).map_err(|e| e.to_string())?;
     let protocol = c.version.clone();
-    let pairs = c.command("stats")?;
+    let pairs = c.command("stats").map_err(|e| e.to_string())?;
     let get = |key: &str| {
         pairs
             .iter()
@@ -238,7 +238,7 @@ pub fn measure(address: &Address, quadratic: Option<f64>) -> Album {
     };
     let mut c = match mpd::connect(address) {
         Ok(c) => c,
-        Err(e) => return done(0, false, Some(e)),
+        Err(e) => return done(0, false, Some(e.to_string())),
     };
     match c.measure("search album \"\"") {
         Ok(m) => done(m.bytes, m.complete, None),

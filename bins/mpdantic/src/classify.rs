@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::ignore::Pattern;
 use crate::mpd::Decoders;
+use crate::text::Msg;
 
 /// What MPD opens as an archive and walks inside.
 pub const ARCHIVE_SUFFIXES: &[&str] = &["iso", "zip", "bz2"];
@@ -74,19 +75,19 @@ pub enum Class {
 
 impl Class {
     /// What the page says of the class, and why a pattern is suggested.
-    pub fn note(self) -> &'static str {
+    pub fn note(self) -> Msg {
         match self {
-            Class::SystemFolder => "A folder the NAS or a desktop writes for itself; MPD walks it.",
-            Class::Sidecar => "A file a desktop leaves beside the music; MPD tries it by its suffix.",
-            Class::Archive => "MPD opens archives and walks inside; an SACD ISO is not ISO9660 and fails.",
-            Class::Video => "MPD's ffmpeg decoder claims this suffix; usually video. Audio-only MP4 is normally .m4a.",
-            Class::FfmpegOnly => "Only MPD's ffmpeg decoder claims this suffix: the file is opened and probed at every update, though it is not music.",
-            Class::Audio => "A decoder claims it: a song to MPD.",
-            Class::Cue => "A CUE sheet: MPD's cue playlist plugin reads it.",
-            Class::Playlist => "A playlist: MPD's playlist plugins read it.",
-            Class::Image => "Folder art and pictures; never suggested, Volumio shows them.",
-            Class::Other => "Nothing claims it: one stat and MPD moves on.",
-            Class::Folder => "A folder MPD walks into.",
+            Class::SystemFolder => msg!("core.class.system_folder", "A folder the NAS or a desktop writes for itself; MPD walks it."),
+            Class::Sidecar => msg!("core.class.sidecar", "A file a desktop leaves beside the music; MPD tries it by its suffix."),
+            Class::Archive => msg!("core.class.archive", "MPD opens archives and walks inside; an SACD ISO is not ISO9660 and fails."),
+            Class::Video => msg!("core.class.video", "MPD's ffmpeg decoder claims this suffix; usually video. Audio-only MP4 is normally .m4a."),
+            Class::FfmpegOnly => msg!("core.class.ffmpeg_only", "Only MPD's ffmpeg decoder claims this suffix: the file is opened and probed at every update, though it is not music."),
+            Class::Audio => msg!("core.class.audio", "A decoder claims it: a song to MPD."),
+            Class::Cue => msg!("core.class.cue", "A CUE sheet: MPD's cue playlist plugin reads it."),
+            Class::Playlist => msg!("core.class.playlist", "A playlist: MPD's playlist plugins read it."),
+            Class::Image => msg!("core.class.image", "Folder art and pictures; never suggested, Volumio shows them."),
+            Class::Other => msg!("core.class.other", "Nothing claims it: one stat and MPD moves on."),
+            Class::Folder => msg!("core.class.folder", "A folder MPD walks into."),
         }
     }
 }

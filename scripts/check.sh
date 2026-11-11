@@ -91,7 +91,9 @@ const sets = [
   { name: 'assets/lang', english: 'en.json', is: (f) => /\/assets\/lang\/[a-z_A-Z]+\.json$/.test(f) }
 ];
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, p + k + '.') : [[p + k, v]]));
-const vars = (s) => (String(s).match(/\{\{?[a-z_]+\}?\}/g) || []).sort().join(' ');
+// The names of a text's variables: {{name}} on the settings page, {name} and the
+// plural {name|...} in the catalogues.
+const vars = (s) => Array.from(String(s).matchAll(/\{\{?([a-z_]+)(\|[^}]*)?\}?\}/g)).map((m) => m[1]).sort().join(' ');
 for (const set of sets) {
   const strings = files.filter(set.is);
   const english = strings.find((f) => f.endsWith('/' + set.english));
@@ -129,6 +131,12 @@ for page in bins/*/assets/*.html; do
   [ -s "$script" ] || { echo "check: $page has no script" >&2; exit 1; }
   with_node --check "$script" || { echo "check: the script of $page does not parse" >&2; exit 1; }
 done
+
+echo "check: catalogue"
+# The catalogues against the pages and the core: every key used is there, every key
+# there is used, the English the markup carries is the catalogue's, every msg! of the
+# core is in it with its template and its arguments, each language's plural forms.
+with_node scripts/lint/catalogue.js
 
 echo "check: undefined names"
 # A name nothing defines parses and passes the tests, and throws when its line runs:

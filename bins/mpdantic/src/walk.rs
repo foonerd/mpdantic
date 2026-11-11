@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::ignore::{read_list, InForce};
 use crate::library::Library;
+use crate::text::Msg;
 
 /// Folders nested deeper than this are not walked; the report says so.
 const MAX_DEPTH: usize = 64;
@@ -38,8 +39,21 @@ pub struct Entry {
 pub struct Excluded {
     pub path: String,
     pub line: String,
-    /// The directory whose list has the line, `the root` for the music directory.
-    pub from: String,
+    /// The directory whose list has the line; "the root" for the music directory.
+    pub from: Msg,
+}
+
+/// The music directory, as the page names it.
+pub fn root() -> Msg {
+    msg!("core.walk.root", "the root")
+}
+
+pub fn not_library_path() -> Msg {
+    msg!("core.path.not_library", "not a library path")
+}
+
+pub fn no_such_folder() -> Msg {
+    msg!("core.path.no_such_folder", "no such folder")
 }
 
 /// One directory as the visitor sees it.
@@ -76,8 +90,8 @@ pub struct Start {
 }
 
 /// The lists in force above and at the folder: the root's, then each step down.
-pub fn start(music: &Path, path: &str) -> Result<Start, String> {
-    let path = Library::check(path).ok_or_else(|| "not a library path".to_string())?;
+pub fn start(music: &Path, path: &str) -> Result<Start, Msg> {
+    let path = Library::check(path).ok_or_else(not_library_path)?;
     let mut in_force = InForce::default();
     if let Some(list) = read_list(music) {
         in_force.push(String::new(), list);
@@ -92,7 +106,7 @@ pub fn start(music: &Path, path: &str) -> Result<Start, String> {
         }
     }
     if !dir.is_dir() {
-        return Err("no such folder".to_string());
+        return Err(no_such_folder());
     }
     Ok(Start {
         dir,
@@ -180,9 +194,9 @@ fn directory<F>(
                 path,
                 line: line.to_string(),
                 from: if from.is_empty() {
-                    "the root".to_string()
+                    root()
                 } else {
-                    from.to_string()
+                    Msg::raw(from)
                 },
             });
             continue;

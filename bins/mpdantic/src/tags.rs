@@ -26,6 +26,8 @@ use lofty::wavpack::WavPackFile;
 use lofty::TextEncoding;
 use serde::{Deserialize, Serialize};
 
+use crate::text::Msg;
+
 /// The most of a DSD file's tail read for its tag, as MPD caps it.
 const DSD_TAG_MAX: u64 = 4 * 1024 * 1024;
 
@@ -66,7 +68,7 @@ pub struct Raw {
     pub format: String,
     pub duration_ms: Option<u64>,
     pub blocks: Vec<Block>,
-    pub problem: Option<String>,
+    pub problem: Option<Msg>,
 }
 
 /// The formats read here, by suffix as MPD takes it.
@@ -103,14 +105,14 @@ fn raw(format: &str) -> Raw {
 pub fn read(path: &Path, suffix: &str) -> Raw {
     let Some(format) = format_of(suffix) else {
         let mut r = raw(suffix);
-        r.problem = Some("a format not read here".to_string());
+        r.problem = Some(msg!("core.tags.not_read_here", "a format not read here"));
         return r;
     };
     let mut out = raw(format);
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            out.problem = Some(e.to_string());
+            out.problem = Some(Msg::raw(e.to_string()));
             return out;
         }
     };
@@ -145,7 +147,7 @@ pub fn parse_options() -> ParseOptions {
     ParseOptions::new().max_junk_bytes(MAX_JUNK_BYTES)
 }
 
-fn read_lofty(format: &str, file: &mut File, out: &mut Raw) -> Result<(), String> {
+fn read_lofty(format: &str, file: &mut File, out: &mut Raw) -> Result<(), Msg> {
     // With the properties first; without them when the audio refuses, so the tags
     // still count.
     let with = parse_options();
@@ -153,7 +155,8 @@ fn read_lofty(format: &str, file: &mut File, out: &mut Raw) -> Result<(), String
     match read_lofty_with(format, file, out, with) {
         Ok(()) => Ok(()),
         Err(first) => {
-            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+            file.seek(SeekFrom::Start(0))
+                .map_err(|e| Msg::raw(e.to_string()))?;
             out.blocks.clear();
             out.duration_ms = None;
             read_lofty_with(format, file, out, without).map_err(|_| first)
@@ -166,8 +169,8 @@ fn read_lofty_with(
     file: &mut File,
     out: &mut Raw,
     options: ParseOptions,
-) -> Result<(), String> {
-    let e = |e: lofty::error::FileParseError| e.to_string();
+) -> Result<(), Msg> {
+    let e = |e: lofty::error::FileParseError| Msg::raw(e.to_string());
     match format {
         "flac" => {
             let f = FlacFile::read_from(file, options).map_err(e)?;
@@ -324,7 +327,7 @@ fn read_lofty_with(
                 });
             }
         }
-        _ => return Err("a format not read here".to_string()),
+        _ => return Err(msg!("core.tags.not_read_here", "a format not read here")),
     }
     Ok(())
 }
@@ -486,13 +489,14 @@ fn ilst_block(t: &lofty::mp4::Ilst) -> Block {
 
 /// A DSF file: the `DSD ` header's pointer names where the ID3v2 tag is; the `fmt `
 /// chunk gives the duration.
-fn read_dsf(file: &mut File, out: &mut Raw) -> Result<(), String> {
+fn read_dsf(file: &mut File, out: &mut Raw) -> Result<(), Msg> {
     let mut head = [0u8; 28];
-    file.read_exact(&mut head).map_err(|e| e.to_string())?;
+    file.read_exact(&mut head)
+        .map_err(|e| Msg::raw(e.to_string()))?;
     if &head[0..4] != b"DSD " {
-        return Err("not a DSF file".to_string());
+        return Err(msg!("core.tags.not_dsf", "not a DSF file"));
     }
-    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    let size = file.metadata().map_err(|e| Msg::raw(e.to_string()))?.len();
     let pmeta = u64::from_le_bytes(head[20..28].try_into().unwrap_or([0; 8]));
     let mut fmt = [0u8; 52];
     if file.read_exact(&mut fmt).is_ok() && &fmt[0..4] == b"fmt " {
@@ -511,19 +515,20 @@ fn read_dsf(file: &mut File, out: &mut Raw) -> Result<(), String> {
 
 /// A DFF (DSDIFF) file: the `FRM8` form's top-level chunks walked for the off-spec
 /// `ID3 ` chunk sacdextract and others add, as MPD walks them.
-fn read_dff(file: &mut File, out: &mut Raw) -> Result<(), String> {
+fn read_dff(file: &mut File, out: &mut Raw) -> Result<(), Msg> {
     let mut head = [0u8; 16];
-    file.read_exact(&mut head).map_err(|e| e.to_string())?;
+    file.read_exact(&mut head)
+        .map_err(|e| Msg::raw(e.to_string()))?;
     if &head[0..4] != b"FRM8" || &head[12..16] != b"DSD " {
-        return Err("not a DSDIFF file".to_string());
+        return Err(msg!("core.tags.not_dff", "not a DSDIFF file"));
     }
-    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    let size = file.metadata().map_err(|e| Msg::raw(e.to_string()))?.len();
     let mut offset = 16u64;
     let mut sample_rate = 0u64;
     let mut channels = 0u64;
     while offset + 12 <= size {
         file.seek(SeekFrom::Start(offset))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Msg::raw(e.to_string()))?;
         let mut header = [0u8; 12];
         if file.read_exact(&mut header).is_err() {
             break;
@@ -537,7 +542,7 @@ fn read_dff(file: &mut File, out: &mut Raw) -> Result<(), String> {
                 let mut inner = data + 4;
                 while inner + 12 <= data + length {
                     file.seek(SeekFrom::Start(inner))
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|e| Msg::raw(e.to_string()))?;
                     let mut h = [0u8; 12];
                     if file.read_exact(&mut h).is_err() {
                         break;
@@ -575,14 +580,15 @@ fn read_dff(file: &mut File, out: &mut Raw) -> Result<(), String> {
 
 /// The ID3v2 tag at an offset, read from memory through lofty's MPEG reader with the
 /// properties off: it takes the tag and stops where no frame follows.
-fn id3_at(file: &mut File, offset: u64, length: u64, out: &mut Raw) -> Result<(), String> {
+fn id3_at(file: &mut File, offset: u64, length: u64, out: &mut Raw) -> Result<(), Msg> {
     if !(10..=DSD_TAG_MAX).contains(&length) {
         return Ok(());
     }
     file.seek(SeekFrom::Start(offset))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Msg::raw(e.to_string()))?;
     let mut bytes = vec![0u8; length as usize];
-    file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    file.read_exact(&mut bytes)
+        .map_err(|e| Msg::raw(e.to_string()))?;
     if &bytes[0..3] != b"ID3" {
         return Ok(());
     }
@@ -590,7 +596,7 @@ fn id3_at(file: &mut File, offset: u64, length: u64, out: &mut Raw) -> Result<()
     bytes.extend_from_slice(&[0u8; 16]);
     let mut cursor = Cursor::new(bytes);
     let f = MpegFile::read_from(&mut cursor, ParseOptions::new().read_properties(false))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Msg::raw(e.to_string()))?;
     if let Some(t) = f.id3v2() {
         out.blocks.push(id3v2_block(t));
     }
@@ -1044,7 +1050,7 @@ pub mod tests {
         let path = temp("x.wma");
         File::create(&path).unwrap().write_all(b"nothing").unwrap();
         assert_eq!(
-            read(&path, "wma").problem.as_deref(),
+            read(&path, "wma").problem.map(|m| m.en).as_deref(),
             Some("a format not read here")
         );
         let path = temp("not.flac");
@@ -1053,7 +1059,7 @@ pub mod tests {
         let path = temp("not.dsf");
         File::create(&path).unwrap().write_all(&[0u8; 100]).unwrap();
         assert_eq!(
-            read(&path, "dsf").problem.as_deref(),
+            read(&path, "dsf").problem.map(|m| m.en).as_deref(),
             Some("not a DSF file")
         );
     }

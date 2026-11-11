@@ -15,6 +15,7 @@ use crate::classify;
 use crate::library::Library;
 use crate::mpd::Decoders;
 use crate::plfix::{self, Index};
+use crate::text::Msg;
 
 /// Items past this many are counted, not listed.
 pub const MAX_LISTED: usize = 300;
@@ -105,7 +106,7 @@ pub fn by_id(places: &Places, id: &str) -> Option<ListFile> {
 /// item), said as salvaged.
 pub struct Items {
     pub items: Vec<serde_json::Value>,
-    pub problem: Option<String>,
+    pub problem: Option<Msg>,
     pub salvaged: bool,
 }
 
@@ -127,7 +128,10 @@ pub fn read_items(bytes: &[u8]) -> Items {
         },
         Ok(_) => Items {
             items: Vec::new(),
-            problem: Some("not a list: the JSON is not an array".to_string()),
+            problem: Some(msg!(
+                "core.vlists.not_array",
+                "not a list: the JSON is not an array"
+            )),
             salvaged: false,
         },
         Err(e) => {
@@ -140,7 +144,11 @@ pub fn read_items(bytes: &[u8]) -> Items {
                 {
                     return Items {
                         items,
-                        problem: Some(format!("cut short: {e}")),
+                        problem: Some(msg!(
+                            "core.vlists.cut_short",
+                            "cut short: {error}",
+                            error = e.to_string()
+                        )),
                         salvaged: true,
                     };
                 }
@@ -148,7 +156,11 @@ pub fn read_items(bytes: &[u8]) -> Items {
             }
             Items {
                 items: Vec::new(),
-                problem: Some(format!("does not parse: {e}")),
+                problem: Some(msg!(
+                    "core.vlists.not_parse",
+                    "does not parse: {error}",
+                    error = e.to_string()
+                )),
                 salvaged: false,
             }
         }
@@ -233,7 +245,7 @@ pub struct ListReport {
     pub broken: usize,
     pub duplicates: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub problem: Option<String>,
+    pub problem: Option<Msg>,
     pub salvaged: bool,
     /// The first items, each with its state.
     pub list: Vec<ItemState>,
@@ -290,19 +302,23 @@ pub fn check(music: &Path, decoders: &Decoders, list: &ListFile) -> ListReport {
     let bytes = match fs::metadata(&list.path) {
         Ok(m) => m.len(),
         Err(e) => {
-            r.problem = Some(format!("not read: {e}"));
+            r.problem = Some(msg!("core.vlists.not_read", "not read: {error}", error = e));
             return r;
         }
     };
     r.bytes = bytes;
     if bytes > MAX_LIST {
-        r.problem = Some(format!("{bytes} bytes: not read"));
+        r.problem = Some(msg!(
+            "core.vlists.too_large",
+            "{bytes} bytes: not read",
+            bytes = bytes
+        ));
         return r;
     }
     let text = match fs::read(&list.path) {
         Ok(t) => t,
         Err(e) => {
-            r.problem = Some(format!("not read: {e}"));
+            r.problem = Some(msg!("core.vlists.not_read", "not read: {error}", error = e));
             return r;
         }
     };
@@ -338,7 +354,7 @@ pub struct ItemChange {
     pub title: String,
     /// `kept`, `relocated`, `dropped`.
     pub action: &'static str,
-    pub why: String,
+    pub why: Msg,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<String>,
 }
@@ -347,7 +363,7 @@ pub struct ItemChange {
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ListRepair {
     pub id: &'static str,
-    pub what: String,
+    pub what: Msg,
     pub on: bool,
 }
 
@@ -359,7 +375,7 @@ pub struct Fixed {
     pub changes: Vec<ItemChange>,
     pub kept: usize,
     pub changed: bool,
-    pub notes: Vec<String>,
+    pub notes: Vec<Msg>,
 }
 
 const REPAIR_IDS: [&str; 4] = ["relocate", "drop", "dedupe", "salvage"];
@@ -372,17 +388,18 @@ pub fn plan(
     list: &ListFile,
     bytes: &[u8],
     chosen: Option<&[String]>,
-) -> Result<Fixed, String> {
+) -> Result<Fixed, Msg> {
     let on = |id: &str| match chosen {
         None => true,
         Some(c) => c.iter().any(|x| x == id),
     };
     let read = read_items(bytes);
     if read.problem.is_some() && !read.salvaged && read.items.is_empty() && !bytes.is_empty() {
-        return Err(format!(
-            "{}: {}",
-            list.name,
-            read.problem.unwrap_or_default()
+        return Err(msg!(
+            "core.vlists.problem",
+            "{name}: {problem}",
+            name = list.name,
+            problem = read.problem.unwrap_or_else(|| Msg::raw(""))
         ));
     }
     let all = states(music, &read.items, decoders);
@@ -396,7 +413,7 @@ pub fn plan(
             uri: s.uri.clone(),
             title: s.title.clone(),
             action: "kept",
-            why: String::new(),
+            why: Msg::raw(""),
             after: None,
         };
         let mut item = item.clone();
@@ -417,9 +434,13 @@ pub fn plan(
                         let new_uri = format!("mnt/{library_path}");
                         change.action = "relocated";
                         change.why = if ties > 0 {
-                            format!("found by its name and folders; {ties} others matched as well")
+                            msg!(
+                                "core.vlists.relocated_ties",
+                                "found by its name and folders; {ties} others matched as well",
+                                ties = ties
+                            )
                         } else {
-                            "found by its name and folders".to_string()
+                            msg!("core.vlists.relocated", "found by its name and folders")
                         };
                         change.after = Some(new_uri.clone());
                         if let Some(obj) = item.as_object_mut() {
@@ -429,13 +450,19 @@ pub fn plan(
                     None if on("drop") => {
                         change.action = "dropped";
                         change.why = if s.state == "foreign" {
-                            "a foreign path, nothing on this player".to_string()
+                            msg!(
+                                "core.vlists.dropped_foreign",
+                                "a foreign path, nothing on this player"
+                            )
                         } else {
-                            "the file is not under the library".to_string()
+                            msg!(
+                                "core.vlists.dropped_missing",
+                                "the file is not under the library"
+                            )
                         };
                     }
                     None => {
-                        change.why = "not found; left as it is".to_string();
+                        change.why = msg!("core.vlists.left", "not found; left as it is");
                     }
                 }
             }
@@ -443,14 +470,14 @@ pub fn plan(
                 applicable.insert("drop", ());
                 if on("drop") {
                     change.action = "dropped";
-                    change.why = "no uri or no service".to_string();
+                    change.why = msg!("core.vlists.dropped_broken", "no uri or no service");
                 }
             }
             "duplicate" => {
                 applicable.insert("dedupe", ());
                 if on("dedupe") {
                     change.action = "dropped";
-                    change.why = "the same uri again".to_string();
+                    change.why = msg!("core.vlists.dropped_duplicate", "the same uri again");
                 }
             }
             _ => {}
@@ -462,18 +489,19 @@ pub fn plan(
     }
     if read.salvaged {
         applicable.insert("salvage", ());
-        fixed.notes.push(format!(
-            "the file was cut short ({}); {} items could be read and are what is written",
-            read.problem.clone().unwrap_or_default(),
-            read.items.len()
+        fixed.notes.push(msg!(
+            "core.vlists.salvaged",
+            "the file was cut short ({problem}); {n} items could be read and are what is written",
+            problem = read.problem.clone().unwrap_or_else(|| Msg::raw("")),
+            n = read.items.len()
         ));
     }
     if let Some(i) = &index {
         if i.truncated {
-            fixed.notes.push(
+            fixed.notes.push(msg!(
+                "core.vlists.index_truncated",
                 "the library holds more than the index looks at; only the first files were searched"
-                    .to_string(),
-            );
+            ));
         }
     }
     for id in REPAIR_IDS {
@@ -481,14 +509,23 @@ pub fn plan(
             continue;
         }
         let what = match id {
-            "relocate" => "an item whose file is gone found again by its name and folders",
-            "drop" => "an item not found, foreign or broken dropped",
-            "dedupe" => "a uri in the list twice kept once",
-            _ => "a file cut short written back with the items that could be read",
+            "relocate" => msg!(
+                "core.vlists.relocate",
+                "an item whose file is gone found again by its name and folders"
+            ),
+            "drop" => msg!(
+                "core.vlists.drop",
+                "an item not found, foreign or broken dropped"
+            ),
+            "dedupe" => msg!("core.vlists.dedupe", "a uri in the list twice kept once"),
+            _ => msg!(
+                "core.vlists.salvage",
+                "a file cut short written back with the items that could be read"
+            ),
         };
         fixed.repairs.push(ListRepair {
             id,
-            what: what.to_string(),
+            what,
             on: on(id),
         });
     }
@@ -499,9 +536,10 @@ pub fn plan(
     if read.salvaged && !salvage_on {
         // The cut file stays as it is, so nothing else can be written either.
         fixed.changed = false;
-        fixed
-            .notes
-            .push("the cut file is left as it is".to_string());
+        fixed.notes.push(msg!(
+            "core.vlists.cut_left",
+            "the cut file is left as it is"
+        ));
     }
     Ok(fixed)
 }
@@ -620,7 +658,7 @@ pub mod tests {
         let actions: Vec<(&str, &str)> = f
             .changes
             .iter()
-            .map(|c| (c.action, c.why.as_str()))
+            .map(|c| (c.action, c.why.en.as_str()))
             .collect();
         assert_eq!(actions[0], ("kept", ""));
         assert_eq!(actions[1].0, "relocated");

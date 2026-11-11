@@ -14,6 +14,7 @@ use crate::mpd::Decoders;
 use crate::playlist;
 use crate::plcheck;
 use crate::tags;
+use crate::text::Msg;
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct ImportEntry {
@@ -28,7 +29,7 @@ pub struct ImportEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
+    pub why: Option<Msg>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -43,19 +44,31 @@ pub struct Imported {
 }
 
 /// A playlist name Volumio keeps as a file name: trimmed, no slash, not hidden.
-pub fn valid_name(name: &str) -> Result<String, String> {
+pub fn valid_name(name: &str) -> Result<String, Msg> {
     let name = name.trim();
     if name.is_empty() {
-        return Err("the playlist needs a name".to_string());
+        return Err(msg!(
+            "core.plimport.needs_name",
+            "the playlist needs a name"
+        ));
     }
     if name.contains('/') || name.contains('\0') {
-        return Err("a playlist name cannot hold a slash".to_string());
+        return Err(msg!(
+            "core.plimport.slash",
+            "a playlist name cannot hold a slash"
+        ));
     }
     if name.starts_with('.') {
-        return Err("a playlist name cannot start with a dot".to_string());
+        return Err(msg!(
+            "core.plimport.dot",
+            "a playlist name cannot start with a dot"
+        ));
     }
     if name.len() > 200 {
-        return Err("the playlist name is too long".to_string());
+        return Err(msg!(
+            "core.plimport.too_long",
+            "the playlist name is too long"
+        ));
     }
     Ok(name.to_string())
 }
@@ -89,7 +102,7 @@ pub fn plan(
     bytes: &[u8],
     decoders: &Decoders,
     name: Option<&str>,
-) -> Result<Imported, String> {
+) -> Result<Imported, Msg> {
     let suffix = classify::suffix(path).unwrap_or_default();
     let parsed = playlist::parse(bytes, &suffix);
     let folder = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
@@ -191,14 +204,17 @@ pub fn plan(
                 out.streams += 1;
             }
             (other, _) => {
-                entry.why = Some(
-                    match other {
-                        "missing" => "not found where MPD looks",
-                        "not_decoded" => "found, but no decoder claims it",
-                        _ => "a foreign path; repair the playlist first",
-                    }
-                    .to_string(),
-                );
+                entry.why = Some(match other {
+                    "missing" => msg!("core.plimport.left_missing", "not found where MPD looks"),
+                    "not_decoded" => msg!(
+                        "core.plimport.left_not_decoded",
+                        "found, but no decoder claims it"
+                    ),
+                    _ => msg!(
+                        "core.plimport.left_foreign",
+                        "a foreign path; repair the playlist first"
+                    ),
+                });
                 out.left_out += 1;
             }
         }

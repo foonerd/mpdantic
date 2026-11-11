@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::classify::{self, Class, Rules};
 use crate::mpd::Decoders;
+use crate::text::Msg;
 use crate::walk::{self, InForceLines, Progress, Walked};
 
 /// Examples kept per class and per suggestion.
@@ -20,19 +21,24 @@ const OTHER_SUFFIXES: usize = 200;
 /// Suffixes of Other shown, the most frequent first.
 const OTHER_SHOWN: usize = 20;
 
+/// A count with a handful of examples: paths as they are, or a sentence about one.
 #[derive(Serialize, Default, Debug)]
 pub struct Count {
     pub count: usize,
     pub bytes: u64,
-    pub examples: Vec<String>,
+    pub examples: Vec<Msg>,
 }
 
 impl Count {
     pub(crate) fn add(&mut self, path: &str, bytes: u64) {
+        self.add_example(Msg::raw(path), bytes);
+    }
+
+    pub(crate) fn add_example(&mut self, example: Msg, bytes: u64) {
         self.count += 1;
         self.bytes += bytes;
         if self.examples.len() < EXAMPLES {
-            self.examples.push(path.to_string());
+            self.examples.push(example);
         }
     }
 }
@@ -45,7 +51,7 @@ pub struct Suggestion {
     pub count: usize,
     pub bytes: u64,
     pub examples: Vec<String>,
-    pub note: &'static str,
+    pub note: Msg,
 }
 
 #[derive(Serialize, Debug)]
@@ -54,7 +60,7 @@ pub struct DecoderNote {
     pub source: String,
     pub count: usize,
     /// What MPD said of itself, or why it could not be asked.
-    pub detail: crate::text::Msg,
+    pub detail: Msg,
 }
 
 #[derive(Serialize, Debug)]
@@ -103,7 +109,7 @@ pub fn analyse(
     video_in_use: bool,
     progress: &Progress,
     cancel: &AtomicBool,
-) -> Result<Report, String> {
+) -> Result<Report, Msg> {
     let start = walk::start(music, path)?;
     let rules = Rules::new();
     let mut report = Report {
@@ -129,9 +135,16 @@ pub fn analyse(
     let mut suggestions: BTreeMap<String, Suggestion> = BTreeMap::new();
     let walked: Walked = walk::walk(start, progress, cancel, |visit| {
         for x in visit.excluded {
-            report
-                .excluded
-                .add(&format!("{} ({} at {})", x.path, x.line, x.from), 0);
+            report.excluded.add_example(
+                msg!(
+                    "core.analyse.excluded",
+                    "{path} ({line} at {from})",
+                    path = x.path,
+                    line = x.line,
+                    from = x.from
+                ),
+                0,
+            );
         }
         let mut enter = Vec::new();
         for (index, entry) in visit.entries.iter().enumerate() {
@@ -270,7 +283,7 @@ mod tests {
         DecoderNote {
             source: "test".to_string(),
             count: 0,
-            detail: crate::text::Msg::raw(""),
+            detail: Msg::raw(""),
         }
     }
 

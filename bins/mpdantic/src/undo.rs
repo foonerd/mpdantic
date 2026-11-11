@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::text::{self, Msg};
+
 /// One file of a batch.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -34,14 +36,19 @@ pub struct Batch {
     pub path: String,
     /// Seconds since the epoch, when applied.
     pub when: u64,
-    /// What the batch did, in a line.
-    pub note: String,
+    /// What the batch did, in a line; a journal written before the keys carries it
+    /// as the words themselves.
+    pub note: Msg,
     pub entries: Vec<Entry>,
     pub undone: bool,
 }
 
 pub struct Journal {
     dir: PathBuf,
+}
+
+pub fn no_such_batch() -> Msg {
+    msg!("core.undo.no_such_batch", "no such batch")
 }
 
 impl Journal {
@@ -72,31 +79,31 @@ impl Journal {
     }
 
     /// The batch recorded, whole and moved into place.
-    pub fn record(&self, batch: &Batch) -> Result<(), String> {
+    pub fn record(&self, batch: &Batch) -> Result<(), Msg> {
         let dir = self.dir.join(&batch.id);
-        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let text = serde_json::to_string_pretty(batch).map_err(|e| e.to_string())? + "\n";
+        fs::create_dir_all(&dir).map_err(|e| text::at(dir.display(), e))?;
+        let text = serde_json::to_string_pretty(batch).map_err(|e| Msg::raw(e.to_string()))? + "\n";
         let part = dir.join("manifest.json.part");
-        fs::write(&part, text).map_err(|e| format!("{}: {e}", part.display()))?;
-        fs::rename(&part, dir.join("manifest.json")).map_err(|e| e.to_string())
+        fs::write(&part, text).map_err(|e| text::at(part.display(), e))?;
+        fs::rename(&part, dir.join("manifest.json")).map_err(|e| Msg::raw(e.to_string()))
     }
 
     /// A file's bytes kept beside the batch's manifest, under `name`.
-    pub fn keep(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, String> {
+    pub fn keep(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, Msg> {
         let dir = self.dir.join(id);
-        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        fs::create_dir_all(&dir).map_err(|e| text::at(dir.display(), e))?;
         let file = dir.join(name);
-        fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+        fs::write(&file, bytes).map_err(|e| text::at(file.display(), e))?;
         Ok(name.to_string())
     }
 
     /// The bytes kept under `name` beside the batch's manifest.
-    pub fn kept(&self, id: &str, name: &str) -> Result<Vec<u8>, String> {
+    pub fn kept(&self, id: &str, name: &str) -> Result<Vec<u8>, Msg> {
         if name.is_empty() || name.contains('/') || name.contains("..") {
-            return Err("not a name the journal keeps".to_string());
+            return Err(msg!("core.undo.bad_name", "not a name the journal keeps"));
         }
         let file = self.dir.join(id).join(name);
-        fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+        fs::read(&file).map_err(|e| text::at(file.display(), e))
     }
 
     pub fn load(&self, id: &str) -> Option<Batch> {
@@ -122,8 +129,8 @@ impl Journal {
         ids.iter().filter_map(|id| self.load(id)).collect()
     }
 
-    pub fn mark_undone(&self, id: &str) -> Result<(), String> {
-        let mut batch = self.load(id).ok_or_else(|| "no such batch".to_string())?;
+    pub fn mark_undone(&self, id: &str) -> Result<(), Msg> {
+        let mut batch = self.load(id).ok_or_else(no_such_batch)?;
         batch.undone = true;
         self.record(&batch)
     }

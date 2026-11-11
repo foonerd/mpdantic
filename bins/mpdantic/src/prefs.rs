@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::text::{self, Msg};
+
 /// Where Volumio's Glass plugin lives when it is installed: it plays video from the
 /// library, so video there is wanted.
 pub const GLASS_PLUGIN: &str = "/data/plugins/user_interface/glass";
@@ -36,8 +38,11 @@ pub struct Store {
     glass: PathBuf,
     pub prefs: Prefs,
     /// Why the file could not be read or written, for the page.
-    pub error: Option<String>,
+    pub error: Option<Msg>,
 }
+
+/// The key of the one refusal the page can cause: a video choice that is not one.
+pub const VIDEO_CHOICES_KEY: &str = "core.prefs.video_choices";
 
 impl Store {
     /// The preferences from `<data>/preferences.json`, the defaults when there are
@@ -47,10 +52,10 @@ impl Store {
         let (prefs, error) = match fs::read_to_string(&file) {
             Ok(text) => match serde_json::from_str::<Prefs>(&text) {
                 Ok(p) => (p, None),
-                Err(e) => (Prefs::default(), Some(format!("{}: {e}", file.display()))),
+                Err(e) => (Prefs::default(), Some(text::at(file.display(), e))),
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Prefs::default(), None),
-            Err(e) => (Prefs::default(), Some(format!("{}: {e}", file.display()))),
+            Err(e) => (Prefs::default(), Some(text::at(file.display(), e))),
         };
         let prefs = if VIDEO_CHOICES.contains(&prefs.video.as_str()) {
             prefs
@@ -67,9 +72,13 @@ impl Store {
 
     /// The preferences kept, written whole and moved into place; held in memory and
     /// the error kept when the folder refuses.
-    pub fn save(&mut self, prefs: Prefs) -> Result<(), String> {
+    pub fn save(&mut self, prefs: Prefs) -> Result<(), Msg> {
         if !VIDEO_CHOICES.contains(&prefs.video.as_str()) {
-            return Err(format!("video must be one of {}", VIDEO_CHOICES.join(", ")));
+            return Err(msg!(
+                "core.prefs.video_choices",
+                "video must be one of {choices}",
+                choices = VIDEO_CHOICES.join(", ")
+            ));
         }
         self.prefs = prefs;
         let result = (|| {
@@ -89,9 +98,9 @@ impl Store {
                 Ok(())
             }
             Err(e) => {
-                let text = format!("{}: {e}", self.file.display());
-                self.error = Some(text.clone());
-                Err(text)
+                let said = text::at(self.file.display(), e);
+                self.error = Some(said.clone());
+                Err(said)
             }
         }
     }
