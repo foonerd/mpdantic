@@ -91,9 +91,10 @@ const sets = [
   { name: 'assets/lang', english: 'en.json', is: (f) => /\/assets\/lang\/[a-z_A-Z]+\.json$/.test(f) }
 ];
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, p + k + '.') : [[p + k, v]]));
-// The names of a text's variables: {{name}} on the settings page, {name} and the
-// plural {name|...} in the catalogues.
-const vars = (s) => Array.from(String(s).matchAll(/\{\{?([a-z_]+)(\|[^}]*)?\}?\}/g)).map((m) => m[1]).sort().join(' ');
+// The names of a text's variables, each once: {{name}} on the settings page, {name}
+// and the plural {name|...} in the catalogues. A translation may use a count more or
+// fewer times than the English for its agreement; it is the set of names that must match.
+const vars = (s) => Array.from(new Set(Array.from(String(s).matchAll(/\{\{?([a-z_]+)(\|[^}]*)?\}?\}/g)).map((m) => m[1]))).sort().join(' ');
 for (const set of sets) {
   const strings = files.filter(set.is);
   const english = strings.find((f) => f.endsWith('/' + set.english));
