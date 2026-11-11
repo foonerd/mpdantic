@@ -62,11 +62,12 @@ jobs:
       - name: The zip names the commit it was built from
         run: |
           unzip -p dist/mpdantic-*.zip build.json | grep -F "\"commit\": \"$(git rev-parse --short HEAD)\""
-      - name: The zip carries the core for every architecture, and the modules
+      - name: The zip carries the core for every architecture, the notices, and the modules
         run: |
           for arch in arm armv7 armv8 x64; do
             unzip -l dist/mpdantic-*.zip | grep -q " bin/$arch/mpdantic\$" || { echo "no bin/$arch/mpdantic in the zip" >&2; exit 1; }
           done
+          unzip -l dist/mpdantic-*.zip | grep -q " THIRD-PARTY-NOTICES\$" || { echo "no THIRD-PARTY-NOTICES in the zip" >&2; exit 1; }
           for module in kew v-conf; do
             unzip -l dist/mpdantic-*.zip | grep -q " node_modules/$module/package.json\$" || { echo "no module $module in the zip" >&2; exit 1; }
           done

@@ -1,0 +1,19 @@
+# cargo-about: the licences the core's crates may carry, for THIRD-PARTY-NOTICES in
+# the zip (scripts/notices.sh). A crate under anything else fails the build until it
+# is read and listed here.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+# The core is built for Linux only; the graph is resolved for its targets.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "armv7-unknown-linux-musleabihf",
+    "aarch64-unknown-linux-musl",
+]
+
+# The workspace's own crate is not a third party.
+[private]
+ignore = true

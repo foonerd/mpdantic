@@ -28,6 +28,10 @@ for arch in $ARCHES; do
   install -D -m 755 "$bin" "$STAGE/bin/$arch/mpdantic"
 done
 
+# The licences of what the core is built from, beside the core: a zip without them is
+# not made.
+"$ROOT/scripts/notices.sh" "$STAGE/THIRD-PARTY-NOTICES" || { echo "package: the notices were not made; the zip was not made" >&2; exit 1; }
+
 # Node modules: with npm on this machine, directly; otherwise in a container with the
 # Node major Volumio ships. A zip without them is no plugin: the install must succeed,
 # and every module package.json names must be there.

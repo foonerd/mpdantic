@@ -1,0 +1,24 @@
+THIRD-PARTY NOTICES
+
+The core of MPDantic (bin/<arch>/mpdantic) is a static binary built from the
+Rust crates below, each under its own licence. Every distinct licence text
+follows, with the crates it covers. MPDantic itself is under the MIT licence
+(LICENSE). The shell's Node modules carry their own licence files under
+node_modules/.
+
+{{#each overview}}
+{{{name}}} ({{id}}): {{count}} {{#if (eq count 1)}}crate{{else}}crates{{/if}}
+{{/each}}
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{id}})
+--------------------------------------------------------------------------------
+Used by:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}
