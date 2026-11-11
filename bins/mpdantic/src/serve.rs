@@ -24,6 +24,7 @@ use crate::prefs;
 use crate::report;
 use crate::status::Status;
 use crate::tagcheck;
+use crate::tagfix;
 use crate::undo;
 use crate::write;
 
@@ -222,6 +223,10 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             (200, json, body)
         }
         (_, "/api/report") if get => (200, json, report_json(shared)),
+        (_, "/api/tags") if get => {
+            let (code, body) = folder_tags(shared, &r.query);
+            (code, json, body)
+        }
         ("POST", "/api/report/measure") => {
             if shared.measuring.swap(true, Ordering::SeqCst) {
                 (409, json, error("a measurement is running; wait for it"))
@@ -403,6 +408,19 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
         date: request["date"].as_str().map(str::to_string),
         base: request["base"].as_str().map(str::to_string),
         name: request["name"].as_str().map(str::to_string),
+        edits: request["edits"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    let name = e["name"].as_str()?.to_string();
+                    let set = e["set"]
+                        .as_object()?
+                        .iter()
+                        .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                        .collect();
+                    Some(tagfix::Edit { name, set })
+                })
+                .collect()
+        }),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -591,6 +609,37 @@ fn percent_decode(s: &str) -> String {
 
 fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()) + "\n"
+}
+
+/// `GET /api/tags?path=<folder>`: the folder's audio files with MPD's view of every
+/// field the editor offers.
+fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
+    let path = pairs(query)
+        .into_iter()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+    let Some(path) = Library::check(&path) else {
+        return (400, error("not a library path"));
+    };
+    let dir = if path.is_empty() {
+        shared.library.music().to_path_buf()
+    } else {
+        shared.library.music().join(&path)
+    };
+    if !dir.is_dir() {
+        return (404, error("no such folder"));
+    }
+    let (_, decoders) = shared.decoders();
+    match tagfix::folder_values(&dir, &path, &decoders) {
+        Ok(files) => (
+            200,
+            serde_json::json!({ "path": path, "fields": tagfix::FIELDS, "files": files })
+                .to_string()
+                + "\n",
+        ),
+        Err(e) => (500, error(&e)),
+    }
 }
 
 /// The player report as JSON, with the block rendered in it.
@@ -823,10 +872,10 @@ mod tests {
     #[test]
     fn the_tags_of_a_folder_are_repaired_over_the_api_with_a_value_picked() {
         let root = temp_library("serve-tags");
-        std::fs::write(root.join("USB/a.flac"), crate::tagfix::tests::faulty_flac()).unwrap();
+        std::fs::write(root.join("USB/a.flac"), tagfix::tests::faulty_flac()).unwrap();
         std::fs::write(
             root.join("USB/b.flac"),
-            crate::tagfix::tests::real_flac(&[("ALBUM", "Two"), ("ARTIST", "A")]),
+            tagfix::tests::real_flac(&[("ALBUM", "Two"), ("ARTIST", "A")]),
         )
         .unwrap();
         let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
@@ -882,11 +931,7 @@ mod tests {
         let root = temp_library("serve-import");
         std::fs::write(
             root.join("USB/a.flac"),
-            crate::tagfix::tests::real_flac(&[
-                ("TITLE", "A"),
-                ("ARTIST", "Ann"),
-                ("ALBUM", "Live"),
-            ]),
+            tagfix::tests::real_flac(&[("TITLE", "A"), ("ARTIST", "Ann"), ("ALBUM", "Live")]),
         )
         .unwrap();
         std::fs::write(
@@ -962,6 +1007,72 @@ mod tests {
         );
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         assert!(!folder.join("mix").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_folders_tags_are_served_for_the_grid_and_edits_are_written_and_undone() {
+        let root = temp_library("serve-edit");
+        std::fs::write(
+            root.join("USB/a.flac"),
+            tagfix::tests::real_flac(&[("TITLE", "One"), ("ARTIST", "Ann")]),
+        )
+        .unwrap();
+        let server = make_server(root.clone(), fake_mpd("OK MPD 0.24.6\n"));
+        let out = talk(server.port, "GET /api/tags?path=USB HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let r: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(r["path"], "USB");
+        assert_eq!(r["fields"][0], "track");
+        assert_eq!(r["files"][0]["name"], "a.flac");
+        assert_eq!(r["files"][0]["values"]["title"][0], "One");
+        assert_eq!(r["files"][0]["writable"], true);
+        let out = talk(server.port, "GET /api/tags?path=../x HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = talk(server.port, "GET /api/tags?path=USB/none HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 404"), "{out}");
+        let post = |body: &str| {
+            talk(
+                server.port,
+                &format!(
+                    "POST /api/batches HTTP/1.0\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let out = post("{\"kind\":\"tagedit\",\"path\":\"USB\"}");
+        assert!(out.starts_with("HTTP/1.0 400"), "{out}");
+        let out = post("{\"kind\":\"tagedit\",\"path\":\"USB\",\"edits\":[{\"name\":\"a.flac\",\"set\":{\"title\":\"Two\",\"genre\":\"Jazz\"}}]}");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let p: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(p["op"], "tags");
+        assert_eq!(p["edited"], true);
+        assert_eq!(p["files"][0]["changes"][0]["key"], "TITLE");
+        assert_eq!(p["files"][0]["changes"][1]["key"], "GENRE");
+        let id = p["id"].as_u64().unwrap();
+        let out = talk(
+            server.port,
+            &format!("POST /api/batches/{id}/apply HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let seen = crate::tags::view(&crate::tags::read(&root.join("USB/a.flac"), "flac"));
+        assert_eq!(seen.title, ["Two"]);
+        assert_eq!(seen.genre, ["Jazz"]);
+        let out = talk(server.port, "GET /api/undo HTTP/1.0\r\n\r\n");
+        let list: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(
+            list[0]["note"],
+            "tags of 1 file in USB: edited file by file"
+        );
+        let batch = list[0]["id"].as_str().unwrap().to_string();
+        let out = talk(
+            server.port,
+            &format!("POST /api/undo/{batch} HTTP/1.0\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let seen = crate::tags::view(&crate::tags::read(&root.join("USB/a.flac"), "flac"));
+        assert_eq!(seen.title, ["One"]);
+        assert!(seen.genre.is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

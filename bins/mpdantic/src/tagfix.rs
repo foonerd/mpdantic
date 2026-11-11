@@ -29,6 +29,7 @@ use lofty::musepack::MpcFile;
 use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::{OpusFile, SpeexFile, VorbisFile};
 use lofty::tag::items::Timestamp;
+use lofty::tag::Accessor;
 use lofty::tag::ItemValue;
 use lofty::wavpack::WavPackFile;
 use lofty::TextEncoding;
@@ -116,18 +117,46 @@ fn same_key(kind: &Kind, a: &str, b: &str) -> bool {
 /// The key a block of the kind writes a field under: `album`, `albumartist`, `date`.
 fn field_key(kind: &Kind, field: &str) -> Option<&'static str> {
     Some(match (kind, field) {
-        (Kind::VorbisComments, "album") => "ALBUM",
+        (Kind::VorbisComments, "title") => "TITLE",
+        (Kind::VorbisComments, "artist") => "ARTIST",
         (Kind::VorbisComments, "albumartist") => "ALBUMARTIST",
+        (Kind::VorbisComments, "album") => "ALBUM",
         (Kind::VorbisComments, "date") => "DATE",
-        (Kind::Id3v2, "album") => "TALB",
+        (Kind::VorbisComments, "track") => "TRACKNUMBER",
+        (Kind::VorbisComments, "disc") => "DISCNUMBER",
+        (Kind::VorbisComments, "genre") => "GENRE",
+        (Kind::VorbisComments, "composer") => "COMPOSER",
+        (Kind::VorbisComments, "comment") => "COMMENT",
+        (Kind::Id3v2, "title") => "TIT2",
+        (Kind::Id3v2, "artist") => "TPE1",
         (Kind::Id3v2, "albumartist") => "TPE2",
+        (Kind::Id3v2, "album") => "TALB",
         (Kind::Id3v2, "date") => "TDRC",
-        (Kind::Ape, "album") => "Album",
+        (Kind::Id3v2, "track") => "TRCK",
+        (Kind::Id3v2, "disc") => "TPOS",
+        (Kind::Id3v2, "genre") => "TCON",
+        (Kind::Id3v2, "composer") => "TCOM",
+        (Kind::Id3v2, "comment") => "COMM",
+        (Kind::Ape, "title") => "Title",
+        (Kind::Ape, "artist") => "Artist",
         (Kind::Ape, "albumartist") => "Album Artist",
+        (Kind::Ape, "album") => "Album",
         (Kind::Ape, "date") => "Year",
-        (Kind::Ilst, "album") => "\u{a9}alb",
+        (Kind::Ape, "track") => "Track",
+        (Kind::Ape, "disc") => "Disc",
+        (Kind::Ape, "genre") => "Genre",
+        (Kind::Ape, "composer") => "Composer",
+        (Kind::Ape, "comment") => "Comment",
+        (Kind::Ilst, "title") => "\u{a9}nam",
+        (Kind::Ilst, "artist") => "\u{a9}ART",
         (Kind::Ilst, "albumartist") => "aART",
+        (Kind::Ilst, "album") => "\u{a9}alb",
         (Kind::Ilst, "date") => "\u{a9}day",
+        (Kind::Ilst, "track") => "trkn",
+        (Kind::Ilst, "disc") => "disk",
+        (Kind::Ilst, "genre") => "\u{a9}gen",
+        (Kind::Ilst, "composer") => "\u{a9}wrt",
+        (Kind::Ilst, "comment") => "\u{a9}cmt",
         _ => return None,
     })
 }
@@ -598,6 +627,297 @@ pub fn plan(
 
 // ------------------------------------------------------------------ the writes
 
+/// `n` or `n/total` as a pair; nothing from an empty value.
+fn number_pair(text: &str) -> Result<(u32, Option<u32>), String> {
+    let text = text.trim();
+    let (n, total) = match text.split_once('/') {
+        Some((n, t)) => (n.trim(), Some(t.trim())),
+        None => (text, None),
+    };
+    let n = n
+        .parse::<u32>()
+        .map_err(|_| format!("{text}: not a number, or a number with its total as n/total"))?;
+    let total = match total {
+        Some(t) if !t.is_empty() => Some(
+            t.parse::<u32>()
+                .map_err(|_| format!("{text}: the total is not a number"))?,
+        ),
+        _ => None,
+    };
+    Ok((n, total))
+}
+
+/// The fields the editor offers, in the grid's order.
+pub const FIELDS: &[&str] = &[
+    "track",
+    "title",
+    "artist",
+    "albumartist",
+    "album",
+    "date",
+    "disc",
+    "genre",
+    "composer",
+    "comment",
+];
+
+/// One file's edits: the fields set by hand; an empty value removes the key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Edit {
+    pub name: String,
+    pub set: BTreeMap<String, String>,
+}
+
+/// One file of the folder as the grid shows it: MPD's view of every field.
+#[derive(Serialize, Clone, Debug)]
+pub struct FileValues {
+    pub name: String,
+    pub path: String,
+    pub format: String,
+    pub writable: bool,
+    pub values: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+/// The audio files of a folder, sorted, as the check and the repairs take them.
+fn audio_names(dir: &Path, decoders: &Decoders) -> Result<Vec<String>, String> {
+    let rules = Rules::new();
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| {
+            classify::classify(&rules, std::ffi::OsStr::new(n), false, decoders).0 == Class::Audio
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+fn library_path(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_string()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The folder's files with MPD's view of every field, for the grid.
+pub fn folder_values(
+    dir: &Path,
+    folder: &str,
+    decoders: &Decoders,
+) -> Result<Vec<FileValues>, String> {
+    Ok(audio_names(dir, decoders)?
+        .into_iter()
+        .map(|name| {
+            let suffix = classify::suffix(&name).unwrap_or_default();
+            let raw = tags::read(&dir.join(&name), &suffix);
+            let seen = tags::view(&raw);
+            let mut values = BTreeMap::new();
+            let lists: [(&str, &Vec<String>); 10] = [
+                ("track", &seen.track),
+                ("title", &seen.title),
+                ("artist", &seen.artist),
+                ("albumartist", &seen.album_artist),
+                ("album", &seen.album),
+                ("date", &seen.date),
+                ("disc", &seen.disc),
+                ("genre", &seen.genre),
+                ("composer", &seen.composer),
+                ("comment", &seen.comment),
+            ];
+            for (field, list) in lists {
+                values.insert(field.to_string(), list.clone());
+            }
+            FileValues {
+                path: library_path(folder, &name),
+                name,
+                writable: raw.problem.is_none() && writable_format(&raw.format),
+                format: raw.format.clone(),
+                values,
+                problem: raw.problem.clone(),
+            }
+        })
+        .collect())
+}
+
+/// The block a file with no tag block gets its first one in: what MPD reads first
+/// for the format and lofty writes.
+fn fresh_kind(format: &str) -> Kind {
+    match format {
+        "flac" | "vorbis" | "opus" | "speex" => Kind::VorbisComments,
+        "ape" | "wavpack" | "mpc" => Kind::Ape,
+        "mp4" => Kind::Ilst,
+        _ => Kind::Id3v2,
+    }
+}
+
+/// A change on a key already planned supersedes it.
+fn supersede(changes: &mut Vec<KeyChange>, c: KeyChange) {
+    changes.retain(|x| !(x.kind == c.kind && same_key(&c.kind, &x.key, &c.key)));
+    changes.push(c);
+}
+
+/// The ID3v2 frames an ID3v1-only file gets from its fields, as the id3v2 repair
+/// makes them.
+fn frames_from_id3v1(raw: &Raw) -> Vec<KeyChange> {
+    let Some(v1) = raw.blocks.iter().find(|b| b.kind == Kind::Id3v1) else {
+        return Vec::new();
+    };
+    v1.items
+        .iter()
+        .filter_map(|item| {
+            let key = match item.key.as_str() {
+                "title" => "TIT2",
+                "artist" => "TPE1",
+                "album" => "TALB",
+                "year" => "TDRC",
+                "track" => "TRCK",
+                "genre" => "TCON",
+                _ => return None,
+            };
+            if item.value.trim().is_empty() {
+                return None;
+            }
+            Some(KeyChange {
+                kind: Kind::Id3v2,
+                key: key.to_string(),
+                before: Vec::new(),
+                after: vec![item.value.clone()],
+            })
+        })
+        .collect()
+}
+
+/// The edits planned file by file: the primary block as the repairs use it (a fresh
+/// ID3v2 for an ID3v1-only MP3, with the fields the ID3v1 carries; a fresh block of
+/// the format's kind for a file with none), the key for each field, a change where
+/// the value differs; an empty value removes the key. Nothing is written.
+pub fn plan_edits(
+    dir: &Path,
+    folder: &str,
+    decoders: &Decoders,
+    edits: &[Edit],
+) -> Result<Planned, String> {
+    let names = audio_names(dir, decoders)?;
+    let mut planned = Planned::default();
+    for e in edits {
+        if !names.contains(&e.name) {
+            return Err(format!("{}: not an audio file of the folder", e.name));
+        }
+        let path = dir.join(&e.name);
+        let suffix = classify::suffix(&e.name).unwrap_or_default();
+        let raw = tags::read(&path, &suffix);
+        let (size, mtime) = stat(&path);
+        let mut fp = FilePlan {
+            path: library_path(folder, &e.name),
+            name: e.name.clone(),
+            format: raw.format.clone(),
+            changes: Vec::new(),
+            note: None,
+            size,
+            mtime,
+        };
+        if let Some(p) = &raw.problem {
+            fp.note = Some(format!("not read: {p}"));
+            planned.files.push(fp);
+            continue;
+        }
+        if !writable_format(&raw.format) {
+            fp.note =
+                Some("not written here: no writer for DSF and DFF in this version".to_string());
+            planned.files.push(fp);
+            continue;
+        }
+        let seen = tags::view(&raw);
+        let mut changes: Vec<KeyChange> = Vec::new();
+        let block = match raw.blocks.iter().find(|b| writable_kind(&b.kind)) {
+            Some(b) => b.clone(),
+            None => {
+                let mut fresh = Block {
+                    kind: if seen.id3v1_only {
+                        Kind::Id3v2
+                    } else {
+                        fresh_kind(&raw.format)
+                    },
+                    version: String::new(),
+                    items: Vec::new(),
+                };
+                if seen.id3v1_only {
+                    for c in frames_from_id3v1(&raw) {
+                        fresh.items.push(tags::Item {
+                            key: c.key.clone(),
+                            value: c.after[0].clone(),
+                            latin1: false,
+                        });
+                        supersede(&mut changes, c);
+                    }
+                }
+                fresh
+            }
+        };
+        let kind = block.kind.clone();
+        let mut refused: Vec<String> = e
+            .set
+            .keys()
+            .filter(|k| !FIELDS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        // In the grid's order, so the card lists the changes as the columns run.
+        for field in FIELDS {
+            let Some(value) = e.set.get(*field) else {
+                continue;
+            };
+            let Some(key) = field_key(&kind, field) else {
+                refused.push(field.to_string());
+                continue;
+            };
+            let current = changes
+                .iter()
+                .find(|c| same_key(&kind, &c.key, key))
+                .map(|c| c.after.clone())
+                .unwrap_or_else(|| values_of(&block, key));
+            let value = value.trim();
+            let after: Vec<String> = if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![value.to_string()]
+            };
+            if (key == "trkn" || key == "disk") && !after.is_empty() {
+                number_pair(value).map_err(|e| format!("{}: {field}: {e}", fp.name))?;
+            }
+            if current != after {
+                supersede(
+                    &mut changes,
+                    KeyChange {
+                        kind: kind.clone(),
+                        key: key.to_string(),
+                        before: values_of(&block, key),
+                        after,
+                    },
+                );
+            }
+        }
+        if !refused.is_empty() {
+            fp.note = Some(format!(
+                "no key for {} in a {kind:?} block",
+                refused.join(", ")
+            ));
+        } else if changes.is_empty() {
+            fp.note = Some("nothing to change".to_string());
+        }
+        if !changes.is_empty() {
+            planned.changed = true;
+        }
+        fp.changes = changes;
+        planned.files.push(fp);
+    }
+    Ok(planned)
+}
+
 fn set_vorbis(tag: &mut VorbisComments, key: &str, values: &[String]) {
     let _ = tag.remove(key).count();
     for v in values {
@@ -666,6 +986,35 @@ fn atom_ident(key: &str) -> Result<AtomIdent<'static>, String> {
 }
 
 fn set_ilst(tag: &mut Ilst, key: &str, values: &[String]) -> Result<(), String> {
+    // The track and disc numbers are binary pairs (number, total), not text.
+    if key == "trkn" || key == "disk" {
+        let pair = values.first().map(|v| number_pair(v)).transpose()?;
+        match (key, pair) {
+            ("trkn", None) => {
+                tag.remove_track();
+                tag.remove_track_total();
+            }
+            ("trkn", Some((n, total))) => {
+                tag.set_track(n);
+                match total {
+                    Some(t) => tag.set_track_total(t),
+                    None => tag.remove_track_total(),
+                }
+            }
+            (_, None) => {
+                tag.remove_disk();
+                tag.remove_disk_total();
+            }
+            (_, Some((n, total))) => {
+                tag.set_disk(n);
+                match total {
+                    Some(t) => tag.set_disk_total(t),
+                    None => tag.remove_disk_total(),
+                }
+            }
+        }
+        return Ok(());
+    }
     let ident = atom_ident(key)?;
     let _ = tag.remove(&ident).count();
     let Some(first) = values.first() else {
@@ -1210,6 +1559,129 @@ pub mod tests {
         let again = plan(&dir, "INTERNAL/Jazz", &decoders(), &ALL).unwrap();
         assert_eq!(ids(&again), [("unify", false)]);
         assert!(!again.changed);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_edits_set_any_field_of_any_file_and_an_empty_value_removes_the_key() {
+        let dir = folder("edits");
+        fs::write(
+            dir.join("a.flac"),
+            real_flac(&[("TITLE", "One"), ("ARTIST", "Ann"), ("COMMENT", "ripped")]),
+        )
+        .unwrap();
+        let mut v1 = vec![0u8; 128];
+        v1[0..3].copy_from_slice(b"TAG");
+        v1[3..3 + 5].copy_from_slice(b"Title");
+        v1[33..33 + 6].copy_from_slice(b"Artist");
+        v1[125] = 0;
+        v1[126] = 7;
+        v1[127] = 255;
+        let mut only = mpeg_frame();
+        only.extend_from_slice(&v1);
+        fs::write(dir.join("b.mp3"), &only).unwrap();
+        // The grid's view of the folder.
+        let values = folder_values(&dir, "INTERNAL/Jazz", &decoders()).unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].name, "a.flac");
+        assert_eq!(values[0].path, "INTERNAL/Jazz/a.flac");
+        assert!(values[0].writable);
+        assert_eq!(values[0].values["title"], ["One"]);
+        assert_eq!(values[0].values["comment"], ["ripped"]);
+        assert_eq!(values[0].values["track"], Vec::<String>::new());
+        assert_eq!(
+            values[1].values["title"],
+            ["Title"],
+            "the ID3v1 fields are the view"
+        );
+        assert_eq!(values[1].values["track"], ["7"]);
+        // The edits: a field set, one removed, one that is already the value.
+        let edits = vec![
+            Edit {
+                name: "a.flac".to_string(),
+                set: [
+                    ("title".to_string(), "One (live)".to_string()),
+                    ("track".to_string(), " 3 ".to_string()),
+                    ("composer".to_string(), "Cy".to_string()),
+                    ("comment".to_string(), "".to_string()),
+                    ("artist".to_string(), "Ann".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+            Edit {
+                name: "b.mp3".to_string(),
+                set: [("album".to_string(), "Sessions".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ];
+        let p = plan_edits(&dir, "INTERNAL/Jazz", &decoders(), &edits).unwrap();
+        assert!(p.changed);
+        let a = &p.files[0];
+        let keys: Vec<(&str, &[String])> = a
+            .changes
+            .iter()
+            .map(|c| (c.key.as_str(), c.after.as_slice()))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("TRACKNUMBER", &["3".to_string()][..]),
+                ("TITLE", &["One (live)".to_string()][..]),
+                ("COMPOSER", &["Cy".to_string()][..]),
+                ("COMMENT", &[][..]),
+            ],
+            "in the grid's order: {:?}",
+            a.changes
+        );
+        assert_eq!(a.changes[3].before, ["ripped"]);
+        assert_eq!(a.note, None);
+        // The ID3v1-only MP3 gets a fresh ID3v2 with its fields and the edit.
+        let b = &p.files[1];
+        let keys: Vec<&str> = b.changes.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, ["TIT2", "TPE1", "TRCK", "TALB"], "{:?}", b.changes);
+        apply_file(&dir.join("a.flac"), "flac", &a.changes).unwrap();
+        apply_file(&dir.join("b.mp3"), "mp3", &b.changes).unwrap();
+        let seen = tags::view(&tags::read(&dir.join("a.flac"), "flac"));
+        assert_eq!(seen.title, ["One (live)"]);
+        assert_eq!(seen.track, ["3"]);
+        assert_eq!(seen.composer, ["Cy"]);
+        assert!(seen.comment.is_empty());
+        assert_eq!(seen.artist, ["Ann"]);
+        let seen = tags::view(&tags::read(&dir.join("b.mp3"), "mp3"));
+        assert_eq!(seen.album, ["Sessions"]);
+        assert_eq!(seen.title, ["Title"]);
+        assert!(!seen.id3v1_only);
+        // Nothing to change, a file that is not in the folder, a bad track number.
+        let same = plan_edits(
+            &dir,
+            "",
+            &decoders(),
+            &[Edit {
+                name: "a.flac".to_string(),
+                set: [("title".to_string(), "One (live)".to_string())]
+                    .into_iter()
+                    .collect(),
+            }],
+        )
+        .unwrap();
+        assert!(!same.changed);
+        assert_eq!(same.files[0].note.as_deref(), Some("nothing to change"));
+        assert!(plan_edits(
+            &dir,
+            "",
+            &decoders(),
+            &[Edit {
+                name: "zzz.flac".to_string(),
+                set: BTreeMap::new()
+            }]
+        )
+        .is_err());
+        assert_eq!(number_pair("3/12"), Ok((3, Some(12))));
+        assert_eq!(number_pair(" 7 "), Ok((7, None)));
+        assert!(number_pair("x").is_err());
+        assert!(number_pair("3/y").is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

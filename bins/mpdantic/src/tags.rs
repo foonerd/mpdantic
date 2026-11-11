@@ -651,6 +651,8 @@ pub struct Seen {
     pub disc: Vec<String>,
     pub date: Vec<String>,
     pub genre: Vec<String>,
+    pub composer: Vec<String>,
+    pub comment: Vec<String>,
     /// Keys MPD does not read, with the block they are in.
     pub ignored: Vec<String>,
     /// An ID3v1 block with nothing else to read.
@@ -672,6 +674,8 @@ impl Seen {
             "disc" => &mut self.disc,
             "date" => &mut self.date,
             "genre" => &mut self.genre,
+            "composer" => &mut self.composer,
+            "comment" => &mut self.comment,
             _ => return,
         };
         list.push(value.to_string());

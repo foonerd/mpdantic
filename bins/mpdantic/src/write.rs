@@ -44,6 +44,8 @@ pub struct Request {
     pub base: Option<String>,
     /// The Volumio playlist's name (`volumio_playlist`); the file's stem when not given.
     pub name: Option<String>,
+    /// The fields set by hand, file by file (`tagedit`).
+    pub edits: Option<Vec<tagfix::Edit>>,
 }
 
 /// The batch as it would be written, for the page to confirm.
@@ -110,6 +112,8 @@ pub struct Preview {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     pub left_out: usize,
+    /// The tags set by hand from the grid, not by the rules (`tagedit`).
+    pub edited: bool,
 }
 
 /// What an apply or an undo did.
@@ -208,6 +212,7 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, place: Strin
         name: None,
         from: None,
         left_out: 0,
+        edited: false,
     }
 }
 
@@ -224,6 +229,7 @@ pub fn prepare(
         "mpdignore" => prepare_lines(music, shares, id, req),
         "cue" => prepare_cue(music, shares, decoders, id, req),
         "tags" => prepare_tags(music, shares, decoders, id, req),
+        "tagedit" => prepare_tagedit(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         _ => Err("the kind is not one the core writes".to_string()),
@@ -466,6 +472,35 @@ fn prepare_tags(
     Ok(p)
 }
 
+/// The tags of the folder's files set by hand, file by file: the same tags path as the
+/// repairs (the preview per file and key, lofty in place, the audio guard, the journal
+/// per key, the undo), the changes from the grid instead of the rules.
+fn prepare_tagedit(
+    music: &Path,
+    shares: &[Share],
+    decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, String> {
+    let path = Library::check(&req.path).ok_or_else(|| "not a library path".to_string())?;
+    let dir = folder_dir(music, &path);
+    if !dir.is_dir() {
+        return Err("no such folder".to_string());
+    }
+    let edits = req.edits.as_deref().unwrap_or(&[]);
+    if edits.is_empty() {
+        return Err("nothing edited".to_string());
+    }
+    let place = place_text(shares, &path)?;
+    let planned = tagfix::plan_edits(&dir, &path, decoders, edits)?;
+    let mut p = empty(id, "tags", path.clone(), path, "tags", place);
+    p.exists = true;
+    p.changed = planned.changed;
+    p.files = planned.files;
+    p.edited = true;
+    Ok(p)
+}
+
 /// A playlist's repair: the entries MPD cannot find looked for under the base
 /// folder and written relative to the playlist's folder, the mark, the encoding, a
 /// PLS's count, a `.m3u` beside an m3u8 or an xspf.
@@ -680,7 +715,11 @@ fn note_for(preview: &Preview, written: usize) -> String {
             } else {
                 &preview.path
             },
-            on()
+            if preview.edited {
+                "edited file by file".to_string()
+            } else {
+                on()
+            }
         ),
         _ => format!(
             "{} {} into {}",
@@ -1039,6 +1078,7 @@ mod tests {
             date: None,
             base: None,
             name: None,
+            edits: None,
         }
     }
 
@@ -1054,6 +1094,7 @@ mod tests {
             date: None,
             base: None,
             name: None,
+            edits: None,
         }
     }
 
@@ -1069,6 +1110,7 @@ mod tests {
             date: None,
             base: None,
             name: None,
+            edits: None,
         }
     }
 
@@ -1550,6 +1592,7 @@ mod tests {
             date: None,
             base: None,
             name: None,
+            edits: None,
         };
         let p = prepare(&music, &shares, &d, &playlists, 1, &req).unwrap();
         assert_eq!(p.kind, "volumio_playlist");

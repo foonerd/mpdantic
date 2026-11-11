@@ -94,6 +94,16 @@
   .write .line { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .write textarea { flex: 1; min-width: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; line-height: 1.5; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); resize: vertical; }
   .write textarea:focus { outline: none; border-color: var(--accent); }
+  .grid-wrap { overflow-x: auto; margin-top: 8px; border: 1px solid var(--line); border-radius: 6px; }
+  table.grid { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+  table.grid th, table.grid td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
+  table.grid th { font-weight: 600; background: var(--panel); position: sticky; top: 0; }
+  table.grid tr.setall th { font-weight: normal; top: 29px; }
+  table.grid input[type=text] { width: 13em; padding: 2px 6px; font-size: 13px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); }
+  table.grid tr.setall input[type=text] { width: 10em; }
+  table.grid input.changed { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  table.grid td.file { max-width: 24em; overflow: hidden; text-overflow: ellipsis; }
+  table.grid tbody tr:hover td { background: var(--row-hover, transparent); }
   .system textarea { display: block; width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); color: var(--text); resize: vertical; white-space: pre; overflow-x: auto; }
   .system .actions { align-items: center; }
   .system .help { margin-top: 10px; }
@@ -201,6 +211,13 @@
         <div class="help">The audio files of the folder in hand, not the folders under it. The album artist and the date written where MPD reads them, text that is UTF-8 read as Latin-1 decoded, a tag given twice kept once, an ID3v2 tag from ID3v1, and the Album, Album artist and Date every file gets where the files disagree. Each file is shown with its changes before anything is written. DSF and DFF files are read, not written.</div>
         <div class="line"><button id="preview-tags">Preview</button></div>
         <div id="preview-tags-box"></div>
+      </div>
+      <div class="write">
+        <b>Edit tags file by file</b>
+        <div class="help">Every audio file of the folder in hand as a grid, one column per field MPD reads. Type in a cell, or set a column for every file at once; an empty cell removes the key. Nothing leaves the page until Preview, which shows every change key by key; the write and the undo are the same as for the repairs.</div>
+        <div class="line"><button id="open-editor">Open the editor</button><span class="help" id="edit-count"></span><button id="preview-edits" disabled>Preview</button></div>
+        <div id="editor-box"></div>
+        <div id="preview-edits-box"></div>
       </div>
     </div>
   </div>
@@ -388,6 +405,161 @@
     if (name === 'undo') loadUndo();
     if (name === 'system') loadReport();
   }
+
+  // ------------------------------------------------------------ the tag editor
+
+  // The folder's audio files as a grid, one column per field MPD reads; the edits
+  // kept here until Preview, then sent as the tagedit kind and shown through the same
+  // card as the repairs.
+  const EDIT_FIELDS = [['track', 'Track'], ['title', 'Title'], ['artist', 'Artist'], ['albumartist', 'Album artist'], ['album', 'Album'], ['date', 'Date'], ['disc', 'Disc'], ['genre', 'Genre'], ['composer', 'Composer'], ['comment', 'Comment']];
+  const grid = { path: null, files: [], edits: {}, columns: ['track', 'title', 'artist', 'albumartist', 'album', 'date'] };
+  const fieldLabel = (f) => (EDIT_FIELDS.find((x) => x[0] === f) || [f, f])[1];
+  const original = (file, f) => (file.values[f] || []).join(' ; ');
+
+  // The grid read from the folder; the preview box is cleared when the user opens
+  // the editor, kept when the grid is read again after a write (the outcome stays).
+  async function openEditor(afterWrite) {
+    const box = $('editor-box');
+    box.textContent = '';
+    box.appendChild(el('div', 'progress', 'Reading the folder...'));
+    try {
+      const r = await api('/api/tags?path=' + encodeURIComponent(current.path));
+      grid.path = r.path;
+      grid.files = r.files || [];
+      grid.edits = {};
+      if (afterWrite !== true) $('preview-edits-box').textContent = '';
+      renderGrid();
+    } catch (e) {
+      box.textContent = '';
+      box.appendChild(el('div', 'help bad', 'The folder could not be read: ' + (e.message || e)));
+    }
+  }
+
+  function setCell(name, field, value) {
+    const file = grid.files.find((x) => x.name === name);
+    if (!file) return;
+    if (!grid.edits[name]) grid.edits[name] = {};
+    if (value === original(file, field)) {
+      delete grid.edits[name][field];
+      if (!Object.keys(grid.edits[name]).length) delete grid.edits[name];
+    } else {
+      grid.edits[name][field] = value;
+    }
+  }
+
+  function editsBody() {
+    return Object.keys(grid.edits).map((name) => ({ name, set: grid.edits[name] }));
+  }
+
+  function updateEditCount() {
+    const n = editsBody().length;
+    $('preview-edits').disabled = n === 0;
+    $('edit-count').textContent = grid.path === null ? '' : (n ? n + (n === 1 ? ' file' : ' files') + ' changed, not written yet.' : 'Nothing changed yet.');
+  }
+
+  function renderGrid() {
+    const box = $('editor-box');
+    box.textContent = '';
+    if (!grid.files.length) {
+      box.appendChild(el('div', 'help', 'No audio files in this folder; the editor works on the folder in hand, not the folders under it.'));
+      updateEditCount();
+      return;
+    }
+    const pick = el('div', 'line');
+    pick.appendChild(el('span', 'help', 'Columns: '));
+    EDIT_FIELDS.forEach(([f, label]) => {
+      const l = el('label', 'pref');
+      const c = el('input');
+      c.type = 'checkbox';
+      c.checked = grid.columns.includes(f);
+      c.addEventListener('change', () => {
+        grid.columns = EDIT_FIELDS.map((x) => x[0]).filter((x) => (x === f ? c.checked : grid.columns.includes(x)));
+        renderGrid();
+      });
+      l.appendChild(c);
+      l.appendChild(text(' ' + label));
+      pick.appendChild(l);
+    });
+    box.appendChild(pick);
+    const wrap = el('div', 'grid-wrap');
+    const table = el('table', 'grid');
+    const thead = el('thead');
+    const h1 = el('tr');
+    h1.appendChild(el('th', '', 'File'));
+    grid.columns.forEach((f) => h1.appendChild(el('th', '', fieldLabel(f))));
+    thead.appendChild(h1);
+    const h2 = el('tr', 'setall');
+    h2.appendChild(el('th', 'help', 'every file:'));
+    grid.columns.forEach((f) => {
+      const th = el('th');
+      const i = el('input');
+      i.type = 'text';
+      i.placeholder = 'one value for all';
+      i.spellcheck = false;
+      const b = el('button', 'small', 'Set');
+      b.title = 'Put this value in every file\'s ' + fieldLabel(f) + '; empty removes it from every file.';
+      b.addEventListener('click', () => { grid.files.filter((file) => file.writable).forEach((file) => setCell(file.name, f, i.value)); renderGrid(); });
+      th.appendChild(i);
+      th.appendChild(text(' '));
+      th.appendChild(b);
+      h2.appendChild(th);
+    });
+    thead.appendChild(h2);
+    table.appendChild(thead);
+    const tbody = el('tbody');
+    grid.files.forEach((file) => {
+      const tr = el('tr');
+      const name = el('td', 'file');
+      name.appendChild(el('code', '', file.name));
+      if (!file.writable) name.appendChild(el('span', 'help', ' ' + (file.problem ? 'not read: ' + file.problem : 'read, not written here')));
+      name.title = file.path + ' (' + file.format + ')';
+      tr.appendChild(name);
+      grid.columns.forEach((f) => {
+        const td = el('td');
+        const i = el('input');
+        i.type = 'text';
+        i.spellcheck = false;
+        const orig = original(file, f);
+        const edited = grid.edits[file.name] && (f in grid.edits[file.name]);
+        i.value = edited ? grid.edits[file.name][f] : orig;
+        if ((file.values[f] || []).length > 1) i.title = 'Several values as read; an edit replaces them with the one typed.';
+        i.disabled = !file.writable;
+        if (edited) i.className = 'changed';
+        i.addEventListener('input', () => {
+          setCell(file.name, f, i.value);
+          i.className = i.value !== orig ? 'changed' : '';
+          updateEditCount();
+        });
+        td.appendChild(i);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+    updateEditCount();
+  }
+
+  $('open-editor').addEventListener('click', () => openEditor(false));
+  $('preview-edits').addEventListener('click', () => {
+    const button = $('preview-edits');
+    button.disabled = true;
+    const box = $('preview-edits-box');
+    const again = async () => {
+      try {
+        const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'tagedit', path: grid.path, edits: editsBody() }) });
+        // After a write the grid is read again, so it shows the files as they are now;
+        // a cancel keeps the edits in hand.
+        renderPreview(p, box, again, () => { if (box.querySelector('.done')) openEditor(true); else updateEditCount(); });
+      } catch (e) {
+        box.textContent = '';
+        box.appendChild(el('div', 'help bad', String(e.message || e)));
+        updateEditCount();
+      }
+    };
+    again();
+  });
 
   // ------------------------------------------------------------ the system tab
 
