@@ -5,6 +5,8 @@
   "page.state.unreachable": "无法连接",
   "page.close": "关闭",
   "page.more": "更多",
+  "page.keep_out": "排除",
+  "page.keep_out_title": "把此文件夹的名称作为一行放入当前文件夹的 .mpdignore（忽略标签页）；预览并写入之前不会写入任何内容。",
   "page.tab.ignore": "忽略",
   "page.tab.cue": "CUE 文件",
   "page.tab.tags": "标签",

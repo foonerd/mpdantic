@@ -43,6 +43,7 @@
   .row.dir .name { color: var(--accent); font-weight: 600; }
   .row.dot .name { color: var(--muted); font-style: italic; }
   .row .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; flex: none; }
+  .row .keep { flex: none; font-size: 12px; padding: 3px 9px; }
   .foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
   button, select { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; }
   button:hover, select:hover { border-color: var(--accent); }
@@ -435,6 +436,12 @@
       const row = el('div', 'row' + (entry.dir ? ' dir' : '') + (entry.name.startsWith('.') ? ' dot' : ''));
       row.appendChild(el('span', 'icon', entry.dir ? String.fromCharCode(0x25B8) : String.fromCharCode(0xB7)));
       row.appendChild(el('span', 'name', entry.name));
+      if (entry.dir) {
+        const keep = el('button', 'keep', t('page.keep_out'));
+        keep.title = t('page.keep_out_title');
+        keep.addEventListener('click', (ev) => { ev.stopPropagation(); keepOut(entry.name); });
+        row.appendChild(keep);
+      }
       row.appendChild(el('span', 'size', entry.dir ? '' : size(entry.size)));
       if (entry.dir) row.addEventListener('click', () => { location.hash = toHash((current.path ? current.path + '/' : '') + entry.name); });
       list.appendChild(row);
@@ -449,6 +456,16 @@
     $('analyse-cue').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-tags').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
+  }
+
+  // A folder of the listing kept out: its name as a line in the .mpdignore of the
+  // folder in hand, on the Ignore tab, through the preview and the write as they are.
+  function keepOut(name) {
+    showTab('ignore');
+    toggleLine(name, true);
+    const field = $('lines');
+    field.scrollIntoView({ block: 'center' });
+    field.focus();
   }
 
   function failed(path, message) {

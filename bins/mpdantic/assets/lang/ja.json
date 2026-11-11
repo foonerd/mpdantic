@@ -5,6 +5,8 @@
   "page.state.unreachable": "到達不能",
   "page.close": "閉じる",
   "page.more": "さらに表示",
+  "page.keep_out": "除外する",
+  "page.keep_out_title": "このフォルダーの名前を、現在のフォルダーの .mpdignore に行として入れます (除外タブ)。プレビューと書き込みの前には何も書き込まれません。",
   "page.tab.ignore": "除外",
   "page.tab.cue": "CUE シート",
   "page.tab.tags": "タグ",

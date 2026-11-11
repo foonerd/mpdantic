@@ -5,6 +5,8 @@
   "page.state.unreachable": "unreachable",
   "page.close": "Close",
   "page.more": "More",
+  "page.keep_out": "Keep out",
+  "page.keep_out_title": "Put this folder's name as a line into the .mpdignore of the folder in hand, on the Ignore tab; nothing is written before the preview and Write.",
   "page.tab.ignore": "Ignore",
   "page.tab.cue": "CUE sheets",
   "page.tab.tags": "Tags",

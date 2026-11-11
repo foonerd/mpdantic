@@ -5,6 +5,8 @@
   "page.state.unreachable": "onbereikbaar",
   "page.close": "Sluiten",
   "page.more": "Meer",
+  "page.keep_out": "Buitenhouden",
+  "page.keep_out_title": "De naam van deze map als regel in de .mpdignore van de huidige map zetten, op het tabblad Negeren; er wordt niets geschreven voor de voorvertoning en Schrijven.",
   "page.tab.ignore": "Negeren",
   "page.tab.cue": "CUE-sheets",
   "page.tab.tags": "Tags",

@@ -5,6 +5,8 @@
   "page.state.unreachable": "inacessível",
   "page.close": "Fechar",
   "page.more": "Mais",
+  "page.keep_out": "Excluir",
+  "page.keep_out_title": "Pôr o nome desta pasta como linha no .mpdignore da pasta atual, no separador Ignorar; nada é escrito antes da pré-visualização e de Escrever.",
   "page.tab.ignore": "Ignorar",
   "page.tab.cue": "Folhas CUE",
   "page.tab.tags": "Etiquetas",

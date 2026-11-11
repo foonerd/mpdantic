@@ -5,6 +5,8 @@
   "page.state.unreachable": "nicht erreichbar",
   "page.close": "Schließen",
   "page.more": "Mehr",
+  "page.keep_out": "Fernhalten",
+  "page.keep_out_title": "Den Namen dieses Ordners als Zeile in die .mpdignore des aktuellen Ordners setzen, im Tab Ignorieren; vor Vorschau und Schreiben wird nichts geschrieben.",
   "page.tab.ignore": "Ignorieren",
   "page.tab.cue": "CUE-Sheets",
   "page.tab.tags": "Tags",

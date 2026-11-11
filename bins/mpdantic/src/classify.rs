@@ -43,13 +43,25 @@ pub const SYSTEM_FOLDERS: &[&str] = &[
     // hash in a bracket, which fnmatch reads as the character itself.
     "[#]recycle",
     "@eaDir",
+    // QNAP: the recycle bin at a share's root, the snapshots, the thumbnails its
+    // Multimedia Console keeps in every folder with pictures.
+    "@Recycle",
     "@Recently-Snapshot",
+    ".@__thumb",
     ".Trash*",
     ".Trashes",
     ".TemporaryItems",
     ".Spotlight-V100",
     ".fseventsd",
     ".AppleDouble",
+    // Netatalk: its database and desktop folders, the trash and the temporary items
+    // of an AFP share, and the two folders Mac OS 9 clients made.
+    ".AppleDB",
+    ".AppleDesktop",
+    "Network Trash Folder",
+    "Temporary Items",
+    "TheVolumeSettingsFolder",
+    "TheFindByContentFolder",
     "lost+found",
     "System Volume Information",
     "$RECYCLE.BIN",

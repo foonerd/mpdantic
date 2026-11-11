@@ -5,6 +5,8 @@
   "page.state.unreachable": "irraggiungibile",
   "page.close": "Chiudi",
   "page.more": "Altro",
+  "page.keep_out": "Escludi",
+  "page.keep_out_title": "Mettere il nome di questa cartella come riga nel .mpdignore della cartella corrente, nella scheda Ignora; nulla viene scritto prima dell'anteprima e di Scrivi.",
   "page.tab.ignore": "Ignora",
   "page.tab.cue": "Fogli CUE",
   "page.tab.tags": "Tag",

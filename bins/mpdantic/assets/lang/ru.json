@@ -5,6 +5,8 @@
   "page.state.unreachable": "недоступно",
   "page.close": "Закрыть",
   "page.more": "Ещё",
+  "page.keep_out": "Исключить",
+  "page.keep_out_title": "Поставить имя этой папки строкой в .mpdignore текущей папки, на вкладке Исключения; до предпросмотра и записи ничего не записывается.",
   "page.tab.ignore": "Исключения",
   "page.tab.cue": "Файлы CUE",
   "page.tab.tags": "Теги",

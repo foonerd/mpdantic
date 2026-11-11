@@ -5,6 +5,8 @@
   "page.state.unreachable": "injoignable",
   "page.close": "Fermer",
   "page.more": "Plus",
+  "page.keep_out": "Exclure",
+  "page.keep_out_title": "Mettre le nom de ce dossier comme ligne dans le .mpdignore du dossier courant, dans l'onglet Ignorer ; rien n'est écrit avant l'aperçu et Écrire.",
   "page.tab.ignore": "Ignorer",
   "page.tab.cue": "Fiches CUE",
   "page.tab.tags": "Tags",

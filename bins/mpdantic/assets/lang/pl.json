@@ -5,6 +5,8 @@
   "page.state.unreachable": "nieosiągalny",
   "page.close": "Zamknij",
   "page.more": "Więcej",
+  "page.keep_out": "Wyklucz",
+  "page.keep_out_title": "Wstawić nazwę tego folderu jako wiersz do .mpdignore bieżącego folderu, na karcie Ignorowanie; nic nie zostanie zapisane przed podglądem i Zapisz.",
   "page.tab.ignore": "Ignorowanie",
   "page.tab.cue": "Arkusze CUE",
   "page.tab.tags": "Tagi",

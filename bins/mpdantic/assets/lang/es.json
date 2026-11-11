@@ -5,6 +5,8 @@
   "page.state.unreachable": "inalcanzable",
   "page.close": "Cerrar",
   "page.more": "Más",
+  "page.keep_out": "Excluir",
+  "page.keep_out_title": "Poner el nombre de esta carpeta como línea en el .mpdignore de la carpeta actual, en la pestaña Ignorar; no se escribe nada antes de la vista previa y Escribir.",
   "page.tab.ignore": "Ignorar",
   "page.tab.cue": "Hojas CUE",
   "page.tab.tags": "Etiquetas",
