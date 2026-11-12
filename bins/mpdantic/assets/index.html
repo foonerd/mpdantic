@@ -91,10 +91,11 @@
   .sugg.batch .tag { flex: none; }
   .sugg.batch .note { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .sugg.batch button.undo { flex: none; align-self: center; }
-  /* Quiet Ignore summary at the bottom of non-Ignore tabs. */
-  details.ignore-trailer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
-  details.ignore-trailer summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  details.ignore-trailer .inner { margin-top: 8px; }
+  /* Quiet Ignore context: trailer on other tabs, foot under a check report. */
+  details.ignore-trailer, details.ignore-foot { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+  details.ignore-trailer summary, details.ignore-foot summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details.ignore-trailer .inner, details.ignore-foot .inner { margin-top: 8px; }
+  details.ignore-foot .local { margin-top: 10px; }
   .sugg .why { color: var(--muted); font-size: 13px; margin-top: 2px; }
   .sugg .ex { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
   .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; background: var(--line); color: var(--muted); text-transform: uppercase; }
@@ -736,46 +737,35 @@
     if (!tabChanged) refreshIgnoreTrailer();
   }
 
-  // Collapsed Ignore summary at the bottom of work tabs that are not Ignore.
+  // Collapsed offer of this folder's .mpdignore when it exists (incl. library root).
+  // Skipped when a check report already carries the Ignore foot (same offer there).
   async function refreshIgnoreTrailer() {
     document.querySelectorAll('.ignore-trailer').forEach((n) => n.remove());
     if (activeTab === 'ignore' || activeTab === 'undo' || activeTab === 'system') return;
-    // Library root: nothing useful to summarise.
-    if (!current.path) return;
+    const report = $('report-' + activeTab);
+    if (report && report.querySelector('.ignore-foot')) return;
     const host = activeTab === 'volumio'
       ? $('panel-volumio')
       : ($('panel-' + activeTab) && $('panel-' + activeTab).querySelector('.body'));
     if (!host) return;
+    let r;
+    try {
+      r = await api('/api/mpdignore?path=' + encodeURIComponent(current.path || ''));
+    } catch (e) {
+      return;
+    }
+    if (activeTab === 'ignore' || activeTab === 'undo' || activeTab === 'system') return;
+    if (!r.exists) return;
     const trailer = el('details', 'ignore-trailer');
-    const sum = el('summary', '', t('page.ignore.trailer_title'));
-    trailer.appendChild(sum);
+    const n = (r.lines || []).length;
+    trailer.appendChild(el('summary', '', t('page.ignore.trailer_title')));
     const inner = el('div', 'inner');
-    inner.appendChild(el('div', 'help', t('page.ignore.trailer_loading')));
+    inner.appendChild(el('div', 'help', t('page.ignore.trailer_has', { n })));
+    const open = el('button', 'small', t('page.ignore.trailer_open'));
+    open.addEventListener('click', () => showTab('ignore'));
+    inner.appendChild(open);
     trailer.appendChild(inner);
     host.appendChild(trailer);
-    try {
-      const r = await api('/api/mpdignore?path=' + encodeURIComponent(current.path));
-      // Stale reply if the tab or folder moved while we waited.
-      if (activeTab === 'ignore' || activeTab === 'undo' || activeTab === 'system') return;
-      if (!trailer.isConnected) return;
-      inner.textContent = '';
-      const n = (r.lines || []).length;
-      if (r.exists) {
-        inner.appendChild(el('div', 'help', t('page.ignore.trailer_has', { n })));
-      } else {
-        inner.appendChild(el('div', 'help', t('page.ignore.trailer_none')));
-      }
-      const open = el('button', 'small', t('page.ignore.trailer_open'));
-      open.addEventListener('click', () => showTab('ignore'));
-      inner.appendChild(open);
-    } catch (e) {
-      if (!trailer.isConnected) return;
-      inner.textContent = '';
-      inner.appendChild(el('div', 'help', t('page.ignore.trailer_none')));
-      const open = el('button', 'small', t('page.ignore.trailer_open'));
-      open.addEventListener('click', () => showTab('ignore'));
-      inner.appendChild(open);
-    }
   }
 
   // ------------------------------------------------------------ the Volumio tab
@@ -1409,7 +1399,10 @@
     if (r.cancelled) notes.push(t('page.ignore.cancelled'));
     const s = section(box, t('page.ignore.suggested'), t('page.ignore.suggested_help', { path: r.path || t('page.library_root') }));
     if (!r.suggestions.length) {
-      s.appendChild(el('div', 'help', t('page.ignore.nothing')));
+      const inherited = (r.in_force || []).reduce((n, x) => n + (x.lines || []).length, 0);
+      s.appendChild(el('div', 'help', inherited
+        ? t('page.ignore.nothing_inherited', { n: inherited })
+        : t('page.ignore.nothing')));
     } else {
       r.suggestions.forEach((g) => {
         const d = el('div', 'sugg');
@@ -1431,7 +1424,6 @@
       const e = section(box, t('page.ignore.already'), t('page.ignore.already_help', { n: r.excluded.count }));
       e.appendChild(el('div', 'ex', examples(r.excluded.examples)));
     }
-    linesInForce(box, r.in_force);
     const audio = Object.keys(r.audio_suffixes).sort((a, b) => r.audio_suffixes[b] - r.audio_suffixes[a]).map((k) => ['.' + k, String(r.audio_suffixes[k])]);
     if (audio.length) table(section(box, t('page.ignore.audio_by_suffix')), audio);
     const ffmpeg = Object.keys(r.ffmpeg_suffixes || {}).sort((a, b) => r.ffmpeg_suffixes[b] - r.ffmpeg_suffixes[a]).map((k) => [pickRow('*.' + k), String(r.ffmpeg_suffixes[k])]);
@@ -1452,6 +1444,8 @@
         return [cell, String(p[1])];
       }));
     }
+    // Own subsection at the foot of the report, immediately above the local .mpdignore editor.
+    linesInForce(box, r.in_force);
     syncPicks();
   }
 
@@ -1472,31 +1466,77 @@
     return row;
   }
 
+  // Collapsed by default: one human line in the summary; patterns only on expand.
+  function inForceSummary(inForce) {
+    const files = inForce.length;
+    const n = inForce.reduce((a, l) => a + (l.lines || []).length, 0);
+    if (!files) return t('page.in_force.none');
+    if (files === 1 && !(inForce[0].dir || '')) return t('page.in_force.summary_root', { n });
+    if (files === 1) return t('page.in_force.summary_one', { n, path: theRoot(inForce[0].dir) });
+    return t('page.in_force.summary_many', { n, files });
+  }
+
   function linesInForce(box, inForce) {
-    const f = section(box, t('page.in_force.title'), inForce.length ? t('page.in_force.help') : t('page.in_force.none'));
-    inForce.forEach((l) => {
-      const row = el('div', 'sugg');
-      const top = el('div', 'top');
-      const open = el('a', 'path', theRoot(l.dir) + '/.mpdignore');
-      open.href = '/?tab=ignore' + toHash(l.dir || '');
-      open.title = t('page.in_force.open');
-      top.appendChild(open);
-      row.appendChild(top);
-      const lines = el('div', 'ex');
-      l.lines.forEach((line, i) => { if (i) lines.appendChild(text('  |  ')); lines.appendChild(el('code', '', line)); });
-      if (!l.lines.length) lines.textContent = t('page.in_force.no_pattern');
-      row.appendChild(lines);
-      // A line starting with # is a comment to MPD; one that looks like a name did
-      // nothing for its writer.
-      l.dead.forEach((line) => {
-        const why = el('div', 'why');
-        why.appendChild(el('span', 'tag warn', t('page.in_force.dead')));
-        why.appendChild(text(' '));
-        why.appendChild(tn('page.in_force.dead_line', { line: el('code', '', line), fixed: el('code', '', '[#]' + line.slice(1)) }));
-        row.appendChild(why);
+    const wrap = el('details', 'ignore-foot');
+    const head = inForce.length
+      ? t('page.in_force.title') + ' — ' + inForceSummary(inForce)
+      : t('page.in_force.none');
+    wrap.appendChild(el('summary', '', head));
+    const inner = el('div', 'inner');
+    if (inForce.length) {
+      inner.appendChild(el('div', 'help', t('page.in_force.help')));
+      inForce.forEach((l) => {
+        const row = el('div', 'sugg');
+        const top = el('div', 'top');
+        const open = el('a', 'path', theRoot(l.dir) + '/.mpdignore');
+        open.href = '/?tab=ignore' + toHash(l.dir || '');
+        open.title = t('page.in_force.open');
+        top.appendChild(open);
+        row.appendChild(top);
+        const lines = el('div', 'ex');
+        l.lines.forEach((line, i) => { if (i) lines.appendChild(text('  |  ')); lines.appendChild(el('code', '', line)); });
+        if (!l.lines.length) lines.textContent = t('page.in_force.no_pattern');
+        row.appendChild(lines);
+        // A line starting with # is a comment to MPD; one that looks like a name did
+        // nothing for its writer.
+        l.dead.forEach((line) => {
+          const why = el('div', 'why');
+          why.appendChild(el('span', 'tag warn', t('page.in_force.dead')));
+          why.appendChild(text(' '));
+          why.appendChild(tn('page.in_force.dead_line', { line: el('code', '', line), fixed: el('code', '', '[#]' + line.slice(1)) }));
+          row.appendChild(why);
+        });
+        inner.appendChild(row);
       });
-      f.appendChild(row);
-    });
+    }
+    wrap.appendChild(inner);
+    box.appendChild(wrap);
+    return wrap;
+  }
+
+  // Foot of a CUE / Tags / Playlists report: collapsed lines in force, then this
+  // folder's .mpdignore only when that file is present (edit lives on Ignore).
+  function ignoreFoot(box, inForce) {
+    const wrap = linesInForce(box, inForce || []);
+    offerLocalMpdignore(wrap);
+    refreshIgnoreTrailer();
+  }
+
+  async function offerLocalMpdignore(wrap) {
+    let r;
+    try {
+      r = await api('/api/mpdignore?path=' + encodeURIComponent(current.path || ''));
+    } catch (e) {
+      return;
+    }
+    if (!wrap.isConnected || !r.exists) return;
+    const n = (r.lines || []).length;
+    const local = el('div', 'local');
+    local.appendChild(el('div', 'help', t('page.ignore.trailer_has', { n })));
+    const open = el('button', 'small', t('page.ignore.trailer_open'));
+    open.addEventListener('click', () => showTab('ignore'));
+    local.appendChild(open);
+    wrap.querySelector('.inner').appendChild(local);
   }
 
   // -------------------------------------------------------------- the CUE report
@@ -1538,7 +1578,11 @@
     const rows = [[t('page.cue.sheets'), String(r.sheets)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
     codeWorkThrough(totals, 'cue', r);
-    if (!r.sheets) { totals.appendChild(el('div', 'help', t('page.cue.none'))); linesInForce(box, r.in_force); return; }
+    if (!r.sheets) {
+      totals.appendChild(el('div', 'help', t('page.cue.none')));
+      ignoreFoot(box, r.in_force);
+      return;
+    }
     const list = section(box, t('page.cue.each'), t('page.cue.each_help') + (r.list_truncated ? ' ' + t('page.cue.only_first_sheets', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
       const d = el('details', 'sheet');
@@ -1575,7 +1619,7 @@
       d.appendChild(inner);
       list.appendChild(d);
     });
-    linesInForce(box, r.in_force);
+    ignoreFoot(box, r.in_force);
   }
 
   // -------------------------------------------------------------- the tag report
@@ -1584,6 +1628,8 @@
     const box = $('report-tags');
     box.textContent = '';
     if (!r) return;
+    // Whole-library tag checks mix music with appliance trees; steer the workplace.
+    if (!r.path) box.appendChild(el('div', 'help', t('page.tags.scope_root_hint')));
     const formats = Object.keys(r.by_format).map((k) => k + ' ' + r.by_format[k]).join(separator());
     const notes = commonNotes(r, [t('page.tags.read', { n: r.read }) + (formats ? ' (' + formats + ')' : '') + '.']);
     const splits = section(box, t('page.tags.splits'), r.splits.length
@@ -1628,7 +1674,7 @@
       if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
       f.appendChild(d);
     });
-    linesInForce(box, r.in_force);
+    ignoreFoot(box, r.in_force);
   }
 
   // --------------------------------------------------------- the playlist report
@@ -1649,7 +1695,11 @@
     const rows = [[t('page.playlists.playlists'), String(r.playlists)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
     codeWorkThrough(totals, 'playlists', r);
-    if (!r.playlists) { totals.appendChild(el('div', 'help', t('page.playlists.none'))); linesInForce(box, r.in_force); return; }
+    if (!r.playlists) {
+      totals.appendChild(el('div', 'help', t('page.playlists.none')));
+      ignoreFoot(box, r.in_force);
+      return;
+    }
     const list = section(box, t('page.playlists.each'), t('page.playlists.each_help') + (r.list_truncated ? ' ' + t('page.playlists.only_first', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
       const d = el('details', 'sheet');
@@ -1692,7 +1742,7 @@
       d.appendChild(inner);
       list.appendChild(d);
     });
-    linesInForce(box, r.in_force);
+    ignoreFoot(box, r.in_force);
   }
 
   // ------------------------------------------------------------ the findings view
