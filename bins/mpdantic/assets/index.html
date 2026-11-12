@@ -86,6 +86,15 @@
   .sugg { padding: 8px 0; border-bottom: 1px solid var(--line); }
   .sugg:last-child { border-bottom: 0; }
   .sugg .top { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  /* Written tab: long notes wrap; Undo stays on the right, vertically centred. */
+  .sugg.batch .top { flex-wrap: nowrap; align-items: center; }
+  .sugg.batch .tag { flex: none; }
+  .sugg.batch .note { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .sugg.batch button.undo { flex: none; align-self: center; }
+  /* Quiet Ignore summary at the bottom of non-Ignore tabs. */
+  details.ignore-trailer { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+  details.ignore-trailer summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details.ignore-trailer .inner { margin-top: 8px; }
   .sugg .why { color: var(--muted); font-size: 13px; margin-top: 2px; }
   .sugg .ex { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
   .tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; background: var(--line); color: var(--muted); text-transform: uppercase; }
@@ -541,10 +550,13 @@
           rename.addEventListener('click', (ev) => { ev.stopPropagation(); openFolderRename(child, $('folder-rename-box')); });
           row.appendChild(rename);
         }
-        const keep = el('button', 'keep', t('page.keep_out'));
-        keep.title = t('page.keep_out_title');
-        keep.addEventListener('click', (ev) => { ev.stopPropagation(); keepOut(entry.name); });
-        row.appendChild(keep);
+        // Keep out is Ignore's write affordance: only while that tab is the focus.
+        if (activeTab === 'ignore') {
+          const keep = el('button', 'keep', t('page.keep_out'));
+          keep.title = t('page.keep_out_title');
+          keep.addEventListener('click', (ev) => { ev.stopPropagation(); keepOut(entry.name); });
+          row.appendChild(keep);
+        }
       }
       row.appendChild(el('span', 'size', entry.dir ? '' : size(entry.size)));
       if (entry.dir) row.addEventListener('click', () => { location.hash = toHash((current.path ? current.path + '/' : '') + entry.name); });
@@ -561,6 +573,7 @@
     $('analyse-tags').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     if (!$('panel-tags').hidden) refreshFolderTagsBlock();
+    refreshIgnoreTrailer();
   }
 
   // A folder of the listing kept out: its name as a line in the .mpdignore of the
@@ -704,17 +717,65 @@
   // ------------------------------------------------------------------ the tabs
 
   const TABS = ['ignore', 'cue', 'tags', 'playlists', 'volumio', 'undo', 'system'];
+  // Which tab's panel is the focus; Keep out follows this, not the listing alone.
+  let activeTab = 'ignore';
 
   function showTab(name) {
     if (!TABS.includes(name)) name = 'ignore';
+    const tabChanged = activeTab !== name;
+    activeTab = name;
     TABS.forEach((t) => {
       $('panel-' + t).hidden = t !== name;
       $('tab-' + t).className = 'tab' + (t === name ? ' active' : '');
     });
     try { localStorage.setItem('mpdantic.tab', name); } catch (e) { /* no storage here */ }
+    if (tabChanged) render();
     if (name === 'undo') loadUndo();
     if (name === 'system') loadReport();
     if (name === 'tags') refreshFolderTagsBlock();
+    if (!tabChanged) refreshIgnoreTrailer();
+  }
+
+  // Collapsed Ignore summary at the bottom of work tabs that are not Ignore.
+  async function refreshIgnoreTrailer() {
+    document.querySelectorAll('.ignore-trailer').forEach((n) => n.remove());
+    if (activeTab === 'ignore' || activeTab === 'undo' || activeTab === 'system') return;
+    // Library root: nothing useful to summarise.
+    if (!current.path) return;
+    const host = activeTab === 'volumio'
+      ? $('panel-volumio')
+      : ($('panel-' + activeTab) && $('panel-' + activeTab).querySelector('.body'));
+    if (!host) return;
+    const trailer = el('details', 'ignore-trailer');
+    const sum = el('summary', '', t('page.ignore.trailer_title'));
+    trailer.appendChild(sum);
+    const inner = el('div', 'inner');
+    inner.appendChild(el('div', 'help', t('page.ignore.trailer_loading')));
+    trailer.appendChild(inner);
+    host.appendChild(trailer);
+    try {
+      const r = await api('/api/mpdignore?path=' + encodeURIComponent(current.path));
+      // Stale reply if the tab or folder moved while we waited.
+      if (activeTab === 'ignore' || activeTab === 'undo' || activeTab === 'system') return;
+      if (!trailer.isConnected) return;
+      inner.textContent = '';
+      const n = (r.lines || []).length;
+      if (r.exists) {
+        inner.appendChild(el('div', 'help', t('page.ignore.trailer_has', { n })));
+      } else {
+        inner.appendChild(el('div', 'help', t('page.ignore.trailer_none')));
+      }
+      const open = el('button', 'small', t('page.ignore.trailer_open'));
+      open.addEventListener('click', () => showTab('ignore'));
+      inner.appendChild(open);
+    } catch (e) {
+      if (!trailer.isConnected) return;
+      inner.textContent = '';
+      inner.appendChild(el('div', 'help', t('page.ignore.trailer_none')));
+      const open = el('button', 'small', t('page.ignore.trailer_open'));
+      open.addEventListener('click', () => showTab('ignore'));
+      inner.appendChild(open);
+    }
   }
 
   // ------------------------------------------------------------ the Volumio tab
@@ -2608,12 +2669,11 @@
     box.className = list.length ? '' : 'progress';
     if (!list.length) { box.textContent = t('page.undo.nothing'); return; }
     list.forEach((b) => {
-      const row = el('div', 'sugg');
+      const row = el('div', 'sugg batch');
       const top = el('div', 'top');
       top.appendChild(el('span', 'tag' + (b.undone ? '' : ' ok'), b.undone ? t('page.undo.undone') : t('page.undo.in_place')));
-      top.appendChild(el('span', '', when(b.when) + ': ' + tm(b.note)));
+      top.appendChild(el('span', 'note', when(b.when) + ': ' + tm(b.note)));
       if (!b.undone) {
-        top.appendChild(el('span', 'grow'));
         const u = el('button', 'undo', t('page.undo.button'));
         u.addEventListener('click', () => undoBatch(b.id, row, u));
         top.appendChild(u);
