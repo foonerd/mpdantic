@@ -1,12 +1,13 @@
 //! MusicBrainz release lookup for a folder (M1): search by album artist, album and
 //! track count, pick a release, map its tracks onto the folder's files, hand the
-//! edits to the existing tag write path. Mixed album tags refuse search and map;
-//! map also refuses a file/track count mismatch or an incomplete title/track pair
-//! (no order-only zip). The search is a short ladder: as tagged, then without an
-//! edition suffix, then without locking the track count; the card says which step
-//! hit. One request per second on the public site, a cache under the data folder,
-//! backoff on 503. A local mirror from the settings skips the gap. No AcoustID,
-//! no write to MusicBrainz.
+//! edits to the existing tag write path. A folder with more than one album tag is
+//! not a dead end on search: the page gets the album groups and what to do next
+//! (split, then look up each). Map still refuses a mixed folder, a file/track count
+//! mismatch, or an incomplete title/track pair (no order-only zip). The search is a
+//! short ladder: as tagged, then without an edition suffix, then without locking the
+//! track count; the card says which step hit. One request per second on the public
+//! site, a cache under the data folder, backoff on 503. A local mirror from the
+//! settings skips the gap. No AcoustID, no write to MusicBrainz.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -102,20 +103,40 @@ impl Client {
     }
 
     /// Search releases for the folder's tags; empty artist and album refuse.
-    /// Mixed album tags in the folder refuse before any lookup.
+    /// More than one album tag returns a guide (step `mixed_album`) with the groups —
+    /// no MusicBrainz call — so the page can say what to do with a mix or dump.
     /// Ladder: as tagged → normalised album with tracks → normalised without tracks.
     pub fn search(&self, music: &Path, path: &str, decoders: &Decoders) -> Result<SearchPage, Msg> {
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
-        refuse_mixed_album(&files)?;
+        let groups = album_groups_for_folder(path, &files);
+        if groups.len() > 1 {
+            return Ok(SearchPage {
+                query: Query {
+                    artist: String::new(),
+                    album: String::new(),
+                    tracks: files.len(),
+                },
+                searched: Query {
+                    artist: String::new(),
+                    album: String::new(),
+                    tracks: files.len(),
+                },
+                step: "mixed_album".into(),
+                releases: Vec::new(),
+                groups,
+            });
+        }
         let query = query_from_files(&files);
         if query.artist.is_empty() && query.album.is_empty() {
             return Err(msg!(
                 "core.mb.no_query",
-                "no album artist or album on the folder's files"
+                "no album artist or album on the folder's files; tag them here first, or split a known mix into album folders"
             ));
         }
-        self.ladder_search(query)
+        let mut page = self.ladder_search(query)?;
+        page.groups = groups;
+        Ok(page)
     }
 
     /// The search ladder for a query already taken from the folder's tags.
@@ -169,6 +190,7 @@ impl Client {
             searched,
             step: step.to_string(),
             releases,
+            groups: Vec::new(),
         })
     }
 
@@ -371,15 +393,27 @@ pub struct ReleaseHit {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct AlbumGroup {
+    pub album: String,
+    pub album_artist: String,
+    pub files: usize,
+    /// Where those files should live: `{library anchor}/{artist}/{album}`.
+    pub folder: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct SearchPage {
     /// Album artist, album and track count as on the folder's files.
     pub query: Query,
     /// What the Lucene query actually used (may be normalised, tracks dropped).
     pub searched: Query,
-    /// Which ladder step produced `releases`: `as_tagged`, `without_suffix`, or
-    /// `without_tracks` (or the last empty step when nothing hit).
+    /// Which ladder step produced `releases`: `as_tagged`, `without_suffix`,
+    /// `without_tracks`, or `mixed_album` when the folder is a mix/dump guide.
     pub step: String,
     pub releases: Vec<ReleaseHit>,
+    /// Album groups in the folder; more than one means look up is not safe yet.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<AlbumGroup>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -723,24 +757,111 @@ fn parse_release(body: &str) -> Result<ReleaseDetail, Msg> {
     })
 }
 
-/// More than one distinct non-empty album tag in the folder refuses lookup and map.
-fn refuse_mixed_album(files: &[FileValues]) -> Result<(), Msg> {
-    let mut albums = BTreeMap::<String, ()>::new();
+/// The library share this folder sits under: `INTERNAL`, `NAS/Audio`, `USB/…`.
+fn library_anchor(folder_path: &str) -> String {
+    let parts: Vec<&str> = folder_path
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .collect();
+    match parts.as_slice() {
+        [] => String::new(),
+        ["NAS", share, ..] | ["USB", share, ..] => format!("{}/{}", parts[0], share),
+        [root, ..] => (*root).to_string(),
+    }
+}
+
+fn album_folder_path(anchor: &str, album_artist: &str, album: &str) -> String {
+    let artist = {
+        let s = crate::names::safe(album_artist);
+        if s.is_empty() {
+            "Unknown Artist".into()
+        } else {
+            s
+        }
+    };
+    let album = {
+        let s = crate::names::safe(album);
+        if s.is_empty() {
+            "Unknown Album".into()
+        } else {
+            s
+        }
+    };
+    if anchor.is_empty() {
+        format!("{artist}/{album}")
+    } else {
+        format!("{anchor}/{artist}/{album}")
+    }
+}
+
+/// Groups the folder's files by album tag (empty album is its own group), each
+/// with the concrete library path those files should move to.
+fn album_groups_for_folder(folder_path: &str, files: &[FileValues]) -> Vec<AlbumGroup> {
+    let anchor = library_anchor(folder_path);
+    album_groups(files)
+        .into_iter()
+        .map(|mut g| {
+            g.folder = album_folder_path(&anchor, &g.album_artist, &g.album);
+            g
+        })
+        .collect()
+}
+
+/// Groups the folder's files by album tag (empty album is its own group).
+fn album_groups(files: &[FileValues]) -> Vec<AlbumGroup> {
+    // key → (display album, artist votes, count)
+    let mut map: BTreeMap<String, (String, BTreeMap<String, usize>, usize)> = BTreeMap::new();
     for f in files {
-        let Some(album) = first_str(f, "album") else {
-            continue;
-        };
-        let key = album.trim().to_ascii_lowercase();
-        if key.is_empty() {
-            continue;
+        let album = first_str(f, "album")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("");
+        let key = album.to_ascii_lowercase();
+        let artist = first_str(f, "albumartist")
+            .or_else(|| first_str(f, "artist"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let entry = map
+            .entry(key)
+            .or_insert_with(|| (album.to_string(), BTreeMap::new(), 0));
+        if entry.0.is_empty() && !album.is_empty() {
+            entry.0 = album.to_string();
         }
-        albums.insert(key, ());
-        if albums.len() > 1 {
-            return Err(msg!(
-                "core.mb.mixed_album",
-                "the folder's files carry more than one album tag; open the album's own folder"
-            ));
+        if !artist.is_empty() {
+            *entry.1.entry(artist).or_insert(0) += 1;
         }
+        entry.2 += 1;
+    }
+    map.into_values()
+        .map(|(album, artists, files)| {
+            let album_artist = artists
+                .into_iter()
+                .max_by_key(|(_, n)| *n)
+                .map(|(a, _)| a)
+                .unwrap_or_default();
+            AlbumGroup {
+                album,
+                album_artist,
+                files,
+                folder: String::new(),
+            }
+        })
+        .collect()
+}
+
+/// More than one distinct non-empty album tag refuses map (one release onto a dump).
+fn refuse_mixed_album(files: &[FileValues]) -> Result<(), Msg> {
+    let named = album_groups(files)
+        .into_iter()
+        .filter(|g| !g.album.is_empty())
+        .count();
+    if named > 1 {
+        return Err(msg!(
+            "core.mb.mixed_album",
+            "the folder's files carry more than one album tag; split into one folder per album before writing a release"
+        ));
     }
     Ok(())
 }
@@ -1168,15 +1289,25 @@ mod tests {
     }
 
     #[test]
-    fn mixed_album_tags_in_the_folder_refuse() {
+    fn mixed_album_tags_in_the_folder_refuse_map_but_group_for_search() {
         let files = vec![
             file(
                 "a.flac",
-                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
+                BTreeMap::from([
+                    ("album".into(), vec!["Hits".into()]),
+                    ("albumartist".into(), vec!["Phil Collins".into()]),
+                ]),
             ),
             file(
                 "b.flac",
-                BTreeMap::from([("album".into(), vec!["But Seriously".into()])]),
+                BTreeMap::from([
+                    ("album".into(), vec!["But Seriously".into()]),
+                    ("albumartist".into(), vec!["Phil Collins".into()]),
+                ]),
+            ),
+            file(
+                "c.flac",
+                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
             ),
         ];
         let err = refuse_mixed_album(&files).unwrap_err();
@@ -1186,6 +1317,26 @@ mod tests {
             BTreeMap::from([("album".into(), vec!["Hits".into()])]),
         )])
         .is_ok());
+        let groups = album_groups_for_folder("INTERNAL/Phil Collins/Phil Collins", &files);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].album, "But Seriously");
+        assert_eq!(groups[0].files, 1);
+        assert_eq!(
+            groups[0].folder,
+            "INTERNAL/Phil Collins/But Seriously"
+        );
+        assert_eq!(groups[1].album, "Hits");
+        assert_eq!(groups[1].files, 2);
+        assert_eq!(groups[1].album_artist, "Phil Collins");
+        assert_eq!(groups[1].folder, "INTERNAL/Phil Collins/Hits");
+        assert_eq!(
+            library_anchor("NAS/Audio/Various"),
+            "NAS/Audio"
+        );
+        assert_eq!(
+            album_folder_path("NAS/Audio", "Albert Hammond Jr.", "Yours To Keep"),
+            "NAS/Audio/Albert Hammond Jr/Yours To Keep"
+        );
     }
 
     #[test]

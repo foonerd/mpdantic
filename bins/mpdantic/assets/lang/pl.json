@@ -173,7 +173,7 @@
   "page.editor.read_only": "odczytany, tu nie zapisywany",
   "page.editor.several": "Kilka wartości, jak odczytano; edycja zastępuje je wpisaną.",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "Wyszukaj wydanie dla bieżącego folderu według wykonawcy albumu, albumu i liczby utworów. Wybierz wynik; Podgląd pokazuje tagi tak, jak zostałyby zapisane plik po pliku tą samą drogą co edytor. Używana jest publiczna strona MusicBrainz z jednym żądaniem na sekundę, chyba że na stronie ustawień wtyczki jest lokalne lustro.",
+  "page.mb.help": "Wyszukaj wydanie dla folderu według album artist, albumu i liczby utworów. Wybierz trafienie; podgląd pokazuje tagi plik po pliku jak w edytorze. Mix lub zrzut z wieloma albumami jest wypisany z następnym krokiem, nie odrzucany. Publiczna strona MusicBrainz działa z jednym żądaniem na sekundę, chyba że lokalne lustro jest w ustawieniach wtyczki.",
   "page.mb.search": "Sprawdź ten folder",
   "page.mb.searching": "Odpytywanie MusicBrainz...",
   "page.mb.none": "Żadne wydanie nie pasuje do tagów folderu.",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "to nie rodzaj, którego uwagi są przechowywane",
   "core.findings.nothing_to_recheck": "brak folderu do ponownego sprawdzenia",
   "core.jobs.no_thread": "nie udało się uruchomić wątku zadania",
-  "core.mb.no_query": "brak wykonawcy albumu i albumu na plikach folderu",
+  "core.mb.no_query": "brak album artist ani albumu na plikach folderu; najpierw otaguj je tutaj albo podziel znany mix na foldery albumów",
   "core.mb.bad_id": "to nie jest identyfikator wydania MusicBrainz",
   "core.mb.http": "MusicBrainz odpowiedział {status}: {body}",
   "core.mb.fetch": "nie udało się dotrzeć do MusicBrainz: {error}",
   "core.mb.bad_json": "nie udało się odczytać JSON MusicBrainz: {error}",
-  "core.mb.mixed_album": "pliki w folderze mają więcej niż jeden tag albumu; otwórz własny folder albumu",
+  "core.mb.mixed_album": "pliki w folderze mają więcej niż jeden tag albumu; przed zapisaniem wydania podziel na jeden folder na album",
   "core.mb.count_mismatch": "folder ma {files} plików, a wydanie ma {tracks} utworów",
   "core.mb.pair_failed": "nie udało się sparować każdego pliku z utworem wydania według tytułu lub numeru utworu",
   "core.folder.root": "a library root is not renamed",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "zmieniono nazwę {n} {n|pliku|plików|plików} w {folder}",
   "core.write.rename_partial": "{error}; {n} {n|poprzedni plik ma zmienioną nazwę i jest zapisany|poprzednie pliki mają zmienione nazwy i są zapisane|poprzednich plików ma zmienione nazwy i jest zapisanych} w dzienniku jako partia {batch}",
   "core.write.not_at": "{path}: nie ma go już w {after}; nie cofnięto",
-  "core.write.name_taken_since": "{path}: pod starą nazwą znów jest plik; nie cofnięto"
+  "core.write.name_taken_since": "{path}: pod starą nazwą znów jest plik; nie cofnięto",
+  "page.mb.mixed_guide": "Wyszukiwanie wymaga jednego albumu w jednym folderze. Ten folder ma {n} albumów (mix, zrzut z imprezy lub stary zbiór). Każdy blok nazywa album i dokładny folder biblioteki, do którego te pliki powinny trafić.",
+  "page.mb.mixed_next": "Gdy pliki jednego albumu są same w tym folderze, otwórz go na liście i znów naciśnij Szukaj. Przycisku Podziel, który przeniesie je za Ciebie, jeszcze nie ma — na razie utwórz folder i przenieś pliki ręcznie (lub na NAS), potem szukaj z wewnątrz.",
+  "page.mb.mixed_move": "Przenieś te pliki do tego folderu:"
 }

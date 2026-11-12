@@ -4,6 +4,11 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Fixed
+
+- MusicBrainz Look up on a mix or dump folder lists the albums found and what to do next, instead of a red refuse. Writing a release onto a multi-album folder still refuses until each album has its own folder.
+- Ignore context on Tags / CUE / Playlists sits collapsed under the work (human summary; local `.mpdignore` only when present), not mid-findings.
+
 ## [0.1.5] - 2026-11-12
 
 The sixth test cut, a pre-release as the five before: MusicBrainz map refuses unsafe folders and pairs by title or track number, on the same two players. Every write is still undoable from the Written tab.
@@ -14,7 +19,7 @@ The sixth test cut, a pre-release as the five before: MusicBrainz map refuses un
 
 ### Fixed
 
-- MusicBrainz map no longer order-zips release tracks onto folder files. A folder with more than one album tag refuses search and map; a file count that is not the release track count refuses map; pairing is by normalised title then disc+track, and an incomplete pair refuses — so a multi-album dump cannot scramble titles onto a short Hits release.
+- MusicBrainz map no longer order-zips release tracks onto folder files. A folder with more than one album tag refuses map; a file count that is not the release track count refuses map; pairing is by normalised title then disc+track, and an incomplete pair refuses — so a multi-album dump cannot scramble titles onto a short Hits release.
 
 ## [0.1.4] - 2026-11-12
 

@@ -173,7 +173,7 @@
   "page.editor.read_only": "lido, não escrito aqui",
   "page.editor.several": "Vários valores tal como lidos; uma edição substitui-os pelo escrito.",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "Procure uma edição para a pasta em mãos a partir do artista do álbum, do álbum e do número de faixas. Escolha um resultado; Pré-visualização mostra as etiquetas como seriam escritas ficheiro a ficheiro pelo mesmo caminho do editor. Usa-se o sítio público MusicBrainz a um pedido por segundo, salvo um espelho local na página de definições do plugin.",
+  "page.mb.help": "Procurar um lançamento para a pasta a partir do artista do álbum, do álbum e do número de faixas. Escolha um resultado; a pré-visualização mostra as etiquetas ficheiro a ficheiro como no editor. Um mix ou um monte com vários álbuns é listado com o passo seguinte, não recusado. O sítio público MusicBrainz usa-se a um pedido por segundo salvo um espelho local nas definições do plugin.",
   "page.mb.search": "Consultar esta pasta",
   "page.mb.searching": "A consultar o MusicBrainz...",
   "page.mb.none": "Nenhuma edição correspondeu às etiquetas da pasta.",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "não é um tipo cujos achados se guardem",
   "core.findings.nothing_to_recheck": "nenhuma pasta para verificar de novo",
   "core.jobs.no_thread": "não foi possível iniciar a thread da tarefa",
-  "core.mb.no_query": "nem artista de álbum nem álbum nos ficheiros da pasta",
+  "core.mb.no_query": "nem artista de álbum nem álbum nos ficheiros da pasta; etiquete-os aqui primeiro, ou separe um mix conhecido em pastas de álbum",
   "core.mb.bad_id": "não é um id de edição MusicBrainz",
   "core.mb.http": "MusicBrainz respondeu {status}: {body}",
   "core.mb.fetch": "MusicBrainz não pôde ser alcançado: {error}",
   "core.mb.bad_json": "o JSON do MusicBrainz não pôde ser lido: {error}",
-  "core.mb.mixed_album": "os ficheiros da pasta têm mais do que uma etiqueta de álbum; abra a pasta própria do álbum",
+  "core.mb.mixed_album": "os ficheiros da pasta têm mais do que uma etiqueta de álbum; separe em uma pasta por álbum antes de escrever um lançamento",
   "core.mb.count_mismatch": "a pasta tem {files} ficheiros mas a edição tem {tracks} faixas",
   "core.mb.pair_failed": "não foi possível emparelhar cada ficheiro com uma faixa da edição por título ou número de faixa",
   "core.folder.root": "a library root is not renamed",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "{n} {n|ficheiro renomeado|ficheiros renomeados} em {folder}",
   "core.write.rename_partial": "{error}; os {n} {n|ficheiro|ficheiros} anteriores renomeados e registados como lote {batch}",
   "core.write.not_at": "{path}: já não está em {after}; não desfeito",
-  "core.write.name_taken_since": "{path}: há de novo um ficheiro com o nome antigo; não desfeito"
+  "core.write.name_taken_since": "{path}: há de novo um ficheiro com o nome antigo; não desfeito",
+  "page.mb.mixed_guide": "Procurar exige um álbum numa pasta. Esta pasta tem {n} álbuns (mix, monte de festa ou coleção antiga). Cada bloco nomeia o álbum e a pasta exacta da biblioteca para onde esses ficheiros devem ir.",
+  "page.mb.mixed_next": "Quando os ficheiros de um álbum estiverem sozinhos nessa pasta, abra-a na lista e prima Procurar outra vez. Ainda não há um botão Dividir que os mova por si — até lá crie a pasta e mova os ficheiros à mão (ou no NAS), depois procure a partir de dentro.",
+  "page.mb.mixed_move": "Mova estes ficheiros para esta pasta:"
 }

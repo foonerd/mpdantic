@@ -295,7 +295,7 @@
       </div>
       <div class="write">
         <b data-i18n="page.mb.title">MusicBrainz</b>
-        <div class="help" data-i18n="page.mb.help">Look up a release for the folder in hand from its album artist, album and track count. Pick one hit, then Preview shows the tags as they would be written file by file through the same path as the editor. The public MusicBrainz site is used at one request per second unless a local mirror is set on the plugin's settings page.</div>
+        <div class="help" data-i18n="page.mb.help">Look up a release for the folder in hand from its album artist, album and track count. Pick one hit, then Preview shows the tags as they would be written file by file through the same path as the editor. A mix or dump that holds several albums is listed with what to do next, not refused. The public MusicBrainz site is used at one request per second unless a local mirror is set on the plugin's settings page.</div>
         <div class="line"><button id="mb-search" data-i18n="page.mb.search">Look up this folder</button></div>
         <div id="mb-box"></div>
         <div id="mb-preview-box"></div>
@@ -1083,6 +1083,30 @@
     try {
       const page = await api('/api/mb/search', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ path: current.path }) });
       box.textContent = '';
+      // Mix / dump folders: concrete destinations, not jargon — never a bare refuse.
+      if (page.step === 'mixed_album') {
+        const groups = page.groups || [];
+        box.appendChild(el('div', 'help', t('page.mb.mixed_guide', { n: groups.length })));
+        groups.forEach((g) => {
+          const card = el('div', 'sugg');
+          const top = el('div', 'top');
+          top.appendChild(el('span', 'tag warn', t('page.files', { n: g.files })));
+          const title = el('span', '');
+          title.appendChild(el('code', '', g.album || t('page.none')));
+          if (g.album_artist) {
+            title.appendChild(text(' · ' + g.album_artist));
+          }
+          top.appendChild(title);
+          card.appendChild(top);
+          if (g.folder) {
+            card.appendChild(el('div', 'why', t('page.mb.mixed_move', { folder: g.folder })));
+            card.appendChild(el('div', 'ex', g.folder));
+          }
+          box.appendChild(card);
+        });
+        box.appendChild(el('div', 'help', t('page.mb.mixed_next')));
+        return;
+      }
       const q = page.query || {};
       const s = page.searched || q;
       box.appendChild(el('div', 'help', t('page.mb.query', { artist: q.artist || '—', album: q.album || '—', tracks: q.tracks || 0 })));

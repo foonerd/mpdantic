@@ -173,7 +173,7 @@
   "page.editor.read_only": "読み込み済み、ここでは書き込みません",
   "page.editor.several": "読み込んだとおり複数の値があります。編集すると入力した値に置き換わります。",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "手元のフォルダーについて、アルバムアーティスト・アルバム・トラック数からリリースを調べます。候補を選び、プレビューでエディターと同じ経路でファイルごとに書き込まれるタグを確認します。プラグインの設定でローカルミラーを指定しない限り、公開の MusicBrainz を秒間1リクエストで使います。",
+  "page.mb.help": "アルバムアーティスト・アルバム・曲数からフォルダーのリリースを検索します。ヒットを選び、プレビューはエディターと同じくファイルごとにタグを示します。複数アルバムのミックスやまとまりは拒否せず、次の手順を示します。公開 MusicBrainz はプラグイン設定でローカルミラーがない限り秒間1リクエストです。",
   "page.mb.search": "このフォルダーを調べる",
   "page.mb.searching": "MusicBrainz を照会しています...",
   "page.mb.none": "フォルダーのタグに合うリリースはありませんでした。",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "指摘が保持される種類ではありません",
   "core.findings.nothing_to_recheck": "再確認するフォルダーがありません",
   "core.jobs.no_thread": "ジョブのスレッドを開始できませんでした",
-  "core.mb.no_query": "フォルダーのファイルにアルバムアーティストもアルバムもありません",
+  "core.mb.no_query": "フォルダーのファイルにアルバムアーティストもアルバムもありません。ここで先にタグ付けするか、分かっているミックスをアルバムフォルダーに分けてください",
   "core.mb.bad_id": "MusicBrainz のリリース ID ではありません",
   "core.mb.http": "MusicBrainz が {status} を返しました: {body}",
   "core.mb.fetch": "MusicBrainz に届きませんでした: {error}",
   "core.mb.bad_json": "MusicBrainz の JSON を読めませんでした: {error}",
-  "core.mb.mixed_album": "フォルダーのファイルに複数のアルバムタグがあります。そのアルバム専用のフォルダーを開いてください",
+  "core.mb.mixed_album": "フォルダーのファイルに複数のアルバムタグがあります。リリースを書く前にアルバムごとにフォルダーを分けてください",
   "core.mb.count_mismatch": "フォルダーには {files} ファイルありますが、リリースには {tracks} 曲あります",
   "core.mb.pair_failed": "タイトルまたはトラック番号で、すべてのファイルをリリースの曲に対応付けられませんでした",
   "core.folder.root": "a library root is not renamed",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "{folder} の {n} {n|ファイル}の名前を変更",
   "core.write.rename_partial": "{error}。それ以前の {n} {n|ファイル}は名前を変更し、バッチ {batch} としてジャーナルに記録しました",
   "core.write.not_at": "{path}: もう {after} にはありません。取り消しません",
-  "core.write.name_taken_since": "{path}: 元の名前のファイルがまたあります。取り消しません"
+  "core.write.name_taken_since": "{path}: 元の名前のファイルがまたあります。取り消しません",
+  "page.mb.mixed_guide": "検索には「1フォルダーに1アルバム」が必要です。このフォルダーには {n} 枚のアルバムがあります（ミックス、パーティー用のまとめ、古いコレクション）。各ブロックはアルバム名と、それらのファイルを置くべきライブラリ上の正確なフォルダーを示します。",
+  "page.mb.mixed_next": "1枚のアルバムのファイルだけがそのフォルダーに入ったら、一覧でそれを開き、もう一度検索を押します。自動で移す「分割」ボタンはまだありません — 当面はフォルダーを作り、手作業（または NAS 上）で移してから、その中で検索してください。",
+  "page.mb.mixed_move": "これらのファイルを次のフォルダーへ移してください:"
 }

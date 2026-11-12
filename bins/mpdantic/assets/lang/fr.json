@@ -173,7 +173,7 @@
   "page.editor.read_only": "lu, pas écrit ici",
   "page.editor.several": "Plusieurs valeurs telles que lues ; une modification les remplace par celle tapée.",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "Cherchez une parution pour le dossier en cours à partir de l’artiste d’album, de l’album et du nombre de pistes. Choisissez un résultat ; Aperçu montre les balises telles qu’elles seraient écrites fichier par fichier par le même chemin que l’éditeur. Le site public MusicBrainz est utilisé à une requête par seconde, sauf si un miroir local est réglé sur la page de réglages du greffon.",
+  "page.mb.help": "Chercher une parution pour le dossier à partir de l’artiste d’album, de l’album et du nombre de pistes. Choisir un résultat ; l’aperçu montre les tags fichier par fichier comme dans l’éditeur. Un mix ou un dépôt de plusieurs albums est listé avec la suite à faire, pas refusé. Le site public MusicBrainz est utilisé à une requête par seconde sauf miroir local dans les réglages du greffon.",
   "page.mb.search": "Interroger ce dossier",
   "page.mb.searching": "Interrogation de MusicBrainz...",
   "page.mb.none": "Aucune parution ne correspond aux balises du dossier.",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "pas un type dont les constats sont conservés",
   "core.findings.nothing_to_recheck": "aucun dossier à revérifier",
   "core.jobs.no_thread": "le fil de la tâche n'a pas pu être démarré",
-  "core.mb.no_query": "ni artiste d’album ni album sur les fichiers du dossier",
+  "core.mb.no_query": "ni artiste d’album ni album sur les fichiers du dossier ; étiquetez-les d’abord ici, ou séparez un mix connu en dossiers d’album",
   "core.mb.bad_id": "ce n’est pas un identifiant de parution MusicBrainz",
   "core.mb.http": "MusicBrainz a répondu {status} : {body}",
   "core.mb.fetch": "MusicBrainz n’a pas pu être joint : {error}",
   "core.mb.bad_json": "le JSON MusicBrainz n’a pas pu être lu : {error}",
-  "core.mb.mixed_album": "les fichiers du dossier portent plus d’une étiquette d’album ; ouvrez le dossier propre de l’album",
+  "core.mb.mixed_album": "les fichiers du dossier portent plus d’une étiquette d’album ; séparez en un dossier par album avant d’écrire une parution",
   "core.mb.count_mismatch": "le dossier a {files} fichiers mais l’édition a {tracks} pistes",
   "core.mb.pair_failed": "impossible d’associer chaque fichier à une piste de l’édition par titre ou numéro de piste",
   "core.folder.root": "a library root is not renamed",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "{n} {n|fichier renommé|fichiers renommés} dans {folder}",
   "core.write.rename_partial": "{error} ; les {n} {n|fichier|fichiers} d'avant renommés et consignés comme lot {batch}",
   "core.write.not_at": "{path} : n'est plus à {after} ; non annulé",
-  "core.write.name_taken_since": "{path} : un fichier est de nouveau là sous l'ancien nom ; non annulé"
+  "core.write.name_taken_since": "{path} : un fichier est de nouveau là sous l'ancien nom ; non annulé",
+  "page.mb.mixed_guide": "La recherche exige un album dans un dossier. Ce dossier contient {n} albums (mix, dépôt de soirée ou vieille collection). Chaque bloc nomme l’album et le dossier exact de la bibliothèque où ces fichiers doivent aller.",
+  "page.mb.mixed_next": "Quand les fichiers d’un album sont seuls dans ce dossier, ouvrez-le dans la liste et relancez Rechercher. Un bouton Split qui les déplace pour vous n’existe pas encore — en attendant créez le dossier et déplacez les fichiers à la main (ou sur le NAS), puis cherchez depuis l’intérieur.",
+  "page.mb.mixed_move": "Déplacer ces fichiers dans ce dossier :"
 }

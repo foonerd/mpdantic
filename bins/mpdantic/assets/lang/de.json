@@ -173,7 +173,7 @@
   "page.editor.read_only": "gelesen, hier nicht geschrieben",
   "page.editor.several": "Mehrere Werte, wie gelesen; eine Änderung ersetzt sie durch den getippten.",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "Eine Ausgabe für den Ordner in der Hand anhand von Albuminterpret, Album und Titelanzahl suchen. Einen Treffer wählen; Vorschau zeigt die Tags, wie sie Datei für Datei über denselben Weg wie der Editor geschrieben würden. Die öffentliche MusicBrainz-Seite wird mit einer Anfrage pro Sekunde genutzt, sofern auf der Einstellungsseite des Plugins kein lokaler Spiegel gesetzt ist.",
+  "page.mb.help": "Eine Veröffentlichung für den Ordner anhand von Albuminterpret, Album und Titelanzahl nachschlagen. Einen Treffer wählen; Vorschau zeigt die Tags dateiweise wie im Editor. Ein Mix oder eine Ablage mit mehreren Alben wird mit dem nächsten Schritt aufgelistet, nicht abgewiesen. Die öffentliche MusicBrainz-Site gilt mit einer Anfrage pro Sekunde, sofern kein lokaler Spiegel in den Plugin-Einstellungen gesetzt ist.",
   "page.mb.search": "Diesen Ordner nachschlagen",
   "page.mb.searching": "MusicBrainz wird abgefragt...",
   "page.mb.none": "Keine Ausgabe passte zu den Tags des Ordners.",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "keine Art, deren Befunde aufbewahrt werden",
   "core.findings.nothing_to_recheck": "kein Ordner, der erneut zu prüfen wäre",
   "core.jobs.no_thread": "der Thread des Jobs konnte nicht gestartet werden",
-  "core.mb.no_query": "kein Albuminterpret und kein Album auf den Dateien des Ordners",
+  "core.mb.no_query": "kein Albuminterpret und kein Album auf den Dateien des Ordners; zuerst hier taggen oder einen bekannten Mix in Album-Ordner aufteilen",
   "core.mb.bad_id": "keine MusicBrainz-Release-ID",
   "core.mb.http": "MusicBrainz antwortete {status}: {body}",
   "core.mb.fetch": "MusicBrainz war nicht erreichbar: {error}",
   "core.mb.bad_json": "MusicBrainz-JSON konnte nicht gelesen werden: {error}",
-  "core.mb.mixed_album": "die Dateien des Ordners tragen mehr als ein Album-Tag; öffnen Sie den eigenen Ordner des Albums",
+  "core.mb.mixed_album": "die Dateien des Ordners tragen mehr als ein Album-Tag; vor dem Schreiben einer Veröffentlichung in einen Ordner pro Album aufteilen",
   "core.mb.count_mismatch": "der Ordner hat {files} Dateien, die Veröffentlichung aber {tracks} Titel",
   "core.mb.pair_failed": "nicht jede Datei konnte per Titel oder Titelnummer einem Titel der Veröffentlichung zugeordnet werden",
   "core.folder.root": "eine Bibliothekswurzel wird nicht umbenannt",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "{n} {n|Datei|Dateien} umbenannt in {folder}",
   "core.write.rename_partial": "{error}; die {n} {n|Datei|Dateien} davor umbenannt und als Stapel {batch} protokolliert",
   "core.write.not_at": "{path}: nicht mehr unter {after}; nicht rückgängig gemacht",
-  "core.write.name_taken_since": "{path}: unter dem alten Namen ist wieder eine Datei; nicht rückgängig gemacht"
+  "core.write.name_taken_since": "{path}: unter dem alten Namen ist wieder eine Datei; nicht rückgängig gemacht",
+  "page.mb.mixed_guide": "Nachschlagen braucht ein Album in einem Ordner. Dieser Ordner hält {n} Alben (Mix, Party-Ablage oder alte Sammlung). Jeder Block nennt das Album und den genauen Bibliotheksordner, in den diese Dateien gehören.",
+  "page.mb.mixed_next": "Wenn die Dateien eines Albums allein in diesem Ordner liegen, öffnen Sie ihn in der Liste und drücken Sie erneut Nachschlagen. Eine Split-Schaltfläche, die das für Sie erledigt, fehlt noch — bis dahin Ordner anlegen und Dateien von Hand (oder auf dem NAS) verschieben, dann von dort nachschlagen.",
+  "page.mb.mixed_move": "Diese Dateien in diesen Ordner legen:"
 }

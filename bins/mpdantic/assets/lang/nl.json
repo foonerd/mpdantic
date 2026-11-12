@@ -173,7 +173,7 @@
   "page.editor.read_only": "gelezen, hier niet geschreven",
   "page.editor.several": "Meerdere waarden zoals gelezen; een bewerking vervangt ze door de getypte.",
   "page.mb.title": "MusicBrainz",
-  "page.mb.help": "Zoek een uitgave voor de map in handen op albumartiest, album en aantal nummers. Kies een treffer; Voorbeeld toont de tags zoals ze bestand voor bestand via hetzelfde pad als de editor zouden worden geschreven. De openbare MusicBrainz-site wordt gebruikt met één verzoek per seconde, tenzij op de instellingenpagina van de plugin een lokale spiegel staat.",
+  "page.mb.help": "Zoek een uitgave voor de map via albumartiest, album en aantal nummers. Kies een treffer; Voorbeeld toont de tags bestand voor bestand zoals in de editor. Een mix of dump met meerdere albums wordt met de volgende stap getoond, niet geweigerd. De openbare MusicBrainz-site gaat met één verzoek per seconde tenzij een lokale spiegel in de plug-ininstellingen staat.",
   "page.mb.search": "Deze map opzoeken",
   "page.mb.searching": "MusicBrainz wordt geraadpleegd...",
   "page.mb.none": "Geen uitgave paste bij de tags van de map.",
@@ -517,12 +517,12 @@
   "core.findings.kind_unknown": "geen soort waarvan de bevindingen worden bewaard",
   "core.findings.nothing_to_recheck": "geen map om opnieuw te controleren",
   "core.jobs.no_thread": "de thread van de taak kon niet worden gestart",
-  "core.mb.no_query": "geen albumartiest of album op de bestanden van de map",
+  "core.mb.no_query": "geen albumartiest of album op de bestanden van de map; tag ze hier eerst, of splits een bekende mix in albummappen",
   "core.mb.bad_id": "geen MusicBrainz-uitgave-id",
   "core.mb.http": "MusicBrainz antwoordde {status}: {body}",
   "core.mb.fetch": "MusicBrainz was niet bereikbaar: {error}",
   "core.mb.bad_json": "MusicBrainz-JSON kon niet worden gelezen: {error}",
-  "core.mb.mixed_album": "de bestanden in de map hebben meer dan één albumtag; open de eigen map van het album",
+  "core.mb.mixed_album": "de bestanden in de map hebben meer dan één albumtag; splits in één map per album vóór het schrijven van een uitgave",
   "core.mb.count_mismatch": "de map heeft {files} bestanden maar de uitgave heeft {tracks} nummers",
   "core.mb.pair_failed": "niet elk bestand kon op titel of tracknummer aan een nummer van de uitgave worden gekoppeld",
   "core.folder.root": "a library root is not renamed",
@@ -716,5 +716,8 @@
   "core.write.note_rename": "{n} {n|bestand|bestanden} hernoemd in {folder}",
   "core.write.rename_partial": "{error}; de {n} {n|bestand|bestanden} ervoor hernoemd en als batch {batch} in het journaal gezet",
   "core.write.not_at": "{path}: niet meer op {after}; niet ongedaan gemaakt",
-  "core.write.name_taken_since": "{path}: er is weer een bestand onder de oude naam; niet ongedaan gemaakt"
+  "core.write.name_taken_since": "{path}: er is weer een bestand onder de oude naam; niet ongedaan gemaakt",
+  "page.mb.mixed_guide": "Opzoeken vraagt één album in één map. Deze map houdt {n} albums (mix, feest-dump of oude verzameling). Elk blok noemt het album en de precieze bibliotheekmap waar die bestanden naartoe moeten.",
+  "page.mb.mixed_next": "Als de bestanden van één album alleen in die map staan, open die in de lijst en druk opnieuw op Opzoeken. Een knop Splitsen die ze voor u verplaatst bestaat nog niet — maak de map en verplaats de bestanden met de hand (of op de NAS), zoek daarna vanuit die map.",
+  "page.mb.mixed_move": "Verplaats deze bestanden naar deze map:"
 }
