@@ -165,6 +165,15 @@
   .frow.dismissed { opacity: .6; }
   .frow .file { font-weight: 600; overflow-wrap: anywhere; }
   .frow .text { flex: 1; min-width: 12em; overflow-wrap: anywhere; }
+  /* Flat findings table under a code chip: dismiss, path, reason. */
+  .fx-bulk { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  table.fx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.fx-table th, table.fx-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.fx-table th { color: var(--muted); font-weight: 600; }
+  table.fx-table tr.dismissed { opacity: .6; }
+  table.fx-table a.path { font-weight: 600; overflow-wrap: anywhere; }
+  table.fx-table .reason { color: var(--muted); overflow-wrap: anywhere; }
+  table.fx-table td.tick { width: 2.5em; }
   .fxeditor, .fxnamer { margin-top: 10px; }
   .fxeditor .line, .fxnamer .line { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   input.pattern { width: 16em; padding: 4px 8px; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
@@ -364,6 +373,7 @@
       <button class="small" id="fx-recheck" data-i18n="page.findings.recheck">Re-check the listed folders</button>
       <span class="help" id="fx-progress"></span>
     </div>
+    <div class="actions fx-bulk" id="fx-bulk" hidden></div>
     <div class="list" id="fx-folders"></div>
     <div class="foot"><span id="fx-shown"></span><span class="grow"></span><button id="fx-more" hidden data-i18n="page.more">More</button></div>
   </div>
@@ -1232,6 +1242,19 @@
     return Object.keys(r.by_code).map((code) => [code + '  ' + codeText(code, r.codes[code]), String(r.by_code[code])]);
   }
 
+  // The five examples (or the totals table) are a teaser; each code opens the work list on that code.
+  function codeWorkThrough(box, kind, r) {
+    const codes = Object.keys(r.by_code || {});
+    if (!codes.length) return;
+    const row = el('div', 'actions');
+    codes.forEach((code) => {
+      const b = el('button', 'small', t('page.findings.work_through_code', { code, n: r.by_code[code] }));
+      b.addEventListener('click', () => openFindings(kind, [code]));
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+  }
+
   function findingLine(f) {
     const line = el('div', 'finding');
     line.appendChild(el('code', '', f.code + (f.line ? ' ' + t('page.line', { n: f.line }) : '')));
@@ -1247,6 +1270,7 @@
     const totals = section(box, t('page.cue.sheets_under', { path: theLibrary(r.path) }), notes.join(' '));
     const rows = [[t('page.cue.sheets'), String(r.sheets)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
+    codeWorkThrough(totals, 'cue', r);
     if (!r.sheets) { totals.appendChild(el('div', 'help', t('page.cue.none'))); linesInForce(box, r.in_force); return; }
     const list = section(box, t('page.cue.each'), t('page.cue.each_help') + (r.list_truncated ? ' ' + t('page.cue.only_first_sheets', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
@@ -1329,6 +1353,10 @@
       // A code raised once per folder counts folders, as the core says; the rest count files.
       const unit = (r.per_folder || []).indexOf(code) >= 0 ? 'page.count.folders' : 'page.files';
       top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t(unit, { n: g.count })));
+      // The five examples are a teaser; the work list holds every finding.
+      const work = el('button', 'small', t('page.findings.work_through_code', { code, n: g.count }));
+      work.addEventListener('click', () => openFindings('tags', [code]));
+      top.appendChild(work);
       d.appendChild(top);
       if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
       f.appendChild(d);
@@ -1353,6 +1381,7 @@
     const totals = section(box, t('page.playlists.under', { path: theLibrary(r.path) }), notes.join(' '));
     const rows = [[t('page.playlists.playlists'), String(r.playlists)], [t('page.clean_cap'), String(r.clean)], [t('page.with_findings'), String(r.with_findings)]].concat(codeRows(r));
     table(totals, rows);
+    codeWorkThrough(totals, 'playlists', r);
     if (!r.playlists) { totals.appendChild(el('div', 'help', t('page.playlists.none'))); linesInForce(box, r.in_force); return; }
     const list = section(box, t('page.playlists.each'), t('page.playlists.each_help') + (r.list_truncated ? ' ' + t('page.playlists.only_first', { n: r.list.length }) : ''));
     r.list.forEach((s) => {
@@ -1407,7 +1436,10 @@
   // first. The position is kept per kind, so a Close costs nothing.
   const FX_KINDS = { cue: 'page.tab.cue', tags: 'page.tab.tags', playlists: 'page.tab.playlists' };
   const FX_PAGE = 50;
-  const fx = { kind: null, filter: { codes: [], dismissed: false }, offset: 0, total: 0, overview: null, after: null };
+  const FX_ROWS = 20;
+  // File mode when a code chip is on: flat paginated table. Folders when none.
+  const fxFileMode = () => fx.filter.codes.length > 0;
+  const fx = { kind: null, filter: { codes: [], dismissed: false }, offset: 0, total: 0, overview: null, after: null, pageRows: [] };
 
   const fxKey = (kind) => 'mpdantic.findings.' + kind;
   function fxSaved(kind) {
@@ -1439,10 +1471,14 @@
     });
   }
 
-  function openFindings(kind) {
+  function openFindings(kind, codes) {
     const saved = fxSaved(kind);
     fx.kind = kind;
-    fx.filter = saved.filter && Array.isArray(saved.filter.codes) ? saved.filter : { codes: [], dismissed: false };
+    if (Array.isArray(codes) && codes.length) {
+      fx.filter = { codes: codes.slice(), dismissed: false };
+    } else {
+      fx.filter = saved.filter && Array.isArray(saved.filter.codes) ? { codes: saved.filter.codes.slice(), dismissed: !!saved.filter.dismissed } : { codes: [], dismissed: false };
+    }
     $('fx-title').textContent = t('page.findings.title', { kind: t(FX_KINDS[kind]) });
     $('fx-dismissed').checked = fx.filter.dismissed;
     $('fx-progress').textContent = '';
@@ -1450,9 +1486,9 @@
     $('findings').hidden = false;
     history.pushState({ findings: kind }, '');
     fxRefresh().then(() => {
-      const card = saved.open ? fxCard(saved.open) : null;
+      const card = !fxFileMode() && saved.open ? fxCard(saved.open) : null;
       if (card) card.open = true;
-      window.scrollTo(0, saved.scroll || 0);
+      window.scrollTo(0, (!fxFileMode() && saved.scroll) || 0);
     });
   }
 
@@ -1551,20 +1587,160 @@
 
   async function fxPage() {
     const box = $('fx-folders');
+    if (fxFileMode()) {
+      await fxFilesPage(box, fx.offset === 0);
+    } else {
+      $('fx-bulk').hidden = true;
+      $('fx-bulk').textContent = '';
+      try {
+        const page = await api('/api/findings/' + fx.kind + '/folders?offset=' + fx.offset + '&limit=' + FX_PAGE + '&' + fxQuery());
+        fx.total = page.total;
+        page.folders.forEach((f) => box.appendChild(folderCard(f)));
+        fx.offset += page.folders.length;
+        if (!fx.total) box.appendChild(el('div', 'empty', t('page.findings.nothing_listed')));
+      } catch (e) {
+        box.appendChild(el('div', 'error', String(e.message || e)));
+        fx.total = 0;
+      }
+      $('fx-more').hidden = fx.offset >= fx.total;
+      $('fx-shown').textContent = fx.total ? t('page.findings.folders_shown', { shown: fx.offset, total: fx.total }) : '';
+    }
+  }
+  $('fx-more').addEventListener('click', () => fxPage());
+
+  // Flat table under one or more code chips: dismiss ticks, clickable path, reason.
+  async function fxFilesPage(box, fresh) {
+    if (fresh) {
+      box.textContent = '';
+      fx.pageRows = [];
+      fxBulkBar();
+    }
     try {
-      const page = await api('/api/findings/' + fx.kind + '/folders?offset=' + fx.offset + '&limit=' + FX_PAGE + '&' + fxQuery());
+      const page = await api('/api/findings/' + fx.kind + '/rows?offset=' + fx.offset + '&limit=' + FX_ROWS + '&' + fxQuery());
       fx.total = page.total;
-      page.folders.forEach((f) => box.appendChild(folderCard(f)));
-      fx.offset += page.folders.length;
-      if (!fx.total) box.appendChild(el('div', 'empty', t('page.findings.nothing_listed')));
+      const rows = page.rows || [];
+      if (fresh && !fx.total) {
+        box.appendChild(el('div', 'empty', t('page.findings.nothing_listed')));
+      } else if (rows.length) {
+        let table = box.querySelector('table.fx-table');
+        if (!table) {
+          table = el('table', 'fx-table');
+          const head = el('thead');
+          const hr = el('tr');
+          hr.appendChild(el('th', '', t('page.findings.col_disable')));
+          hr.appendChild(el('th', '', t('page.findings.col_path')));
+          hr.appendChild(el('th', '', t('page.findings.col_reason')));
+          head.appendChild(hr);
+          table.appendChild(head);
+          table.appendChild(el('tbody'));
+          box.appendChild(table);
+        }
+        const body = table.querySelector('tbody');
+        rows.forEach((r) => {
+          fx.pageRows.push(r);
+          body.appendChild(fxFileRow(r));
+        });
+      }
+      fx.offset += rows.length;
     } catch (e) {
       box.appendChild(el('div', 'error', String(e.message || e)));
       fx.total = 0;
     }
     $('fx-more').hidden = fx.offset >= fx.total;
-    $('fx-shown').textContent = fx.total ? t('page.findings.folders_shown', { shown: fx.offset, total: fx.total }) : '';
+    $('fx-shown').textContent = fx.total ? t('page.findings.files_shown', { shown: fx.offset, total: fx.total }) : '';
   }
-  $('fx-more').addEventListener('click', () => fxPage());
+
+  function fxReason(r) {
+    const sentence = tm(r.text);
+    return sentence.startsWith(r.path + ': ') ? sentence.slice(r.path.length + 2) : sentence;
+  }
+
+  function fxFileRow(r) {
+    const tr = el('tr', r.dismissed ? 'dismissed' : '');
+    tr.dataset.code = r.code;
+    tr.dataset.path = r.path;
+    const tickCell = el('td', 'tick');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = !r.dismissed;
+    tick.title = r.dismissed ? t('page.findings.restore') : t('page.findings.dismiss');
+    tick.addEventListener('change', async () => {
+      tick.disabled = true;
+      try {
+        await api('/api/findings/' + fx.kind + '/dismiss', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ code: r.code, path: r.path, dismissed: !tick.checked }) });
+        r.dismissed = !tick.checked;
+        tr.className = r.dismissed ? 'dismissed' : '';
+        fxCounts();
+      } catch (e) {
+        tick.checked = !tick.checked;
+        tr.appendChild(el('td', 'help bad', String(e.message || e)));
+      }
+      tick.disabled = false;
+    });
+    tickCell.appendChild(tick);
+    tr.appendChild(tickCell);
+    const pathCell = el('td');
+    const link = el('a', 'path', r.path);
+    link.href = toHash(r.folder);
+    link.title = t('page.findings.open_folder');
+    link.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      leaveTo(r.folder);
+    });
+    pathCell.appendChild(link);
+    if (r.line) pathCell.appendChild(el('span', 'help', ' ' + t('page.line', { n: r.line })));
+    tr.appendChild(pathCell);
+    tr.appendChild(el('td', 'reason', fxReason(r)));
+    return tr;
+  }
+
+  function fxBulkBar() {
+    const bar = $('fx-bulk');
+    bar.textContent = '';
+    if (!fxFileMode()) { bar.hidden = true; return; }
+    bar.hidden = false;
+    const code = fx.filter.codes.length === 1 ? fx.filter.codes[0] : null;
+    const selected = el('button', 'small', t('page.findings.dismiss_selected'));
+    selected.addEventListener('click', () => fxBulkDismiss('selected'));
+    bar.appendChild(selected);
+    const page = el('button', 'small', t('page.findings.dismiss_page'));
+    page.addEventListener('click', () => fxBulkDismiss('page'));
+    bar.appendChild(page);
+    if (code) {
+      const all = el('button', 'small', t('page.findings.dismiss_all_code', { code }));
+      all.addEventListener('click', () => fxBulkDismiss('all', code));
+      bar.appendChild(all);
+    }
+  }
+
+  async function fxBulkDismiss(scope, code) {
+    const on = true;
+    let body;
+    if (scope === 'all') {
+      const n = (fx.overview && fx.overview.by_code_open && fx.overview.by_code_open[code]) || fx.total || 0;
+      if (!window.confirm(t('page.findings.dismiss_all_confirm', { code, n }))) return;
+      body = { all: true, code, dismissed: on };
+    } else {
+      const table = $('fx-folders').querySelector('table.fx-table');
+      if (!table) return;
+      const items = [];
+      table.querySelectorAll('tbody tr').forEach((tr) => {
+        const tick = tr.querySelector('input[type=checkbox]');
+        if (!tick || tr.classList.contains('dismissed')) return;
+        if (scope === 'page' || tick.checked) {
+          items.push({ code: tr.dataset.code, path: tr.dataset.path });
+        }
+      });
+      if (!items.length) return;
+      body = { items, dismissed: on };
+    }
+    try {
+      await api('/api/findings/' + fx.kind + '/dismiss', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(body) });
+      await fxRefresh();
+    } catch (e) {
+      $('fx-progress').textContent = String(e.message || e);
+    }
+  }
 
   // A folder of the list: its count and codes in the summary, its rows and its
   // repair inside, read when it is opened.
@@ -2000,22 +2176,38 @@
       const files = p.files || [];
       const changing = files.filter((f) => f.changes.length);
       card.appendChild(el('div', 'help', t('page.preview.files_change', { changing: changing.length, n: files.length })));
+      // Default: only files that change. Unchanged rows are a long scroll on large albums.
+      let showUnchanged = false;
       const list = el('div', 'files');
-      files.forEach((f) => {
-        const row = el('div', 'sugg');
-        const top = el('div', 'top');
-        top.appendChild(el('code', '', f.name));
-        top.appendChild(el('span', 'tag' + (f.changes.length ? ' ok' : ''), f.format));
-        if (f.note) top.appendChild(el('span', 'help', tm(f.note)));
-        row.appendChild(top);
-        f.changes.forEach((c) => {
-          const line = el('div', 'ex');
-          line.appendChild(el('code', '', c.key));
-          line.appendChild(text(' ' + (c.before.length ? c.before.join(' | ') : t('page.none')) + '  ->  ' + (c.after.length ? c.after.join(' | ') : t('page.preview.removed_value'))));
-          row.appendChild(line);
+      const draw = () => {
+        list.textContent = '';
+        (showUnchanged ? files : changing).forEach((f) => {
+          const row = el('div', 'sugg');
+          const top = el('div', 'top');
+          top.appendChild(el('code', '', f.name));
+          top.appendChild(el('span', 'tag' + (f.changes.length ? ' ok' : ''), f.format));
+          if (f.note) top.appendChild(el('span', 'help', tm(f.note)));
+          else if (!f.changes.length) top.appendChild(el('span', 'help', t('page.preview.nothing_to_change')));
+          row.appendChild(top);
+          f.changes.forEach((c) => {
+            const line = el('div', 'ex');
+            line.appendChild(el('code', '', c.key));
+            line.appendChild(text(' ' + (c.before.length ? c.before.join(' | ') : t('page.none')) + '  ->  ' + (c.after.length ? c.after.join(' | ') : t('page.preview.removed_value'))));
+            row.appendChild(line);
+          });
+          list.appendChild(row);
         });
-        list.appendChild(row);
-      });
+      };
+      if (files.length > changing.length) {
+        const tog = el('label', 'pref');
+        const tick = el('input');
+        tick.type = 'checkbox';
+        tick.addEventListener('change', () => { showUnchanged = tick.checked; draw(); });
+        tog.appendChild(tick);
+        tog.appendChild(text(' ' + t('page.preview.show_unchanged')));
+        card.appendChild(tog);
+      }
+      draw();
       card.appendChild(list);
     }
     if (p.kind === 'rename') {

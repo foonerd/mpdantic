@@ -546,8 +546,9 @@ fn json_of<T: Serialize>(value: &T) -> String {
 }
 
 /// `GET /api/findings/<kind>/folders?code=&dismissed=&offset=&limit=`, the folders
-/// with findings a page at a time; `/rows?folder=`, one folder's rows; or
-/// `/api/findings/<kind>.txt?lang=`, the list as text in the language.
+/// with findings a page at a time; `/rows?folder=`, one folder's rows; `/rows` with
+/// `code` and paging, the flat file table; or `/api/findings/<kind>.txt?lang=`, the
+/// list as text in the language.
 fn findings_get(shared: &Shared, rest: &str, query: &str) -> (u16, &'static str, String) {
     let json = "application/json";
     let q = pairs(query);
@@ -589,8 +590,18 @@ fn findings_get(shared: &Shared, rest: &str, query: &str) -> (u16, &'static str,
         }
         "rows" => {
             let folder = value("folder").unwrap_or_default();
-            match shared.findings.rows(kind, &folder) {
-                Some(rows) => (200, json, json_of(&rows)),
+            if !folder.is_empty() {
+                return match shared.findings.rows(kind, &folder) {
+                    Some(rows) => (200, json, json_of(&rows)),
+                    None => (404, json, error(&findings::no_store())),
+                };
+            }
+            let offset = value("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let limit = value("limit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(findings::ROWS_DEFAULT);
+            match shared.findings.rows_page(kind, &filter, offset, limit) {
+                Some(page) => (200, json, json_of(&page)),
                 None => (404, json, error(&findings::no_store())),
             }
         }
@@ -598,8 +609,9 @@ fn findings_get(shared: &Shared, rest: &str, query: &str) -> (u16, &'static str,
     }
 }
 
-/// `POST /api/findings/<kind>/dismiss` with `{ "code", "path", "dismissed" }`: the
-/// owner's word on a finding, the folder's rows after; `/recheck` with
+/// `POST /api/findings/<kind>/dismiss` with `{ "code", "path", "dismissed" }` (one
+/// finding, the folder's rows after), or `{ "items": [{code,path},...], "dismissed" }`
+/// or `{ "all": true, "code"?, "dismissed" }` (how many changed); `/recheck` with
 /// `{ "folders": [...] }` or `{ "all": true }`: the folders checked again as a job.
 fn findings_post(shared: &Shared, rest: &str, body: &[u8]) -> (u16, String) {
     let Some((kind, what)) = rest.split_once('/') else {
@@ -616,9 +628,50 @@ fn findings_post(shared: &Shared, rest: &str, body: &[u8]) -> (u16, String) {
     };
     match what {
         "dismiss" => {
+            let on = request["dismissed"].as_bool().unwrap_or(true);
+            if request["all"].as_bool().unwrap_or(false) {
+                let filter = findings::Filter {
+                    codes: request["code"]
+                        .as_str()
+                        .filter(|c| !c.is_empty())
+                        .map(|c| vec![c.to_string()])
+                        .or_else(|| {
+                            request["codes"].as_array().map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                        })
+                        .unwrap_or_default(),
+                    dismissed: false,
+                };
+                return match shared.findings.dismiss_filter(kind, &filter, on) {
+                    Ok(count) => (
+                        200,
+                        serde_json::json!({ "count": count }).to_string() + "\n",
+                    ),
+                    Err(e) => (500, error(&e)),
+                };
+            }
+            if let Some(items) = request["items"].as_array() {
+                let pairs: Vec<(String, String)> = items
+                    .iter()
+                    .filter_map(|v| {
+                        let code = v["code"].as_str()?;
+                        let path = v["path"].as_str()?;
+                        Some((code.to_string(), path.to_string()))
+                    })
+                    .collect();
+                return match shared.findings.dismiss_many(kind, &pairs, on) {
+                    Ok(count) => (
+                        200,
+                        serde_json::json!({ "count": count }).to_string() + "\n",
+                    ),
+                    Err(e) => (500, error(&e)),
+                };
+            }
             let code = request["code"].as_str().unwrap_or("");
             let path = request["path"].as_str().unwrap_or("");
-            let on = request["dismissed"].as_bool().unwrap_or(true);
             match shared.findings.dismiss(kind, code, path, on) {
                 Ok(rows) => (200, json_of(&rows)),
                 Err(e) if e.k == "core.findings.no_such_finding" => (404, error(&e)),
@@ -1348,6 +1401,22 @@ mod tests {
         assert_eq!(c01["folder"], "USB");
         assert_eq!(c01["dismissed"], false);
         assert_eq!(c01["text"]["k"], "core.cue.file_type");
+        // Flat table under a code: paged across folders.
+        let page = parsed(&get("/api/findings/cue/rows?code=C01&limit=20"));
+        assert!(page["total"].as_u64().unwrap() >= 1, "{page}");
+        assert_eq!(page["rows"][0]["code"], "C01");
+        assert_eq!(page["rows"][0]["path"], "USB/a.cue");
+        let out = post(
+            "/api/findings/cue/dismiss",
+            "{\"items\":[{\"code\":\"C01\",\"path\":\"USB/a.cue\"}],\"dismissed\":true}",
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        assert_eq!(parsed(&out)["count"], 1);
+        let out = post(
+            "/api/findings/cue/dismiss",
+            "{\"items\":[{\"code\":\"C01\",\"path\":\"USB/a.cue\"}],\"dismissed\":false}",
+        );
+        assert_eq!(parsed(&out)["count"], 1);
         // A code filter, and a page past the end.
         let page = parsed(&get("/api/findings/cue/folders?code=C99"));
         assert_eq!(page["total"], 0);

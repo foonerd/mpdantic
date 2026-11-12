@@ -4,7 +4,9 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Large-library findings UX: each T/C/P code on the check report leads into the work list for that code; with a code chip on, findings are a paginated file table (twenty at a time) with dismiss, clickable path and bulk dismiss (selected, this page, or all open for the code); tag repair cards list only files that change by default, with Show unchanged for the rest.
 
 ## [0.1.2] - 2026-11-11
 

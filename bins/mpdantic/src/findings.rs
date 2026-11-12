@@ -29,6 +29,9 @@ pub const KINDS: [&str; 3] = ["cue", "tags", "playlists"];
 /// Folders listed per page unless asked otherwise, and the most asked for.
 pub const FOLDERS_DEFAULT: usize = 50;
 pub const FOLDERS_MAX: usize = 500;
+/// Findings listed per page in the flat file table (one code chip on).
+pub const ROWS_DEFAULT: usize = 20;
+pub const ROWS_MAX: usize = 500;
 
 /// One finding as the store keeps it: the code, the folder it is repaired in, the
 /// file or sheet or playlist it is about (the folder itself for a code raised per
@@ -179,6 +182,14 @@ pub struct FoldersPage {
     pub total: usize,
     pub offset: usize,
     pub folders: Vec<FolderSummary>,
+}
+
+/// A page of findings across folders, for the flat table under a code chip.
+#[derive(Clone, Debug, Serialize)]
+pub struct RowsPage {
+    pub total: usize,
+    pub offset: usize,
+    pub rows: Vec<RowOut>,
 }
 
 /// The store: the folder under the data folder, and what is loaded of it. Cloned
@@ -460,6 +471,45 @@ impl Store {
         self.with(kind, |loaded| rows_of(loaded, folder, &dismissed))
     }
 
+    /// Findings the filter takes, by path, a page of them: the flat table under a
+    /// code chip, twenty at a time unless asked otherwise.
+    pub fn rows_page(
+        &self,
+        kind: &str,
+        filter: &Filter,
+        offset: usize,
+        limit: usize,
+    ) -> Option<RowsPage> {
+        let dismissed = self.dismissed(kind);
+        self.with(kind, |loaded| {
+            let matched: Vec<RowOut> = loaded
+                .rows
+                .iter()
+                .filter_map(|row| {
+                    let gone = dismissed.contains(&(row.code.clone(), row.path.clone()));
+                    if !filter.takes(row, gone) {
+                        return None;
+                    }
+                    Some(RowOut {
+                        row: row.clone(),
+                        dismissed: gone,
+                    })
+                })
+                .collect();
+            let total = matched.len();
+            let rows = matched
+                .into_iter()
+                .skip(offset)
+                .take(limit.clamp(1, ROWS_MAX))
+                .collect();
+            RowsPage {
+                total,
+                offset,
+                rows,
+            }
+        })
+    }
+
     /// The folders with an open finding, by path: what a re-check of everything takes.
     pub fn open_folders(&self, kind: &str) -> Vec<String> {
         let dismissed = self.dismissed(kind);
@@ -493,19 +543,96 @@ impl Store {
             })
             .flatten()
             .ok_or_else(no_such_finding)?;
+        self.write_dismissals(kind, &[(code.to_string(), path.to_string())], on)?;
+        Ok(self.rows(kind, &folder).unwrap_or_default())
+    }
+
+    /// Many findings dismissed or restored in one write; how many were found and
+    /// changed. Unknown pairs are skipped, not an error: a page of ticks may race a
+    /// re-check.
+    pub fn dismiss_many(
+        &self,
+        kind: &str,
+        items: &[(String, String)],
+        on: bool,
+    ) -> Result<usize, Msg> {
+        if items.is_empty() {
+            return Ok(0);
+        }
+        let known: BTreeSet<(String, String)> = self
+            .with(kind, |loaded| {
+                loaded
+                    .rows
+                    .iter()
+                    .map(|r| (r.code.clone(), r.path.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pairs: Vec<(String, String)> = items
+            .iter()
+            .filter(|p| known.contains(&(p.0.clone(), p.1.clone())))
+            .cloned()
+            .collect();
+        if pairs.is_empty() {
+            return Ok(0);
+        }
+        self.write_dismissals(kind, &pairs, on)?;
+        Ok(pairs.len())
+    }
+
+    /// Every finding matching the filter's codes dismissed (`on`) or restored; how
+    /// many changed. The filter's `dismissed` flag is not used: dismiss takes the
+    /// open ones, restore the dismissed ones.
+    pub fn dismiss_filter(&self, kind: &str, filter: &Filter, on: bool) -> Result<usize, Msg> {
+        let dismissed = self.dismissed(kind);
+        let pairs: Vec<(String, String)> = self
+            .with(kind, |loaded| {
+                loaded
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        if !filter.codes.is_empty() && !filter.codes.iter().any(|c| c == &row.code)
+                        {
+                            return None;
+                        }
+                        let gone = dismissed.contains(&(row.code.clone(), row.path.clone()));
+                        // Dismiss open ones; restore dismissed ones.
+                        if on == gone {
+                            return None;
+                        }
+                        Some((row.code.clone(), row.path.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let n = pairs.len();
+        if n == 0 {
+            return Ok(0);
+        }
+        self.write_dismissals(kind, &pairs, on)?;
+        Ok(n)
+    }
+
+    fn write_dismissals(
+        &self,
+        kind: &str,
+        pairs: &[(String, String)],
+        on: bool,
+    ) -> Result<(), Msg> {
         let mut all = self.dismissals();
-        all.retain(|d| !(d.kind == kind && d.code == code && d.path == path));
-        if on {
-            all.push(Dismissal {
-                kind: kind.to_string(),
-                code: code.to_string(),
-                path: path.to_string(),
-                when: now(),
-            });
+        for (code, path) in pairs {
+            all.retain(|d| !(d.kind == kind && d.code == *code && d.path == *path));
+            if on {
+                all.push(Dismissal {
+                    kind: kind.to_string(),
+                    code: code.clone(),
+                    path: path.clone(),
+                    when: now(),
+                });
+            }
         }
         fs::create_dir_all(&self.dir).map_err(|e| text::at(self.dir.display(), e))?;
-        write_json(&self.dismissed_file(), &all)?;
-        Ok(self.rows(kind, &folder).unwrap_or_default())
+        write_json(&self.dismissed_file(), &all)
     }
 
     /// A folder's rows replaced by those of a check of it just made: the overlay
@@ -851,6 +978,17 @@ mod tests {
             let page = store.folders("tags", &only_t06, 0, 50).unwrap();
             assert_eq!(page.total, 1);
             assert_eq!(page.folders[0].open, 1);
+            let only_t04 = Filter {
+                codes: vec!["T04".to_string()],
+                dismissed: false,
+            };
+            let files = store.rows_page("tags", &only_t04, 0, 2).unwrap();
+            assert_eq!(files.total, 3);
+            assert_eq!(files.rows.len(), 2);
+            assert_eq!(files.rows[0].row.path, "a/x.flac");
+            let next = store.rows_page("tags", &only_t04, 2, 2).unwrap();
+            assert_eq!(next.rows.len(), 1);
+            assert_eq!(next.rows[0].row.path, "b/c/z.flac");
             let page = store.folders("tags", &Filter::default(), 1, 1).unwrap();
             assert_eq!(page.folders.len(), 1);
             assert_eq!(page.folders[0].folder, "b/c");
@@ -872,6 +1010,39 @@ mod tests {
         }
         assert!(!data.join("findings/tags.jsonl.tmp").exists());
         assert_eq!(store.overview("tags").unwrap().open, 4);
+        fs::remove_dir_all(&data).unwrap();
+    }
+
+    #[test]
+    fn many_findings_are_dismissed_in_one_write_by_items_or_by_the_filter() {
+        let data = temp_data("bulk");
+        let store = Store::new(&data);
+        filled(&store);
+        let only_t04 = Filter {
+            codes: vec!["T04".to_string()],
+            dismissed: false,
+        };
+        assert_eq!(store.dismiss_filter("tags", &only_t04, true).unwrap(), 3);
+        assert_eq!(store.overview("tags").unwrap().open, 1);
+        assert_eq!(
+            store
+                .dismiss_many("tags", &[("T06".to_string(), "a".to_string())], true)
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.overview("tags").unwrap().open, 0);
+        assert_eq!(
+            store
+                .dismiss_many(
+                    "tags",
+                    &[("T04".to_string(), "gone.flac".to_string())],
+                    true
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(store.dismiss_filter("tags", &only_t04, false).unwrap(), 3);
+        assert_eq!(store.overview("tags").unwrap().open, 3);
         fs::remove_dir_all(&data).unwrap();
     }
 
