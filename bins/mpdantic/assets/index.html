@@ -317,7 +317,7 @@
         <div id="folder-tags-box"></div>
         <div id="folder-tags-preview-box"></div>
       </div>
-      <div class="write">
+      <div class="write" id="names-section" hidden>
         <b data-i18n="page.names.title">File names and tags</b>
         <div class="help" data-i18n="page.names.help">One pattern, either way: the files named from their tags, or the tags read from the file names. The placeholders are the fields of the grid; the text between them is taken as it is. A name is made safe for a share: slashes, colons and the characters Windows refuses become underscores. A sheet or a playlist in the folder that names a renamed file is rewritten with it. Nothing is written before the preview and Write; the undo gives the names back.</div>
         <div id="names-box"></div>
@@ -422,16 +422,17 @@
       <div class="actions"><button class="primary" id="fx-stay" data-i18n="page.findings.stay">Stay</button><button id="fx-leave" data-i18n="page.findings.leave">Leave</button></div>
     </div>
   </div>
-  <div class="dialog" id="vacuum-dialog" hidden>
-    <div class="card" role="dialog" aria-modal="true">
-      <div class="text" id="vacuum-text"></div>
-      <div class="actions">
-        <button class="primary" id="vacuum-cancel" data-i18n="page.cancel">Cancel</button>
-        <button id="vacuum-go" data-i18n="page.undo.vacuum_confirm_action">Vacuum</button>
-      </div>
+</section>
+<!-- Outside findings: Written Vacuum must show while that section stays hidden. -->
+<div class="dialog" id="vacuum-dialog" hidden>
+  <div class="card" role="dialog" aria-modal="true">
+    <div class="text" id="vacuum-text"></div>
+    <div class="actions">
+      <button class="primary" id="vacuum-cancel" data-i18n="page.cancel">Cancel</button>
+      <button id="vacuum-go" data-i18n="page.undo.vacuum_confirm_action">Vacuum</button>
     </div>
   </div>
-</section>
+</div>
 <script>
 'use strict';
 (function () {
@@ -612,9 +613,26 @@
     $('analyse-cue').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-tags').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
-    if (!$('panel-tags').hidden) refreshFolderTagsBlock();
+    if (!$('panel-tags').hidden) {
+      refreshFolderTagsBlock();
+      refreshNamesSection();
+    }
     refreshIgnoreTrailer();
     fillFolderHints(gen, hintJobs);
+  }
+
+  // File names and tags only when this folder lists audio files. At the library
+  // root or a folder of albums alone, the block stays hidden so a first install
+  // does not invite a Preview that has nothing to do.
+  function folderHasAudioFiles() {
+    return (current.entries || []).some((e) => !e.dir);
+  }
+
+  function refreshNamesSection() {
+    const section = $('names-section');
+    const show = !!(current.path && !isRootFolder(current.path) && folderHasAudioFiles());
+    section.hidden = !show;
+    if (!show) $('names-preview-box').textContent = '';
   }
 
   // Soft hint beside a junk leaf: album (else album artist) when tags agree.
@@ -801,7 +819,10 @@
     if (tabChanged) render();
     if (name === 'undo') loadUndo();
     if (name === 'system') loadReport();
-    if (name === 'tags') refreshFolderTagsBlock();
+    if (name === 'tags') {
+      refreshFolderTagsBlock();
+      refreshNamesSection();
+    }
     if (!tabChanged) refreshIgnoreTrailer();
   }
 
