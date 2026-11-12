@@ -1317,16 +1317,30 @@
     }
   }
   $('organise-scan').addEventListener('click', scanOrganise);
+  let organiseDuplicates = [];
   $('preview-organise').addEventListener('click', async () => {
     const moves = organiseGroups.filter((g) => g.action === 'move').map((g) => g.folder).filter(Boolean);
+    organiseDuplicates = [];
     const box = $('preview-organise-box');
     const again = async () => {
       try {
         const p = await api('/api/batches', {
           method: 'POST',
           headers: JSON_BODY,
-          body: JSON.stringify({ kind: 'organise', path: current.path, moves }),
+          body: JSON.stringify({
+            kind: 'organise',
+            path: current.path,
+            moves,
+            duplicates: organiseDuplicates,
+          }),
         });
+        if (p.duplicates && p.duplicates.length) {
+          organiseDuplicates = p.duplicates.map((d) => ({
+            name: d.name,
+            to: d.to,
+            action: d.action || 'leave',
+          }));
+        }
         renderPreview(p, box, again, async () => {
           await list(current.path);
           await scanOrganise();
@@ -2696,6 +2710,41 @@
       card.appendChild(list);
       if (p.kind === 'organise') {
         card.appendChild(el('div', 'help', t('page.preview.organise_left')));
+        const dups = p.duplicates || [];
+        if (dups.length) {
+          card.appendChild(el('div', 'help', t('page.preview.organise_identical', { n: dups.length })));
+          const dupList = el('div', 'files');
+          dups.forEach((d, i) => {
+            const row = el('div', 'sugg');
+            const line = el('div', 'top');
+            line.appendChild(el('code', '', d.name));
+            line.appendChild(text('  =  '));
+            line.appendChild(el('code', '', d.to));
+            row.appendChild(line);
+            const picks = el('div', 'line');
+            [['leave', 'page.organise.dup_leave'], ['replace', 'page.organise.dup_replace'], ['remove', 'page.organise.dup_remove']].forEach(([value, key]) => {
+              const lab = el('label', 'pref');
+              const radio = el('input');
+              radio.type = 'radio';
+              radio.name = 'organise-dup-' + i;
+              radio.value = value;
+              radio.checked = (d.action || 'leave') === value;
+              radio.addEventListener('change', () => {
+                if (!radio.checked) return;
+                organiseDuplicates = (organiseDuplicates.length ? organiseDuplicates : dups).map((x, j) => (
+                  j === i ? { name: x.name, to: x.to, action: value } : { name: x.name, to: x.to, action: x.action || 'leave' }
+                ));
+                again();
+              });
+              lab.appendChild(radio);
+              lab.appendChild(text(' ' + t(key)));
+              picks.appendChild(lab);
+            });
+            row.appendChild(picks);
+            dupList.appendChild(row);
+          });
+          card.appendChild(dupList);
+        }
       }
       const refs = p.refs || [];
       if (refs.length) {

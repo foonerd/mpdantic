@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Added
+
+- Organise stage 2: when a destination already holds a bit-identical file, Preview offers leave / replace / remove for that copy (no silent delete).
+
 ### Fixed
 
 - MusicBrainz map no longer refuses when the folder has fewer or more files than the release has tracks. Unique title / track pairing still applies; unmatched files and missing tracks are noted on Preview. Mixed-album folders and a complete pairing miss still refuse.

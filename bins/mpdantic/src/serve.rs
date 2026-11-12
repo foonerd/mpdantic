@@ -947,6 +947,20 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
                 .collect()
         }),
         moves: strings("moves").unwrap_or_default(),
+        duplicates: request["duplicates"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|d| {
+                        Some(write::DuplicatePick {
+                            name: d["name"].as_str()?.to_string(),
+                            to: d["to"].as_str()?.to_string(),
+                            action: d["action"].as_str().unwrap_or("leave").to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -1527,6 +1541,7 @@ mod tests {
             list_kind: None,
             renames: Vec::new(),
             refs: Vec::new(),
+            duplicates: Vec::new(),
         };
         let past = Instant::now() - PREVIEW_TTL - Duration::from_secs(1);
         previews_insert_at(&mut map, stub(1), past);

@@ -59,6 +59,26 @@ pub struct Request {
     /// Destination album folders to move (`organise`): each is a library path
     /// from the scan (`INTERNAL/Artist/Album`).
     pub moves: Vec<String>,
+    /// Bit-identical collisions for `organise`: leave, replace, or remove the source.
+    pub duplicates: Vec<DuplicatePick>,
+}
+
+/// One organise collision the page chose an action for.
+#[derive(Clone, Debug)]
+pub struct DuplicatePick {
+    pub name: String,
+    pub to: String,
+    /// `leave`, `replace`, or `remove`.
+    pub action: String,
+}
+
+/// A destination that already holds a bit-identical copy of a file being moved.
+#[derive(Serialize, Clone, Debug)]
+pub struct Duplicate {
+    pub name: String,
+    pub to: String,
+    /// Chosen or default action: `leave`, `replace`, or `remove`.
+    pub action: String,
 }
 
 /// One file of a rename: its name, the name it would take, or why it is left.
@@ -171,6 +191,9 @@ pub struct Preview {
     /// The sheets and playlists of the folder that follow the renames.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<RefChange>,
+    /// Organise: source files whose destination already holds the same bytes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub duplicates: Vec<Duplicate>,
 }
 
 /// What an apply or an undo did.
@@ -315,6 +338,7 @@ fn empty(id: u64, kind: &str, path: String, file: String, op: &str, placed: Plac
         list_kind: None,
         renames: Vec::new(),
         refs: Vec::new(),
+        duplicates: Vec::new(),
     }
 }
 
@@ -890,7 +914,16 @@ fn prepare_organise(
     let place = placed(shares, &path)?;
     let mut renames = Vec::new();
     let mut refused = Vec::new();
+    let mut duplicates = Vec::new();
     let mut taken: BTreeMap<String, String> = BTreeMap::new();
+    let pick_for = |name: &str, to: &str| -> String {
+        req.duplicates
+            .iter()
+            .find(|d| d.name == name && d.to == to)
+            .map(|d| d.action.as_str())
+            .unwrap_or("leave")
+            .to_string()
+    };
     for g in &groups {
         if !want.contains(&g.folder) {
             continue;
@@ -938,13 +971,48 @@ fn prepare_organise(
                         b = name
                     ),
                 ));
-            } else if present.contains(&name.to_lowercase()) {
-                refused.push((
-                    to.clone(),
-                    msg!("core.names.exists", "a file of this name is there already"),
-                ));
+                continue;
             }
             taken.insert(key, name.clone());
+            if present.contains(&name.to_lowercase()) {
+                let src = dir.join(name);
+                let dst = dest_dir.join(name);
+                if files_bit_identical(&src, &dst)? {
+                    let action = pick_for(name, &to);
+                    duplicates.push(Duplicate {
+                        name: name.clone(),
+                        to: to.clone(),
+                        action: action.clone(),
+                    });
+                    match action.as_str() {
+                        "replace" => renames.push(Rename {
+                            name: name.clone(),
+                            to: Some(to),
+                            note: Some(msg!(
+                                "core.organise.replace",
+                                "identical file there; this copy replaces it"
+                            )),
+                        }),
+                        "remove" => renames.push(Rename {
+                            name: name.clone(),
+                            to: None,
+                            note: Some(msg!(
+                                "core.organise.remove_dup",
+                                "identical file there; this copy is removed"
+                            )),
+                        }),
+                        _ => {
+                            // leave: source stays, destination stays
+                        }
+                    }
+                } else {
+                    refused.push((
+                        to.clone(),
+                        msg!("core.names.exists", "a file of this name is there already"),
+                    ));
+                }
+                continue;
+            }
             renames.push(Rename {
                 name: name.clone(),
                 to: Some(to),
@@ -971,7 +1039,32 @@ fn prepare_organise(
     p.changed = !renames.is_empty() && refused.is_empty();
     p.renames = renames;
     p.refused = refused;
+    p.duplicates = duplicates;
     Ok(p)
+}
+
+/// Whole-file equality for organise collisions (size, then bytes).
+fn files_bit_identical(a: &Path, b: &Path) -> Result<bool, Msg> {
+    use std::io::Read;
+    let ma = fs::metadata(a).map_err(|e| text::at(a.display(), e))?;
+    let mb = fs::metadata(b).map_err(|e| text::at(b.display(), e))?;
+    if ma.len() != mb.len() {
+        return Ok(false);
+    }
+    let mut fa = fs::File::open(a).map_err(|e| text::at(a.display(), e))?;
+    let mut fb = fs::File::open(b).map_err(|e| text::at(b.display(), e))?;
+    let mut ba = [0u8; 65536];
+    let mut bb = [0u8; 65536];
+    loop {
+        let na = fa.read(&mut ba).map_err(|e| text::at(a.display(), e))?;
+        let nb = fb.read(&mut bb).map_err(|e| text::at(b.display(), e))?;
+        if na != nb || ba[..na] != bb[..nb] {
+            return Ok(false);
+        }
+        if na == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 /// The sheets and playlists of the folder that name a renamed file: a sheet's FILE
@@ -1783,13 +1876,19 @@ fn apply_organise(
     mpd_address: &mpd::Address,
     preview: &Preview,
 ) -> Result<Applied, Msg> {
-    let todo: Vec<(&str, &str)> = preview
+    let moves: Vec<(&str, &str)> = preview
         .renames
         .iter()
         .filter_map(|r| r.to.as_deref().map(|to| (r.name.as_str(), to)))
         .collect();
+    let removes: Vec<&str> = preview
+        .renames
+        .iter()
+        .filter(|r| r.to.is_none())
+        .map(|r| r.name.as_str())
+        .collect();
     let src_dir = folder_dir(music, &preview.path);
-    for (from, to) in &todo {
+    for from in removes.iter().copied().chain(moves.iter().map(|(f, _)| *f)) {
         if !src_dir.join(from).exists() {
             return Err(msg!(
                 "core.write.source_gone",
@@ -1797,12 +1896,19 @@ fn apply_organise(
                 name = from
             ));
         }
-        if music.join(to).exists() {
-            return Err(msg!(
-                "core.write.target_taken",
-                "{name}: a file of this name is there since the preview; preview again",
-                name = to
-            ));
+    }
+    for (from, to) in &moves {
+        let dest = music.join(to);
+        if dest.exists() {
+            let src = src_dir.join(from);
+            // Replace of a bit-identical copy is allowed; anything else is stale.
+            if !files_bit_identical(&src, &dest)? {
+                return Err(msg!(
+                    "core.write.target_taken",
+                    "{name}: a file of this name is there since the preview; preview again",
+                    name = to
+                ));
+            }
         }
     }
     let anchor = organise::library_anchor(&preview.path);
@@ -1832,12 +1938,49 @@ fn apply_organise(
     };
     let mut entries = Vec::new();
     let mut failure = None;
-    for (from, to) in &todo {
+    for from in &removes {
+        let src_lib = walk::join(&preview.path, from);
+        let src = disk(&src_lib);
+        let bytes = match fs::read(&src) {
+            Ok(b) => b,
+            Err(e) => {
+                failure = Some(text::at(src.display(), e));
+                break;
+            }
+        };
+        let kept = match journal.keep(&id, &format!("remove-{}", from.replace('/', "_")), &bytes) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        };
+        match fs::remove_file(&src) {
+            Ok(()) => entries.push(Entry {
+                path: src_lib,
+                op: "remove".to_string(),
+                before: None,
+                before_bytes: kept,
+                after: String::new(),
+            }),
+            Err(e) => {
+                failure = Some(text::at(src.display(), e));
+                break;
+            }
+        }
+    }
+    for (from, to) in &moves {
         let src = disk(&walk::join(&preview.path, from));
         let dst = disk(to);
         if let Some(parent) = dst.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
                 failure = Some(text::at(parent.display(), e));
+                break;
+            }
+        }
+        if dst.exists() {
+            if let Err(e) = fs::remove_file(&dst) {
+                failure = Some(text::at(dst.display(), e));
                 break;
             }
         }
@@ -1933,6 +2076,11 @@ enum Step {
     Rename { from: String, to: String },
     /// A file moved back across folders (organise); library paths.
     Move { from_path: String, to_path: String },
+    /// A source removed for a bit-identical organise collision; restore by library path.
+    Restore {
+        library_path: String,
+        bytes: Vec<u8>,
+    },
 }
 
 fn parent_library(path: &str) -> String {
@@ -2034,6 +2182,29 @@ pub fn undo(
             steps.push(Step::Rename { from: to, to: from });
             continue;
         }
+        if entry.op == "remove" && batch.kind == "organise" {
+            let disk = music.join(&entry.path);
+            if disk.exists() {
+                return Err(msg!(
+                    "core.write.file_back",
+                    "a file is there again where the batch removed one; not undone"
+                ));
+            }
+            let bytes = match &entry.before_bytes {
+                Some(name) => journal.kept(&batch.id, name)?,
+                None => {
+                    return Err(msg!(
+                        "core.write.changed_since_batch",
+                        "the file changed since the batch; not undone"
+                    ));
+                }
+            };
+            steps.push(Step::Restore {
+                library_path: entry.path.clone(),
+                bytes,
+            });
+            continue;
+        }
         let current = fs::read(file_on_disk(music, &batch.kind, &entry.path)).ok();
         if entry.op == "remove" {
             if current.is_some() {
@@ -2080,6 +2251,18 @@ pub fn undo(
                 .map_err(|e| text::at(walk::join(&batch.path, name), e)),
             Step::Rename { from, to } => {
                 rename_in(&dir, from, to).map_err(|e| text::at(walk::join(&batch.path, from), e))
+            }
+            Step::Restore {
+                library_path,
+                bytes,
+            } => {
+                let disk = organise_disk(&dir, &undo_mount_path, library_path);
+                if let Some(parent) = disk.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let name = file_name(library_path);
+                let parent = disk.parent().unwrap_or(&dir);
+                write_whole(parent, name, bytes)
             }
             Step::Move { from_path, to_path } => {
                 let from = music.join(from_path);
@@ -2265,6 +2448,7 @@ mod tests {
             edits: None,
             pattern: None,
             moves: Vec::new(),
+            duplicates: Vec::new(),
         }
     }
 
@@ -2283,6 +2467,7 @@ mod tests {
             edits: None,
             pattern: None,
             moves: Vec::new(),
+            duplicates: Vec::new(),
         }
     }
 
@@ -2301,6 +2486,7 @@ mod tests {
             edits: None,
             pattern: None,
             moves: Vec::new(),
+            duplicates: Vec::new(),
         }
     }
 
@@ -2839,6 +3025,7 @@ mod tests {
             edits: None,
             pattern: None,
             moves: Vec::new(),
+            duplicates: Vec::new(),
         };
         let p = prepare(&music, &shares, &d, &playlists, 1, &req).unwrap();
         assert_eq!(p.kind, "volumio_playlist");
@@ -2897,6 +3084,7 @@ mod tests {
             edits: None,
             pattern: Some(pattern.to_string()),
             moves: Vec::new(),
+            duplicates: Vec::new(),
         }
     }
 
@@ -3147,6 +3335,7 @@ mod tests {
                 edits: None,
                 pattern: None,
                 moves: Vec::new(),
+                duplicates: Vec::new(),
             },
         )
         .unwrap_err();
@@ -3171,6 +3360,7 @@ mod tests {
                 edits: None,
                 pattern: None,
                 moves: Vec::new(),
+                duplicates: Vec::new(),
             },
         )
         .unwrap();
@@ -3376,6 +3566,7 @@ mod tests {
                 edits: None,
                 pattern: None,
                 moves: Vec::new(),
+                duplicates: Vec::new(),
             },
         )
         .unwrap_err();
@@ -3403,6 +3594,7 @@ mod tests {
                     "INTERNAL/Phil Collins/Hits".into(),
                     "INTERNAL/Phil Collins/But Seriously".into(),
                 ],
+                duplicates: Vec::new(),
             },
         )
         .unwrap();
@@ -3429,6 +3621,76 @@ mod tests {
         assert!(dump.join("h1.flac").is_file());
         assert!(dump.join("s1.flac").is_file());
         assert!(dump.join("n1.flac").is_file());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn organise_bit_identical_collision_offers_leave_replace_remove() {
+        let dir = temp("organise-dup");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pl = dir.join("playlists");
+        let dump = music.join("INTERNAL/Phil Collins/Phil Collins");
+        let hits = music.join("INTERNAL/Phil Collins/Hits");
+        fs::create_dir_all(&dump).unwrap();
+        fs::create_dir_all(&hits).unwrap();
+        let bytes = real_flac(&[
+            ("ALBUM", "Hits"),
+            ("ALBUMARTIST", "Phil Collins"),
+            ("TITLE", "One"),
+        ]);
+        fs::write(dump.join("h1.flac"), &bytes).unwrap();
+        fs::write(hits.join("h1.flac"), &bytes).unwrap();
+        let req = |dups: Vec<DuplicatePick>| Request {
+            kind: "organise".into(),
+            path: "INTERNAL/Phil Collins/Phil Collins".into(),
+            lines: Vec::new(),
+            repairs: None,
+            encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
+            base: None,
+            name: None,
+            edits: None,
+            pattern: None,
+            moves: vec!["INTERNAL/Phil Collins/Hits".into()],
+            duplicates: dups,
+        };
+        let leave = prepare(&music, &shares, &d, &pl, 1, &req(Vec::new())).unwrap();
+        assert!(!leave.changed);
+        assert!(leave.renames.is_empty());
+        assert_eq!(leave.duplicates.len(), 1);
+        assert_eq!(leave.duplicates[0].action, "leave");
+        assert!(leave.refused.is_empty());
+        let remove = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            2,
+            &req(vec![DuplicatePick {
+                name: "h1.flac".into(),
+                to: "INTERNAL/Phil Collins/Hits/h1.flac".into(),
+                action: "remove".into(),
+            }]),
+        )
+        .unwrap();
+        assert!(remove.changed);
+        assert_eq!(remove.renames.len(), 1);
+        assert!(remove.renames[0].to.is_none());
+        let a = apply(&music, &shares, &mounter, &journal, &address, &remove).unwrap();
+        assert_eq!(a.count, 1);
+        assert!(!dump.join("h1.flac").exists());
+        assert!(hits.join("h1.flac").is_file());
+        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        assert_eq!(u.count, 1);
+        assert!(dump.join("h1.flac").is_file());
+        assert!(hits.join("h1.flac").is_file());
         fs::remove_dir_all(&dir).unwrap();
     }
 }
