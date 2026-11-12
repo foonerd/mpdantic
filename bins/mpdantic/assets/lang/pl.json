@@ -530,6 +530,7 @@
   "core.api.no_language": "nie ma takiego języka",
   "core.api.measuring": "trwa pomiar; poczekaj na niego",
   "core.api.no_preview": "nie ma takiego podglądu",
+  "core.api.preview_gone": "podgląd wygasł; wygeneruj podgląd ponownie",
   "core.api.not_preferences": "treść to nie ustawienia",
   "core.api.no_job": "jeszcze nie ma zadania",
   "core.api.no_such_job": "nie ma takiego zadania",

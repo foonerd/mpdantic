@@ -1178,6 +1178,19 @@ mod tests {
             .unwrap();
         assert!(de.contains("T04\ta/x.flac\t0\ta/x.flac: keine Titelnummer\tdismissed\n"));
         assert!(de.contains("T06\ta\t0\ta: 2 Alben, 1 Albuminterpret in 2 Dateien\n"));
+        // The file table's code chip is the export's code filter (U5).
+        let one = store
+            .export(
+                "tags",
+                "en",
+                &Filter {
+                    codes: vec!["T04".into()],
+                    dismissed: false,
+                },
+            )
+            .unwrap();
+        assert!(one.contains("T04\ta/y.flac\t"), "{one}");
+        assert!(!one.contains("T06\t"), "{one}");
         assert_eq!(iso(1_794_399_273), "2026-11-11T12:14:33Z");
         assert_eq!(iso(0), "1970-01-01T00:00:00Z");
         fs::remove_dir_all(&data).unwrap();

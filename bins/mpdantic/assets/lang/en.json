@@ -530,6 +530,7 @@
   "core.api.no_language": "no such language",
   "core.api.measuring": "a measurement is running; wait for it",
   "core.api.no_preview": "no such preview",
+  "core.api.preview_gone": "the preview expired; preview again",
   "core.api.not_preferences": "the body is not the preferences",
   "core.api.no_job": "no job yet",
   "core.api.no_such_job": "no such job",

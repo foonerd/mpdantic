@@ -4,12 +4,13 @@
 //! when written. The page is one file built into the binary; it asks the API for the
 //! status, for one directory's listing at a time, and for the jobs it starts.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -42,6 +43,62 @@ const AT_ONCE: usize = 8;
 /// A request head longer than this is dropped; a body longer than this refused.
 const MAX_HEAD: usize = 16384;
 const MAX_BODY: usize = 65536;
+/// How long a prepared batch may wait for Write before it is dropped (20 minutes).
+const PREVIEW_TTL: Duration = Duration::from_secs(20 * 60);
+/// How many prepared batches may sit at once; the oldest goes when a new one arrives.
+const PREVIEW_CAP: usize = 32;
+
+/// A prepared batch held until Write, with when it was made.
+pub struct HeldPreview {
+    preview: write::Preview,
+    at: Instant,
+}
+
+enum PreviewLook {
+    Ready(Box<write::Preview>),
+    Missing,
+    Gone,
+}
+
+fn previews_sweep(map: &mut HashMap<u64, HeldPreview>, now: Instant) {
+    map.retain(|_, h| now.duration_since(h.at) < PREVIEW_TTL);
+}
+
+fn previews_insert(map: &mut HashMap<u64, HeldPreview>, preview: write::Preview) {
+    previews_insert_at(map, preview, Instant::now());
+}
+
+fn previews_insert_at(map: &mut HashMap<u64, HeldPreview>, preview: write::Preview, at: Instant) {
+    previews_sweep(map, at);
+    while map.len() >= PREVIEW_CAP {
+        let oldest = map.iter().min_by_key(|(_, h)| h.at).map(|(id, _)| *id);
+        match oldest {
+            Some(id) => {
+                map.remove(&id);
+            }
+            None => break,
+        }
+    }
+    map.insert(preview.id, HeldPreview { preview, at });
+}
+
+fn previews_look(map: &mut HashMap<u64, HeldPreview>, id: u64) -> PreviewLook {
+    let now = Instant::now();
+    // This id first: an expired one is Gone (410), not Missing (404), so the page
+    // can say to preview again. Other expired entries are swept as a side effect.
+    let looked = match map.get(&id) {
+        Some(h) if now.duration_since(h.at) < PREVIEW_TTL => {
+            PreviewLook::Ready(Box::new(h.preview.clone()))
+        }
+        Some(_) => {
+            map.remove(&id);
+            PreviewLook::Gone
+        }
+        None => PreviewLook::Missing,
+    };
+    previews_sweep(map, now);
+    looked
+}
 
 /// What the routes read and start.
 pub struct Shared {
@@ -68,8 +125,8 @@ pub struct Shared {
     pub journal: undo::Journal,
     /// The findings of the last check of each kind, kept whole.
     pub findings: findings::Store,
-    /// The previews prepared and not yet applied, by id.
-    pub previews: Mutex<std::collections::HashMap<u64, write::Preview>>,
+    /// The previews prepared and not yet applied, by id, with a TTL and a cap.
+    pub previews: Mutex<HashMap<u64, HeldPreview>>,
     pub next_preview: std::sync::atomic::AtomicU64,
 }
 
@@ -317,10 +374,18 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         }
         (_, _) if get && r.path.starts_with("/api/batches/") => {
             let id: Option<u64> = r.path["/api/batches/".len()..].parse().ok();
-            let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
-            match id.and_then(|id| previews.get(&id)) {
-                Some(p) => (200, json, json_of(p)),
-                None => (
+            let mut previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
+            match id.map(|id| previews_look(&mut previews, id)) {
+                Some(PreviewLook::Ready(p)) => (200, json, json_of(p.as_ref())),
+                Some(PreviewLook::Gone) => (
+                    410,
+                    json,
+                    error(&msg!(
+                        "core.api.preview_gone",
+                        "the preview expired; preview again"
+                    )),
+                ),
+                Some(PreviewLook::Missing) | None => (
                     404,
                     json,
                     error(&msg!("core.api.no_preview", "no such preview")),
@@ -885,11 +950,10 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
     ) {
         Ok(preview) => {
             let body = json_of(&preview);
-            shared
-                .previews
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(id, preview);
+            previews_insert(
+                &mut shared.previews.lock().unwrap_or_else(|e| e.into_inner()),
+                preview,
+            );
             (200, body)
         }
         Err(e) => (400, error(&e)),
@@ -899,10 +963,21 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
 /// `POST /api/batches/<id>/apply`: the preview written, journaled, MPD told.
 fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
     let preview = {
-        let previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
-        match id.and_then(|id| previews.get(&id).cloned()) {
-            Some(p) => p,
-            None => return (404, error(&msg!("core.api.no_preview", "no such preview"))),
+        let mut previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
+        match id.map(|id| previews_look(&mut previews, id)) {
+            Some(PreviewLook::Ready(p)) => *p,
+            Some(PreviewLook::Gone) => {
+                return (
+                    410,
+                    error(&msg!(
+                        "core.api.preview_gone",
+                        "the preview expired; preview again"
+                    )),
+                )
+            }
+            Some(PreviewLook::Missing) | None => {
+                return (404, error(&msg!("core.api.no_preview", "no such preview")))
+            }
         }
     };
     let shares = mount::shares(&shared.networkfs).unwrap_or_default();
@@ -1255,10 +1330,78 @@ mod tests {
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
             journal: undo::Journal::new(&data.join("undo")),
             findings: findings::Store::new(&data),
-            previews: Mutex::new(std::collections::HashMap::new()),
+            previews: Mutex::new(HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(0),
         });
         start(0, shared).unwrap()
+    }
+
+    #[test]
+    fn an_expired_preview_is_gone_and_the_cap_drops_the_oldest() {
+        let mut map = HashMap::new();
+        let stub = |id: u64| write::Preview {
+            id,
+            kind: "mpdignore".into(),
+            path: "USB".into(),
+            file: "USB/.mpdignore".into(),
+            op: "write_text".into(),
+            exists: false,
+            before: String::new(),
+            after: "*.iso\n".into(),
+            changed: true,
+            place: "local".into(),
+            share: None,
+            share_folder: None,
+            size: 0,
+            mtime: 0,
+            added: vec!["*.iso".into()],
+            removed: Vec::new(),
+            already: Vec::new(),
+            refused: Vec::new(),
+            repairs: Vec::new(),
+            encoding: None,
+            encodings: Vec::new(),
+            remaining: Vec::new(),
+            notes: Vec::new(),
+            lines_changed: 0,
+            files: Vec::new(),
+            values: None,
+            album: None,
+            album_artist: None,
+            date: None,
+            entries: Vec::new(),
+            not_found: 0,
+            imported: Vec::new(),
+            name: None,
+            from: None,
+            left_out: 0,
+            edited: false,
+            items: Vec::new(),
+            kept: 0,
+            list_kind: None,
+            renames: Vec::new(),
+            refs: Vec::new(),
+        };
+        let past = Instant::now() - PREVIEW_TTL - Duration::from_secs(1);
+        previews_insert_at(&mut map, stub(1), past);
+        assert!(matches!(previews_look(&mut map, 1), PreviewLook::Gone));
+        assert!(map.is_empty());
+        let base = Instant::now() - Duration::from_secs(60);
+        for id in 1..=PREVIEW_CAP as u64 {
+            previews_insert_at(&mut map, stub(id), base + Duration::from_secs(id));
+        }
+        assert_eq!(map.len(), PREVIEW_CAP);
+        previews_insert_at(
+            &mut map,
+            stub(PREVIEW_CAP as u64 + 1),
+            base + Duration::from_secs(PREVIEW_CAP as u64 + 1),
+        );
+        assert_eq!(map.len(), PREVIEW_CAP);
+        assert!(matches!(previews_look(&mut map, 1), PreviewLook::Missing));
+        assert!(matches!(
+            previews_look(&mut map, PREVIEW_CAP as u64 + 1),
+            PreviewLook::Ready(_)
+        ));
     }
 
     #[test]

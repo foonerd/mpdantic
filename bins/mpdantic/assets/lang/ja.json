@@ -530,6 +530,7 @@
   "core.api.no_language": "そのような言語はありません",
   "core.api.measuring": "計測が実行中です。終わるまでお待ちください",
   "core.api.no_preview": "そのようなプレビューはありません",
+  "core.api.preview_gone": "プレビューの期限が切れました。もう一度プレビューしてください",
   "core.api.not_preferences": "本文が設定ではありません",
   "core.api.no_job": "まだジョブはありません",
   "core.api.no_such_job": "そのようなジョブはありません",

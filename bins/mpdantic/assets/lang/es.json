@@ -530,6 +530,7 @@
   "core.api.no_language": "no existe ese idioma",
   "core.api.measuring": "hay una medición en curso; espere a que termine",
   "core.api.no_preview": "no existe esa vista previa",
+  "core.api.preview_gone": "la vista previa caducó; vuelva a previsualizar",
   "core.api.not_preferences": "el cuerpo no son las preferencias",
   "core.api.no_job": "aún no hay trabajo",
   "core.api.no_such_job": "no existe ese trabajo",

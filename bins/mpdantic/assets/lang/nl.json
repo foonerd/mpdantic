@@ -530,6 +530,7 @@
   "core.api.no_language": "geen taal met die code",
   "core.api.measuring": "er loopt een meting; wacht erop",
   "core.api.no_preview": "geen voorbeeld met dat nummer",
+  "core.api.preview_gone": "de voorvertoning is verlopen; voorvertoon opnieuw",
   "core.api.not_preferences": "de inhoud is niet de voorkeuren",
   "core.api.no_job": "nog geen taak",
   "core.api.no_such_job": "geen taak met dat nummer",

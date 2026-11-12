@@ -530,6 +530,7 @@
   "core.api.no_language": "pas de langue de ce nom",
   "core.api.measuring": "une mesure est en cours ; attendez-la",
   "core.api.no_preview": "pas d'aperçu de ce nom",
+  "core.api.preview_gone": "l’aperçu a expiré ; prévisualisez à nouveau",
   "core.api.not_preferences": "le corps n'est pas les préférences",
   "core.api.no_job": "pas encore de tâche",
   "core.api.no_such_job": "pas de tâche de ce nom",

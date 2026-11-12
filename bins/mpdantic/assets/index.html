@@ -167,13 +167,15 @@
   .frow .text { flex: 1; min-width: 12em; overflow-wrap: anywhere; }
   /* Flat findings table under a code chip: dismiss, path, reason. */
   .fx-bulk { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
-  table.fx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  table.fx-table th, table.fx-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.fx-table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.35; table-layout: fixed; }
+  table.fx-table th, table.fx-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   table.fx-table th { color: var(--muted); font-weight: 600; }
   table.fx-table tr.dismissed { opacity: .6; }
-  table.fx-table a.path { font-weight: 600; overflow-wrap: anywhere; }
-  table.fx-table .reason { color: var(--muted); overflow-wrap: anywhere; }
-  table.fx-table td.tick { width: 2.5em; }
+  table.fx-table a.path { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; overflow-wrap: anywhere; }
+  table.fx-table .reason { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.fx-table td.tick { width: 2em; }
+  table.fx-table th:nth-child(2), table.fx-table td:nth-child(2) { width: 42%; }
+  table.fx-table th:nth-child(3), table.fx-table td:nth-child(3) { width: auto; }
   .fxeditor, .fxnamer { margin-top: 10px; }
   .fxeditor .line, .fxnamer .line { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   input.pattern { width: 16em; padding: 4px 8px; font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }

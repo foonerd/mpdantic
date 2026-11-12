@@ -530,6 +530,7 @@
   "core.api.no_language": "nessuna lingua con questo nome",
   "core.api.measuring": "una misurazione è in corso; attendila",
   "core.api.no_preview": "nessuna anteprima con questo id",
+  "core.api.preview_gone": "l’anteprima è scaduta; anteprima di nuovo",
   "core.api.not_preferences": "il corpo non è le preferenze",
   "core.api.no_job": "nessun lavoro ancora",
   "core.api.no_such_job": "nessun lavoro con questo id",

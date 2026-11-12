@@ -174,3 +174,30 @@ test('the buffer summary names the reason, the bound and the inputs', () => {
     assert.match(h.bufferSummary(h.bufferPlan({ memTotal: 1, heapLimit: 1, arch: 'arm', mpdVersion: [0, 20, 0] }), t), /^BUFFER_MPD_OLD .*"version":"0.20.0"/);
     assert.match(h.bufferSummary(h.bufferPlan({ enabled: false }), t), /^BUFFER_OFF /);
 });
+
+test('the MPD hook is registered once and taken off the list on unregister', () => {
+    const calls = [];
+    const mpd = {
+        registeredCallbacks: [{ type: 'other', plugin: 'x', data: 'y' }],
+        registerConfigCallback: (c) => { calls.push(c); mpd.registeredCallbacks.push(c); }
+    };
+    assert.equal(h.registerMpdHook(null, 'system_controller', 'mpdantic'), false);
+    assert.equal(h.registerMpdHook({}, 'system_controller', 'mpdantic'), false);
+    assert.equal(h.registerMpdHook(mpd, 'system_controller', 'mpdantic'), true);
+    assert.equal(h.registerMpdHook(mpd, 'system_controller', 'mpdantic'), true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], { type: 'system_controller', plugin: 'mpdantic', data: 'getMpdConfig' });
+    h.unregisterMpdHook(mpd, 'system_controller', 'mpdantic');
+    assert.deepEqual(mpd.registeredCallbacks, [{ type: 'other', plugin: 'x', data: 'y' }]);
+    h.unregisterMpdHook(null, 'system_controller', 'mpdantic');
+});
+
+test('the announcement is written direct, or through sudo when the folder refuses', () => {
+    assert.deepEqual(h.announceWrite(() => {}, 'svc'), { via: 'direct' });
+    const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+    assert.deepEqual(h.announceWrite(() => { throw denied; }, 'svc'), { via: 'sudo' });
+    const other = Object.assign(new Error('gone'), { code: 'ENOENT' });
+    const out = h.announceWrite(() => { throw other; }, 'svc');
+    assert.equal(out.via, 'error');
+    assert.equal(out.error, other);
+});

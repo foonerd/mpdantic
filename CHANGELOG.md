@@ -10,6 +10,12 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 - Share writes go through a mount helper sudo may run: cifs or nfs under `/run/mpdantic/mounts` only. The sudoers entry no longer grants raw `mount` and `umount`.
 - Store details name the LAN posture (pages open on the player's network, as Volumio's own) and that each write is followed by Volumio's album-list rebuild.
 
+### Changed
+
+- Prepared write batches expire after twenty minutes and at most thirty-two sit at once (oldest dropped); apply or fetch of an expired preview answers 410.
+- Findings export with a code filter matches the file-table chip; the code-page table is denser (fixed columns, ellipsis on the reason).
+- Shell: MPD hook register/unregister and the announce write path are tested with injected doubles.
+
 ## [0.1.3] - 2026-11-12
 
 The fourth test cut, a pre-release as the three before: large-library findings worked through by code, on the same two players. Every write is still undoable from the Written tab.

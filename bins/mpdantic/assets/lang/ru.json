@@ -530,6 +530,7 @@
   "core.api.no_language": "нет такого языка",
   "core.api.measuring": "идёт измерение; дождитесь его",
   "core.api.no_preview": "нет такого предпросмотра",
+  "core.api.preview_gone": "срок предпросмотра истёк; сделайте предпросмотр снова",
   "core.api.not_preferences": "тело запроса — не настройки",
   "core.api.no_job": "задания пока нет",
   "core.api.no_such_job": "нет такого задания",

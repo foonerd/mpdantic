@@ -172,13 +172,9 @@ Mpdantic.prototype.mpdPlugin = function () {
 
 Mpdantic.prototype.registerMpdHook = function () {
     const mpd = this.mpdPlugin();
-    if (!mpd || typeof mpd.registerConfigCallback !== 'function') {
+    if (!h.registerMpdHook(mpd, PLUGIN_TYPE, PLUGIN_NAME)) {
         this.logger.warn(LOG + 'the MPD plugin has no registerConfigCallback; the output buffer is not sized');
         return false;
-    }
-    const list = Array.isArray(mpd.registeredCallbacks) ? mpd.registeredCallbacks : [];
-    if (!list.some((c) => c && c.type === PLUGIN_TYPE && c.plugin === PLUGIN_NAME)) {
-        mpd.registerConfigCallback({ type: PLUGIN_TYPE, plugin: PLUGIN_NAME, data: 'getMpdConfig' });
     }
     return true;
 };
@@ -186,10 +182,7 @@ Mpdantic.prototype.registerMpdHook = function () {
 // The backend has no unregister; a stale entry would make createMPDFile append the
 // word "undefined" to mpd.conf.
 Mpdantic.prototype.unregisterMpdHook = function () {
-    const mpd = this.mpdPlugin();
-    if (mpd && Array.isArray(mpd.registeredCallbacks)) {
-        mpd.registeredCallbacks = mpd.registeredCallbacks.filter((c) => !(c && c.type === PLUGIN_TYPE && c.plugin === PLUGIN_NAME));
-    }
+    h.unregisterMpdHook(this.mpdPlugin(), PLUGIN_TYPE, PLUGIN_NAME);
 };
 
 // MPD's version, read once: it says whether a second value for a setting counts.
@@ -296,12 +289,9 @@ Mpdantic.prototype.updateBuffer = function (data) {
 Mpdantic.prototype.announce = function () {
     const self = this;
     const text = h.avahiService(h.settingsFrom((k, d) => self.config.get(k, d)).port);
-    try {
-        fs.writeFileSync(AVAHI_FILE, text);
-        return libQ.resolve();
-    } catch (e) {
-        if (e.code !== 'EACCES' && e.code !== 'EPERM') return libQ.reject(e);
-    }
+    const plan = h.announceWrite((body) => fs.writeFileSync(AVAHI_FILE, body), text);
+    if (plan.via === 'direct') return libQ.resolve();
+    if (plan.via === 'error') return libQ.reject(plan.error);
     const defer = libQ.defer();
     const child = execFile('/usr/bin/sudo', ['/usr/bin/tee', AVAHI_FILE], { timeout: 10000 }, (error, stdout, stderr) => {
         if (error) defer.reject(new Error(String(stderr || error.message).trim()));

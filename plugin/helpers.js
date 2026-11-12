@@ -238,7 +238,40 @@ function bufferSummary(plan, t) {
     return t('BUFFER_' + plan.reason.toUpperCase(), vars);
 }
 
+// Register this plugin's MPD config hook once on the MPD plugin's callback list.
+function registerMpdHook(mpd, type, name) {
+    if (!mpd || typeof mpd.registerConfigCallback !== 'function') return false;
+    const list = Array.isArray(mpd.registeredCallbacks) ? mpd.registeredCallbacks : [];
+    if (!list.some((c) => c && c.type === type && c.plugin === name)) {
+        mpd.registerConfigCallback({ type: type, plugin: name, data: 'getMpdConfig' });
+    }
+    return true;
+}
+
+// Drop this plugin's hook from the list; the backend has no unregister of its own.
+function unregisterMpdHook(mpd, type, name) {
+    if (mpd && Array.isArray(mpd.registeredCallbacks)) {
+        mpd.registeredCallbacks = mpd.registeredCallbacks.filter(
+            (c) => !(c && c.type === type && c.plugin === name)
+        );
+    }
+}
+
+// How the announcement file is written: direct when the folder allows it, else sudo.
+// writeFileSync and the error's code are injected so the shell path is tested without
+// touching /etc/avahi.
+function announceWrite(writeFileSync, text) {
+    try {
+        writeFileSync(text);
+        return { via: 'direct' };
+    } catch (e) {
+        if (e && (e.code === 'EACCES' || e.code === 'EPERM')) return { via: 'sudo' };
+        return { via: 'error', error: e };
+    }
+}
+
 module.exports = {
     DEFAULT_PORT, validatePort, validateAddress, languageCode, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
-    BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary, bufferPlanFile
+    BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary, bufferPlanFile,
+    registerMpdHook, unregisterMpdHook, announceWrite
 };

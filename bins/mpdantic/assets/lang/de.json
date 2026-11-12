@@ -530,6 +530,7 @@
   "core.api.no_language": "keine solche Sprache",
   "core.api.measuring": "eine Messung läuft; warten Sie darauf",
   "core.api.no_preview": "keine solche Vorschau",
+  "core.api.preview_gone": "die Vorschau ist abgelaufen; bitte erneut Vorschau",
   "core.api.not_preferences": "der Inhalt ist nicht die Einstellungen",
   "core.api.no_job": "noch kein Job",
   "core.api.no_such_job": "kein solcher Job",

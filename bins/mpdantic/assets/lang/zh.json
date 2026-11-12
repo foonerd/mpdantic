@@ -530,6 +530,7 @@
   "core.api.no_language": "没有这种语言",
   "core.api.measuring": "测量正在进行；请等待它完成",
   "core.api.no_preview": "没有这个预览",
+  "core.api.preview_gone": "预览已过期；请重新预览",
   "core.api.not_preferences": "请求内容不是偏好设置",
   "core.api.no_job": "还没有任务",
   "core.api.no_such_job": "没有这个任务",
