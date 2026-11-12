@@ -2,12 +2,14 @@
 //! track count, pick a release, map its tracks onto the folder's files, hand the
 //! edits to the existing tag write path. A folder with more than one album tag is
 //! not a dead end on search: the page gets the album groups and what to do next
-//! (split, then look up each). Map still refuses a mixed folder, a file/track count
-//! mismatch, or an incomplete title/track pair (no order-only zip). The search is a
-//! short ladder: as tagged, then without an edition suffix, then without locking the
-//! track count; the card says which step hit. One request per second on the public
-//! site, a cache under the data folder, backoff on 503. A local mirror from the
-//! settings skips the gap. No AcoustID, no write to MusicBrainz.
+//! (split, then look up each). Map refuses a mixed folder, or when nothing pairs by
+//! title/track number (no order-only zip). A shorter or longer folder than the
+//! release is allowed: paired files get edits; unmatched files and missing tracks
+//! are reported as guidance. The search is a short ladder: as tagged, then without
+//! an edition suffix, then without locking the track count; the card says which
+//! step hit. One request per second on the public site, a cache under the data
+//! folder, backoff on 503. A local mirror from the settings skips the gap. No
+//! AcoustID, no write to MusicBrainz.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -216,20 +218,12 @@ impl Client {
         );
         let body = self.get_cached(&url)?;
         let release = parse_release(&body)?;
-        if files.len() != release.tracks.len() {
-            return Err(msg!(
-                "core.mb.count_mismatch",
-                "the folder has {files} files but the release has {tracks} tracks",
-                files = files.len(),
-                tracks = release.tracks.len()
-            ));
-        }
-        let edits = map_edits(&files, &release)?;
+        let plan = map_edits(&files, &release)?;
         Ok(Mapped {
-            unmatched_files: 0,
-            unmatched_tracks: 0,
+            unmatched_files: plan.unmatched_files,
+            unmatched_tracks: plan.unmatched_tracks,
             release,
-            edits,
+            edits: plan.edits,
         })
     }
 
@@ -791,13 +785,21 @@ fn first_str<'a>(f: &'a FileValues, field: &str) -> Option<&'a str> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// Pair each file to one release track by unique normalised title, then by disc+track.
-/// Leftovers or an unwritable file refuse; no order-only zip.
-fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<Vec<EditJson>, Msg> {
-    let n = files.len();
-    debug_assert_eq!(n, release.tracks.len());
-    let mut file_of_track: Vec<Option<usize>> = vec![None; n];
-    let mut track_of_file: Vec<Option<usize>> = vec![None; n];
+/// What map hands to Preview: the paired edits, and how many files / release tracks
+/// could not be uniquely paired (guidance, not a refuse).
+#[derive(Debug)]
+struct MapPlan {
+    edits: Vec<EditJson>,
+    unmatched_files: usize,
+    unmatched_tracks: usize,
+}
+
+/// Pair files to release tracks by unique normalised title, then by disc+track.
+/// Paired writable files get edits; leftovers are counted. Refuses only when nothing
+/// pairs. No order-only zip.
+fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<MapPlan, Msg> {
+    let mut file_of_track: Vec<Option<usize>> = vec![None; release.tracks.len()];
+    let mut track_of_file: Vec<Option<usize>> = vec![None; files.len()];
 
     // Pass 1: unique exact normalised title.
     for (fi, file) in files.iter().enumerate() {
@@ -862,23 +864,19 @@ fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<Vec<EditJs
         }
     }
 
-    if track_of_file.iter().any(|t| t.is_none()) || file_of_track.iter().any(|f| f.is_none()) {
-        return Err(msg!(
-            "core.mb.pair_failed",
-            "could not pair every file to a release track by title or track number"
-        ));
-    }
-
-    let mut edits = Vec::with_capacity(n);
+    let mut edits = Vec::new();
+    let mut unmatched_files = 0;
     for (fi, file) in files.iter().enumerate() {
-        let ti = track_of_file[fi].expect("paired");
-        let tr = &release.tracks[ti];
+        let Some(ti) = track_of_file[fi] else {
+            unmatched_files += 1;
+            continue;
+        };
         if !file.writable {
-            return Err(msg!(
-                "core.mb.pair_failed",
-                "could not pair every file to a release track by title or track number"
-            ));
+            unmatched_files += 1;
+            file_of_track[ti] = None;
+            continue;
         }
+        let tr = &release.tracks[ti];
         let mut set = BTreeMap::new();
         if !tr.title.is_empty() {
             set.insert("title".into(), tr.title.clone());
@@ -907,20 +905,28 @@ fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<Vec<EditJs
         if tr.disc > 0 {
             set.insert("disc".into(), tr.disc.to_string());
         }
-        if !set.is_empty() {
-            edits.push(EditJson {
-                name: file.name.clone(),
-                set,
-            });
+        if set.is_empty() {
+            unmatched_files += 1;
+            file_of_track[ti] = None;
+            continue;
         }
+        edits.push(EditJson {
+            name: file.name.clone(),
+            set,
+        });
     }
-    if edits.len() != n {
+    let unmatched_tracks = file_of_track.iter().filter(|f| f.is_none()).count();
+    if edits.is_empty() {
         return Err(msg!(
             "core.mb.pair_failed",
-            "could not pair every file to a release track by title or track number"
+            "could not pair any file to a release track by title or track number"
         ));
     }
-    Ok(edits)
+    Ok(MapPlan {
+        edits,
+        unmatched_files,
+        unmatched_tracks,
+    })
 }
 
 fn first_num(f: &FileValues, field: &str) -> Option<u32> {
@@ -1024,12 +1030,26 @@ mod tests {
                 problem: None,
             },
         ];
-        let edits = map_edits(&files, &release).unwrap();
-        assert_eq!(edits.len(), 2);
-        assert_eq!(edits[0].set.get("title").map(String::as_str), Some("One"));
-        assert_eq!(edits[0].set.get("album").map(String::as_str), Some("Demo"));
-        assert_eq!(edits[0].set.get("date").map(String::as_str), Some("1999"));
-        assert_eq!(edits[1].set.get("title").map(String::as_str), Some("Two"));
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(plan.edits.len(), 2);
+        assert_eq!(plan.unmatched_files, 0);
+        assert_eq!(plan.unmatched_tracks, 0);
+        assert_eq!(
+            plan.edits[0].set.get("title").map(String::as_str),
+            Some("One")
+        );
+        assert_eq!(
+            plan.edits[0].set.get("album").map(String::as_str),
+            Some("Demo")
+        );
+        assert_eq!(
+            plan.edits[0].set.get("date").map(String::as_str),
+            Some("1999")
+        );
+        assert_eq!(
+            plan.edits[1].set.get("title").map(String::as_str),
+            Some("Two")
+        );
 
         let body = client.get_cached(&release_url).unwrap();
         assert!(body.contains("Demo"));
@@ -1244,12 +1264,21 @@ mod tests {
                 ]),
             ),
         ];
-        let edits = map_edits(&files, &release).unwrap();
-        assert_eq!(edits[0].name, "02.flac");
-        assert_eq!(edits[0].set.get("title").map(String::as_str), Some("Two"));
-        assert_eq!(edits[0].set.get("track").map(String::as_str), Some("2"));
-        assert_eq!(edits[1].name, "01.flac");
-        assert_eq!(edits[1].set.get("title").map(String::as_str), Some("One"));
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(plan.edits[0].name, "02.flac");
+        assert_eq!(
+            plan.edits[0].set.get("title").map(String::as_str),
+            Some("Two")
+        );
+        assert_eq!(
+            plan.edits[0].set.get("track").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(plan.edits[1].name, "01.flac");
+        assert_eq!(
+            plan.edits[1].set.get("title").map(String::as_str),
+            Some("One")
+        );
     }
 
     #[test]
@@ -1280,13 +1309,19 @@ mod tests {
                 BTreeMap::from([("track".into(), vec!["1".into()])]),
             ),
         ];
-        let edits = map_edits(&files, &release).unwrap();
-        assert_eq!(edits[0].set.get("title").map(String::as_str), Some("Two"));
-        assert_eq!(edits[1].set.get("title").map(String::as_str), Some("One"));
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(
+            plan.edits[0].set.get("title").map(String::as_str),
+            Some("Two")
+        );
+        assert_eq!(
+            plan.edits[1].set.get("title").map(String::as_str),
+            Some("One")
+        );
     }
 
     #[test]
-    fn unpaired_files_refuse_without_order_zip() {
+    fn nothing_paired_refuses_without_order_zip() {
         let release = demo_release(vec![
             ReleaseTrack {
                 number: "1".into(),
@@ -1318,33 +1353,48 @@ mod tests {
     }
 
     #[test]
-    fn a_count_mismatch_is_the_dump_shape() {
-        // Three files tagged as one album vs a two-track release: map_release
-        // refuses before pairing (Phil Collins dump class).
+    fn fewer_files_than_tracks_maps_what_pairs() {
+        let release = demo_release(vec![
+            ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "2".into(),
+                title: "Two".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "3".into(),
+                title: "Three".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+        ]);
         let files = vec![
             file(
                 "01.flac",
-                BTreeMap::from([
-                    ("album".into(), vec!["Hits".into()]),
-                    ("title".into(), vec!["One".into()]),
-                ]),
+                BTreeMap::from([("title".into(), vec!["One".into()])]),
             ),
             file(
                 "02.flac",
-                BTreeMap::from([
-                    ("album".into(), vec!["Hits".into()]),
-                    ("title".into(), vec!["Two".into()]),
-                ]),
-            ),
-            file(
-                "03.flac",
-                BTreeMap::from([
-                    ("album".into(), vec!["Hits".into()]),
-                    ("title".into(), vec!["Three".into()]),
-                ]),
+                BTreeMap::from([("title".into(), vec!["Two".into()])]),
             ),
         ];
-        refuse_mixed_album(&files).unwrap();
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(plan.edits.len(), 2);
+        assert_eq!(plan.unmatched_files, 0);
+        assert_eq!(plan.unmatched_tracks, 1);
+    }
+
+    #[test]
+    fn extra_files_map_unique_pairs_and_leave_leftovers() {
         let release = demo_release(vec![
             ReleaseTrack {
                 number: "1".into(),
@@ -1361,7 +1411,31 @@ mod tests {
                 disc: 1,
             },
         ]);
-        assert_ne!(files.len(), release.tracks.len());
+        let files = vec![
+            file(
+                "01.flac",
+                BTreeMap::from([
+                    ("title".into(), vec!["One".into()]),
+                    ("track".into(), vec!["1".into()]),
+                ]),
+            ),
+            file(
+                "02.flac",
+                BTreeMap::from([
+                    ("title".into(), vec!["Two".into()]),
+                    ("track".into(), vec!["2".into()]),
+                ]),
+            ),
+            file(
+                "Two again.flac",
+                BTreeMap::from([("title".into(), vec!["Two".into()])]),
+            ),
+        ];
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(plan.edits.len(), 2);
+        assert_eq!(plan.unmatched_files, 1);
+        assert_eq!(plan.unmatched_tracks, 0);
+        assert!(plan.edits.iter().all(|e| e.name != "Two again.flac"));
     }
 
     #[test]

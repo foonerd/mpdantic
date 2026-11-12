@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Fixed
+
+- MusicBrainz map no longer refuses when the folder has fewer or more files than the release has tracks. Unique title / track pairing still applies; unmatched files and missing tracks are noted on Preview. Mixed-album folders and a complete pairing miss still refuse.
+
 ## [0.1.5] - 2026-11-12
 
 The sixth test cut, a pre-release as the five before: MusicBrainz map refuses unsafe folders; folder rename from tags; Tags **Organise** for mix and dump folders; Ignore context kept under the work. Driven on the same two players. Every write is still undoable from the Written tab.
