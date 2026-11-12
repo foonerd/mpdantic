@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-12
+
+The seventh test cut, a pre-release as the six before: playlist Discard and Written Vacuum; folder Artist/Album layout and soft hints; Organise bit-identical collisions; MusicBrainz sort-name, tagged release id and map MBIDs. Driven on the same two players. Every write is still undoable from the Written tab.
+
 ### Added
 
 - Organise stage 2: when a destination already holds a bit-identical file, Preview offers leave / replace / remove for that copy (no silent delete).
