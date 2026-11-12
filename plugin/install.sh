@@ -39,6 +39,10 @@ echo "Core: $("$PLUGIN_DIR/bin/$ARCH/mpdantic" --version)"
 # One name for the binary, whatever the architecture: the unit names it.
 ln -sf "$PLUGIN_DIR/bin/$ARCH/mpdantic" "$PLUGIN_DIR/bin/mpdantic"
 
+# The mount helper sudo runs: only cifs/nfs under /run/mpdantic/mounts.
+chmod +x "$PLUGIN_DIR/bin/mpdantic-mount" 2>/dev/null || true
+[ -x "$PLUGIN_DIR/bin/mpdantic-mount" ] || refuse "ERROR: the mount helper is missing"
+
 # =============================================================================
 # SETUP: the folders. The data folder is for what the user can undo and is never
 # removed by an uninstall.
@@ -60,11 +64,11 @@ systemctl daemon-reload
 # sudo is here, whatever Volumio's own rule for the volumio user lists. The name sorts
 # after /etc/sudoers.d/volumio-user, as the convention has it.
 cat > "$SUDOERS" <<'EOF'
-# mpdantic plugin: the core's service; the mounts the core makes under /run/mpdantic
-# for a write on a share; the announcement file where the Avahi folder is closed
+# mpdantic plugin: the core's service; the mount helper (cifs/nfs under
+# /run/mpdantic/mounts only); the announcement file where the Avahi folder is closed
 volumio ALL=(ALL) NOPASSWD: /bin/systemctl start mpdantic.service, /bin/systemctl stop mpdantic.service, /bin/systemctl restart mpdantic.service, /bin/systemctl is-active mpdantic.service
 volumio ALL=(ALL) NOPASSWD: /usr/bin/systemctl start mpdantic.service, /usr/bin/systemctl stop mpdantic.service, /usr/bin/systemctl restart mpdantic.service, /usr/bin/systemctl is-active mpdantic.service
-volumio ALL=(ALL) NOPASSWD: /bin/mount, /usr/bin/mount, /bin/umount, /usr/bin/umount
+volumio ALL=(ALL) NOPASSWD: /data/plugins/system_controller/mpdantic/bin/mpdantic-mount
 volumio ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/avahi/services/mpdantic.service, /bin/rm -f /etc/avahi/services/mpdantic.service, /usr/bin/rm -f /etc/avahi/services/mpdantic.service
 EOF
 chmod 0440 "$SUDOERS"

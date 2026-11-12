@@ -109,12 +109,29 @@ pub struct Mounter {
     gid: u32,
 }
 
-/// The real runner: `sudo -n` and the command, its stderr the error.
+/// Where the install puts the mount helper sudo is allowed to run.
+pub const MOUNT_HELPER: &str = "/data/plugins/system_controller/mpdantic/bin/mpdantic-mount";
+
+/// The real runner: `sudo -n` the mount helper with `mount` or `umount`, never
+/// raw `/bin/mount`. The helper itself refuses a target outside `/run/mpdantic/mounts`.
 pub fn sudo_runner() -> Runner {
     Box::new(|words: &[String]| {
+        if words.is_empty() {
+            return Err("mount: empty command".to_string());
+        }
+        let mut argv = vec![MOUNT_HELPER.to_string()];
+        if words[0].ends_with("umount") {
+            argv.push("umount".to_string());
+            argv.extend(words.iter().skip(1).cloned());
+        } else if words[0].ends_with("mount") {
+            argv.push("mount".to_string());
+            argv.extend(words.iter().skip(1).cloned());
+        } else {
+            return Err(format!("mount: not a mount or umount: {}", words[0]));
+        }
         let output = Command::new("/usr/bin/sudo")
             .arg("-n")
-            .args(words)
+            .args(&argv)
             .output()
             .map_err(|e| format!("sudo: {e}"))?;
         if output.status.success() {
@@ -122,7 +139,7 @@ pub fn sudo_runner() -> Runner {
         } else {
             let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(if err.is_empty() {
-                format!("{} failed with {}", words.join(" "), output.status)
+                format!("{} failed with {}", argv.join(" "), output.status)
             } else {
                 err
             })
