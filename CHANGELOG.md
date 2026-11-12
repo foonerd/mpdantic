@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-12
+
+The fifth test cut, a pre-release as the four before: MusicBrainz release lookup on the Tags tab, and the confinement and mount hardening from the audit sits after 0.1.3, on the same two players. Every write is still undoable from the Written tab.
+
 ### Added
 
 - MusicBrainz stage 1 on the Tags tab: look up a release from the folder's album artist, album and track count, pick a hit, Preview/Write the mapped tags through the existing tagedit path. Public MusicBrainz at one request per second with a User-Agent, 503 backoff and a cache under the data folder; no AcoustID. The plugin settings page offers a local-mirror switch, URL and Test (the mirror stack itself is later).

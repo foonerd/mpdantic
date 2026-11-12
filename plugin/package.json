@@ -1,6 +1,6 @@
 {
   "name": "mpdantic",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Audits and repairs a music library for MPD: output buffer sizing by RAM, .mpdignore management, CUE sheet repair, playlist rebasing, tag validation. Rust core, thin Node shell.",
   "main": "index.js",
   "scripts": {
@@ -17,10 +17,15 @@
     "prettyName": "MPDantic",
     "icon": "fa-stethoscope",
     "plugin_type": "system_controller",
-    "os": ["bookworm"],
-    "architectures": ["armhf", "amd64"],
+    "os": [
+      "bookworm"
+    ],
+    "architectures": [
+      "armhf",
+      "amd64"
+    ],
     "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management pages on the player. Those pages are open to the player's network, as Volumio's own are: anyone who can reach the player can read and write the library from them; every write is undoable. After each write Volumio rebuilds its album list, which takes a while on a large library.",
-    "changelog": "0.1.3 Fourth test cut: each check-report code opens the findings work list on that code; with a code chip on, findings are a paginated file table with dismiss, clickable path and bulk dismiss; tag repair cards list only files that change by default."
+    "changelog": "0.1.4 Fifth test cut: MusicBrainz release lookup on the Tags tab with a search ladder (as tagged, without edition suffix, without track lock), Preview/Write through the existing tag path; local-mirror switch on the settings page; path confinement and a scoped mount helper; prepared batches expire."
   },
   "dependencies": {
     "kew": "^0.7.0",
