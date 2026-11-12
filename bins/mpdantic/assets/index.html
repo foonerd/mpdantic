@@ -200,6 +200,7 @@
   <div class="crumbs" id="crumbs"></div>
   <div class="list" id="list"></div>
   <div class="foot"><span id="count"></span><span class="grow"></span><button id="more" hidden data-i18n="page.more">More</button></div>
+  <div id="folder-rename-box"></div>
 
   <nav class="tabs">
     <button class="tab" id="tab-ignore" data-i18n="page.tab.ignore">Ignore</button>
@@ -288,6 +289,12 @@
         <div class="line"><button id="mb-search" data-i18n="page.mb.search">Look up this folder</button></div>
         <div id="mb-box"></div>
         <div id="mb-preview-box"></div>
+      </div>
+      <div class="write">
+        <b data-i18n="page.folder.title">Folder name</b>
+        <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, or a name you type. The name is made safe for a share. Browse also offers Rename on each folder row. Nothing is written before the preview and Write; the undo gives the name back.</div>
+        <div id="folder-tags-box"></div>
+        <div id="folder-tags-preview-box"></div>
       </div>
       <div class="write">
         <b data-i18n="page.names.title">File names and tags</b>
@@ -527,6 +534,13 @@
       row.appendChild(el('span', 'icon', entry.dir ? String.fromCharCode(0x25B8) : String.fromCharCode(0xB7)));
       row.appendChild(el('span', 'name', entry.name));
       if (entry.dir) {
+        const child = (current.path ? current.path + '/' : '') + entry.name;
+        if (!isRootFolder(child)) {
+          const rename = el('button', 'keep', t('page.folder.rename'));
+          rename.title = t('page.folder.rename_title');
+          rename.addEventListener('click', (ev) => { ev.stopPropagation(); openFolderRename(child, $('folder-rename-box')); });
+          row.appendChild(rename);
+        }
         const keep = el('button', 'keep', t('page.keep_out'));
         keep.title = t('page.keep_out_title');
         keep.addEventListener('click', (ev) => { ev.stopPropagation(); keepOut(entry.name); });
@@ -546,6 +560,7 @@
     $('analyse-cue').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-tags').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
+    if (!$('panel-tags').hidden) refreshFolderTagsBlock();
   }
 
   // A folder of the listing kept out: its name as a line in the .mpdignore of the
@@ -556,6 +571,85 @@
     const field = $('lines');
     field.scrollIntoView({ block: 'center' });
     field.focus();
+  }
+
+  function isRootFolder(path) {
+    if (!path) return true;
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length === 1 && (parts[0] === 'INTERNAL' || parts[0] === 'USB' || parts[0] === 'NAS')) return true;
+    if (parts.length === 2 && parts[0] === 'NAS') return true;
+    return false;
+  }
+
+  // Rename panel for one library folder: suggestions from tags, custom name, Preview.
+  async function openFolderRename(path, box) {
+    box.textContent = '';
+    box.appendChild(el('div', 'progress', t('page.folder.loading')));
+    box.scrollIntoView({ block: 'nearest' });
+    try {
+      const s = await api('/api/folder?path=' + encodeURIComponent(path));
+      const panel = el('div', 'write');
+      panel.appendChild(el('b', '', t('page.folder.rename_of', { name: s.leaf })));
+      panel.appendChild(el('div', 'help', t('page.folder.as_is', { path: s.path })));
+      (s.notes || []).forEach((n) => panel.appendChild(el('div', 'help', tm(n))));
+      const line = el('div', 'line');
+      const pick = (label, value) => {
+        const b = el('button', 'small', label);
+        b.addEventListener('click', () => { field.value = value; });
+        line.appendChild(b);
+      };
+      if (s.album) pick(t('page.folder.from_album'), s.album);
+      if (s.albumartist) pick(t('page.folder.from_artist'), s.albumartist);
+      const field = el('input');
+      field.type = 'text';
+      field.spellcheck = false;
+      field.placeholder = t('page.folder.custom');
+      field.value = s.album || s.albumartist || '';
+      field.style.minWidth = '16rem';
+      line.appendChild(field);
+      const preview = el('button', '', t('page.preview'));
+      const previewBox = el('div');
+      const run = async () => {
+        preview.disabled = true;
+        try {
+          const again = async () => {
+            const p = await api('/api/batches', {
+              method: 'POST', headers: JSON_BODY,
+              body: JSON.stringify({ kind: 'folder', path: s.path, name: field.value })
+            });
+            renderPreview(p, previewBox, again, () => {
+              // After Write the leaf moved: reload the parent listing.
+              const parent = s.parent || '';
+              if (current.path === parent || current.path === s.path) load(parent, false);
+              else if (location.hash.indexOf(encodeURIComponent(s.path)) >= 0) location.hash = toHash(parent);
+            });
+          };
+          await again();
+        } catch (e) {
+          previewBox.textContent = '';
+          previewBox.appendChild(el('div', 'help bad', String(e.message || e)));
+        } finally {
+          preview.disabled = false;
+        }
+      };
+      preview.addEventListener('click', run);
+      field.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+      line.appendChild(preview);
+      const drop = el('button', '', t('page.cancel'));
+      drop.addEventListener('click', () => {
+        box.textContent = '';
+        if (box === $('folder-tags-box')) refreshFolderTagsBlock();
+      });
+      line.appendChild(drop);
+      panel.appendChild(line);
+      box.textContent = '';
+      box.appendChild(panel);
+      box.appendChild(previewBox);
+      field.focus();
+    } catch (e) {
+      box.textContent = '';
+      box.appendChild(el('div', 'help bad', String(e.message || e)));
+    }
   }
 
   function failed(path, message) {
@@ -620,6 +714,7 @@
     try { localStorage.setItem('mpdantic.tab', name); } catch (e) { /* no storage here */ }
     if (name === 'undo') loadUndo();
     if (name === 'system') loadReport();
+    if (name === 'tags') refreshFolderTagsBlock();
   }
 
   // ------------------------------------------------------------ the Volumio tab
@@ -1056,6 +1151,20 @@
     });
   }
   makeNamer({ box: $('names-box'), previewBox: $('names-preview-box') }, () => current.path);
+
+  function refreshFolderTagsBlock() {
+    const box = $('folder-tags-box');
+    const preview = $('folder-tags-preview-box');
+    box.textContent = '';
+    preview.textContent = '';
+    if (!current.path || isRootFolder(current.path)) {
+      box.appendChild(el('div', 'help', t('page.folder.need_folder')));
+      return;
+    }
+    const open = el('button', '', t('page.folder.rename'));
+    open.addEventListener('click', () => openFolderRename(current.path, box));
+    box.appendChild(open);
+  }
 
   // ------------------------------------------------------------ the system tab
 
@@ -2166,8 +2275,10 @@
       label.appendChild(input);
       row.appendChild(label);
       card.appendChild(row);
-    } else if (p.kind === 'rename') {
-      top.appendChild(el('b', '', t('page.preview.rename_files', { folder: theLibrary(p.path) })));
+    } else if (p.kind === 'rename' || p.kind === 'folder') {
+      top.appendChild(el('b', '', p.kind === 'folder'
+        ? t('page.preview.rename_folder', { folder: theLibrary(p.path) })
+        : t('page.preview.rename_files', { folder: theLibrary(p.path) })));
       top.appendChild(el('span', 'help', p.place === 'local' ? t('page.preview.local') : t('page.preview.on_share', { share: p.share || '', folder: p.share_folder || '/' })));
       card.appendChild(top);
     } else {
@@ -2307,12 +2418,14 @@
       draw();
       card.appendChild(list);
     }
-    if (p.kind === 'rename') {
-      // Each file as it is and as it would be named, or why it is left; then the
-      // sheets and playlists that follow, each as it would be.
+    if (p.kind === 'rename' || p.kind === 'folder') {
+      // Each file (or the folder leaf) as it is and as it would be named, or why
+      // it is left; then the sheets and playlists that follow, for file rename.
       const renames = p.renames || [];
       const moving = renames.filter((r) => r.to);
-      card.appendChild(el('div', 'help', t('page.preview.renames', { n: moving.length, total: renames.length })));
+      card.appendChild(el('div', 'help', p.kind === 'folder'
+        ? t('page.preview.folder_rename')
+        : t('page.preview.renames', { n: moving.length, total: renames.length })));
       const list = el('div', 'files');
       renames.forEach((r) => {
         const row = el('div', 'sugg');
@@ -2432,6 +2545,7 @@
       : p.kind === 'volumio_list' ? t('page.write.write_list')
       : p.kind === 'tags' ? t('page.write.write_files', { n: changing })
       : p.kind === 'rename' ? t('page.write.rename_files', { n: (p.renames || []).filter((r) => r.to).length })
+      : p.kind === 'folder' ? t('page.write.rename_folder')
       : p.op === 'remove' ? t('page.write.remove_mpdignore')
       : (p.changed ? t('page.write.write_mpdignore') : t('page.write.nothing_to_change'));
     const write = el('button', 'primary', p.changed ? label : t('page.write.nothing_to_write'));
@@ -2463,8 +2577,8 @@
     try {
       const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
       box.textContent = '';
-      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : p.kind === 'rename' ? 'renamed' : 'written', p.kind));
-      if (p.kind === 'cue' || p.kind === 'playlist' || p.kind === 'rename') {
+      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : (p.kind === 'rename' || p.kind === 'folder') ? 'renamed' : 'written', p.kind));
+      if (p.kind === 'cue' || p.kind === 'playlist' || p.kind === 'rename' || p.kind === 'folder') {
         box.appendChild(el('div', 'help', t('page.after.check_again')));
       } else if (p.kind === 'tags') {
         box.appendChild(el('div', 'help', t('page.after.tags_written', { n: a.count })));

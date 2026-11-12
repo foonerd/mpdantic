@@ -31,6 +31,7 @@ mod cue;
 mod cuecheck;
 mod cuefix;
 mod findings;
+mod folders;
 mod ignore;
 mod jobs;
 mod library;

@@ -329,6 +329,7 @@ pub fn prepare(
         "tags" => prepare_tags(music, shares, decoders, id, req),
         "tagedit" => prepare_tagedit(music, shares, decoders, id, req),
         "rename" => prepare_rename(music, shares, decoders, id, req),
+        "folder" => prepare_folder(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         "volumio_list" => prepare_volumio_list(music, decoders, volumio_playlists, id, req),
@@ -790,6 +791,73 @@ fn prepare_rename(
     p.changed = !map.is_empty() && refused.is_empty();
     p.renames = renames;
     p.refs = refs;
+    p.refused = refused;
+    Ok(p)
+}
+
+/// The folder in hand renamed under its parent: one leaf → a safe name from tags or
+/// a custom string; refused for roots, empty names, collisions, and when unchanged.
+fn prepare_folder(
+    music: &Path,
+    shares: &[Share],
+    _decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, Msg> {
+    let (path, dir) = resolve_library(music, &req.path)?;
+    if !dir.is_dir() {
+        return Err(walk::no_such_folder());
+    }
+    if crate::folders::is_root_folder(&path) {
+        return Err(msg!("core.folder.root", "a library root is not renamed"));
+    }
+    let (parent, leaf) = crate::folders::split_leaf(&path).ok_or_else(walk::no_such_folder)?;
+    let raw = req.name.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return Err(msg!("core.folder.no_name", "no name given for the folder"));
+    }
+    if raw.contains('/') || raw.contains('\\') {
+        return Err(msg!(
+            "core.folder.no_slash",
+            "a folder name cannot contain a slash"
+        ));
+    }
+    let to = names::safe(raw);
+    if to.is_empty() {
+        return Err(msg!(
+            "core.folder.empty_name",
+            "the name is empty after it is made safe"
+        ));
+    }
+    if to == leaf {
+        return Err(msg!(
+            "core.folder.as_is",
+            "the folder already has that name"
+        ));
+    }
+    let parent_dir = folder_dir(music, &parent);
+    let present: BTreeSet<String> = fs::read_dir(&parent_dir)
+        .map_err(|e| text::at(parent_dir.display(), e))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_lowercase())
+        .collect();
+    let mut refused = Vec::new();
+    let key = to.to_lowercase();
+    if present.contains(&key) && key != leaf.to_lowercase() {
+        refused.push((
+            to.clone(),
+            msg!("core.names.exists", "a file of this name is there already"),
+        ));
+    }
+    let place = placed(shares, &parent)?;
+    let mut p = empty(id, "folder", parent.clone(), path.clone(), "rename", place);
+    p.exists = true;
+    p.changed = refused.is_empty();
+    p.renames = vec![Rename {
+        name: leaf,
+        to: Some(to),
+        note: None,
+    }];
     p.refused = refused;
     Ok(p)
 }
@@ -1274,7 +1342,7 @@ pub fn apply(
     if preview.kind == "tags" {
         return apply_tags(music, shares, mounter, journal, mpd_address, preview);
     }
-    if preview.kind == "rename" {
+    if preview.kind == "rename" || preview.kind == "folder" {
         return apply_rename(music, shares, mounter, journal, mpd_address, preview);
     }
     let ro = file_on_disk(music, &preview.kind, &preview.file);
@@ -1529,12 +1597,23 @@ fn apply_rename(
     let batch = if entries.is_empty() {
         None
     } else {
-        let batch = Batch {
-            id: id.clone(),
-            kind: "rename".to_string(),
-            path: preview.path.clone(),
-            when: now(),
-            note: msg!(
+        let note = if preview.kind == "folder" {
+            msg!(
+                "core.write.note_folder",
+                "folder renamed to {name} under {folder}",
+                name = preview
+                    .renames
+                    .first()
+                    .and_then(|r| r.to.clone())
+                    .unwrap_or_default(),
+                folder = if preview.path.is_empty() {
+                    library_root()
+                } else {
+                    Msg::raw(preview.path.clone())
+                }
+            )
+        } else {
+            msg!(
                 "core.write.note_rename",
                 "{n} {n|file|files} renamed in {folder}",
                 n = renamed,
@@ -1543,7 +1622,14 @@ fn apply_rename(
                 } else {
                     Msg::raw(preview.path.clone())
                 }
-            ),
+            )
+        };
+        let batch = Batch {
+            id: id.clone(),
+            kind: preview.kind.clone(),
+            path: preview.path.clone(),
+            when: now(),
+            note,
             entries,
             undone: false,
         };
@@ -2685,6 +2771,96 @@ mod tests {
         assert_eq!(back.title, vec!["Two".to_string()]);
         // The writer keeps the number as a number: "2/9" set back reads as 2.
         assert!(back.track[0].starts_with('2'), "{:?}", back.track);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_is_renamed_under_its_parent_and_given_back() {
+        let dir = temp("folder-rename");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pl = dir.join("playlists");
+        let leaf = music.join("INTERNAL/Peter Hollens/MR0XF1~N");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            leaf.join("01.flac"),
+            real_flac(&[
+                ("ALBUM", "Misty Mountains: Songs"),
+                ("ALBUMARTIST", "Peter Hollens"),
+                ("TITLE", "I See Fire"),
+            ]),
+        )
+        .unwrap();
+        let root = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            1,
+            &Request {
+                kind: "folder".into(),
+                path: "INTERNAL".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: Some("Nope".into()),
+                edits: None,
+                pattern: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(root.k, "core.folder.root");
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            2,
+            &Request {
+                kind: "folder".into(),
+                path: "INTERNAL/Peter Hollens/MR0XF1~N".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: Some("Misty Mountains: Songs".into()),
+                edits: None,
+                pattern: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(p.kind, "folder");
+        assert_eq!(p.path, "INTERNAL/Peter Hollens");
+        assert!(p.changed);
+        assert_eq!(p.renames[0].name, "MR0XF1~N");
+        assert_eq!(p.renames[0].to.as_deref(), Some("Misty Mountains_ Songs"));
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.count, 1);
+        assert!(music
+            .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
+            .is_dir());
+        assert!(!leaf.exists());
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.kind == "folder")
+            .unwrap();
+        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        assert!(leaf.is_dir());
+        assert!(!music
+            .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
+            .exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

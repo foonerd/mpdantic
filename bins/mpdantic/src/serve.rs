@@ -317,6 +317,10 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = folder_tags(shared, &r.query);
             (code, json, body)
         }
+        (_, "/api/folder") if get => {
+            let (code, body) = folder_suggest(shared, &r.query);
+            (code, json, body)
+        }
         ("POST", "/api/mb/search") => {
             let (code, body) = mb_search(shared, &r.body);
             (code, json, body)
@@ -854,7 +858,7 @@ fn store_kinds(batch_kind: &str) -> &'static [&'static str] {
         "tags" => &["tags"],
         "cue" => &["cue"],
         "playlist" => &["playlists"],
-        "rename" => &["cue", "tags", "playlists"],
+        "rename" | "folder" => &["cue", "tags", "playlists"],
         _ => &[],
     }
 }
@@ -1007,7 +1011,17 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(&preview.id);
             let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
-            if let Some(findings) = refresh_folder(shared, &preview.kind, &preview.path) {
+            let refresh_path = if preview.kind == "folder" {
+                preview
+                    .renames
+                    .first()
+                    .and_then(|r| r.to.as_ref())
+                    .map(|to| walk::join(&preview.path, to))
+                    .unwrap_or_else(|| preview.path.clone())
+            } else {
+                preview.path.clone()
+            };
+            if let Some(findings) = refresh_folder(shared, &preview.kind, &refresh_path) {
                 value["findings"] = findings;
             }
             (200, value.to_string() + "\n")
@@ -1221,6 +1235,35 @@ fn mb_map(shared: &Shared, body: &[u8]) -> (u16, String) {
     match client.map_release(shared.library.music(), &path, id, &decoders) {
         Ok(mapped) => (200, json(&mapped)),
         Err(e) => (400, error(&e)),
+    }
+}
+
+/// `GET /api/folder?path=<folder>`: rename suggestions for the folder's leaf from
+/// its album / albumartist tags.
+fn folder_suggest(shared: &Shared, query: &str) -> (u16, String) {
+    let path = pairs(query)
+        .into_iter()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+    let (path, dir) = match Library::resolve(shared.library.music(), &path) {
+        Ok(v) => v,
+        Err(ListError::BadPath) => return (400, error(&walk::not_library_path())),
+        Err(ListError::NotFound) | Err(ListError::NotADirectory) => {
+            return (404, error(&walk::no_such_folder()))
+        }
+        Err(ListError::Io(s)) => return (500, error(&Msg::raw(s))),
+    };
+    if !dir.is_dir() {
+        return (404, error(&walk::no_such_folder()));
+    }
+    let (_, decoders) = shared.decoders();
+    match tagfix::folder_values(&dir, &path, &decoders) {
+        Ok(files) => match crate::folders::suggest(&path, &files) {
+            Ok(s) => (200, json(&s)),
+            Err(e) => (400, error(&e)),
+        },
+        Err(e) => (500, error(&e)),
     }
 }
 

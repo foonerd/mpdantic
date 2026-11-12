@@ -8,6 +8,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 The sixth test cut, a pre-release as the five before: MusicBrainz map refuses unsafe folders and pairs by title or track number, on the same two players. Every write is still undoable from the Written tab.
 
+### Added
+
+- Folder rename from tags: Rename on each browse folder row (beside Keep out) and a Tags-tab block; suggestions from album or album artist (else artist), or a custom name, made safe for a share; Preview → Write → undo through the write model. Library roots are not renamed. Path layout `Artist/Album` is designed, not built.
+
 ### Fixed
 
 - MusicBrainz map no longer order-zips release tracks onto folder files. A folder with more than one album tag refuses search and map; a file count that is not the release track count refuses map; pairing is by normalised title then disc+track, and an incomplete pair refuses — so a multi-album dump cannot scramble titles onto a short Hits release.
