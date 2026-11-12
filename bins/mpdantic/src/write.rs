@@ -20,6 +20,7 @@ use crate::library::Library;
 use crate::mount::{self, Mount, Mounter, Share, Where};
 use crate::mpd::{self, Decoders};
 use crate::names;
+use crate::organise;
 use crate::playlist;
 use crate::plcheck;
 use crate::plfix::{self, EntryChange};
@@ -55,6 +56,9 @@ pub struct Request {
     /// The pattern the names are made from (`rename`), or the tags read by
     /// (`tagedit` without edits).
     pub pattern: Option<String>,
+    /// Destination album folders to move (`organise`): each is a library path
+    /// from the scan (`INTERNAL/Artist/Album`).
+    pub moves: Vec<String>,
 }
 
 /// One file of a rename: its name, the name it would take, or why it is left.
@@ -330,6 +334,7 @@ pub fn prepare(
         "tagedit" => prepare_tagedit(music, shares, decoders, id, req),
         "rename" => prepare_rename(music, shares, decoders, id, req),
         "folder" => prepare_folder(music, shares, decoders, id, req),
+        "organise" => prepare_organise(music, shares, decoders, id, req),
         "playlist" => prepare_playlist(music, shares, decoders, id, req),
         "volumio_playlist" => prepare_volumio(music, decoders, volumio_playlists, id, req),
         "volumio_list" => prepare_volumio_list(music, decoders, volumio_playlists, id, req),
@@ -862,6 +867,113 @@ fn prepare_folder(
     Ok(p)
 }
 
+/// Selected album groups moved out of the dump folder into Artist/Album paths.
+fn prepare_organise(
+    music: &Path,
+    shares: &[Share],
+    decoders: &Decoders,
+    id: u64,
+    req: &Request,
+) -> Result<Preview, Msg> {
+    let (path, dir) = resolve_library(music, &req.path)?;
+    if !dir.is_dir() {
+        return Err(walk::no_such_folder());
+    }
+    if req.moves.is_empty() {
+        return Err(msg!(
+            "core.organise.none_selected",
+            "no album chosen to move"
+        ));
+    }
+    let want: BTreeSet<String> = req.moves.iter().cloned().collect();
+    let groups = organise::groups_for(music, &path, decoders)?;
+    let place = placed(shares, &path)?;
+    let mut renames = Vec::new();
+    let mut refused = Vec::new();
+    let mut taken: BTreeMap<String, String> = BTreeMap::new();
+    for g in &groups {
+        if !want.contains(&g.folder) {
+            continue;
+        }
+        if g.album.is_empty() {
+            refused.push((
+                g.folder.clone(),
+                msg!(
+                    "core.organise.no_album",
+                    "no album tag; tag the files or skip this group"
+                ),
+            ));
+            continue;
+        }
+        if g.folder == path || g.folder.starts_with(&(path.clone() + "/")) {
+            refused.push((
+                g.folder.clone(),
+                msg!(
+                    "core.organise.same_folder",
+                    "the destination is this folder or under it"
+                ),
+            ));
+            continue;
+        }
+        let dest_dir = music.join(&g.folder);
+        let present: BTreeSet<String> = if dest_dir.is_dir() {
+            fs::read_dir(&dest_dir)
+                .map_err(|e| text::at(dest_dir.display(), e))?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_lowercase())
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        for name in &g.names {
+            let to = walk::join(&g.folder, name);
+            let key = to.to_lowercase();
+            if let Some(other) = taken.get(&key) {
+                refused.push((
+                    to.clone(),
+                    msg!(
+                        "core.names.taken",
+                        "two files would take this name, {a} and {b}",
+                        a = other,
+                        b = name
+                    ),
+                ));
+            } else if present.contains(&name.to_lowercase()) {
+                refused.push((
+                    to.clone(),
+                    msg!("core.names.exists", "a file of this name is there already"),
+                ));
+            }
+            taken.insert(key, name.clone());
+            renames.push(Rename {
+                name: name.clone(),
+                to: Some(to),
+                note: None,
+            });
+        }
+    }
+    let unknown: Vec<_> = want
+        .iter()
+        .filter(|f| !groups.iter().any(|g| g.folder == **f))
+        .cloned()
+        .collect();
+    for folder in unknown {
+        refused.push((
+            folder,
+            msg!(
+                "core.organise.unknown_group",
+                "that album is not in this folder any more; scan again"
+            ),
+        ));
+    }
+    let mut p = empty(id, "organise", path.clone(), path, "rename", place);
+    p.exists = true;
+    p.changed = !renames.is_empty() && refused.is_empty();
+    p.renames = renames;
+    p.refused = refused;
+    Ok(p)
+}
+
 /// The sheets and playlists of the folder that name a renamed file: a sheet's FILE
 /// lines and an m3u, m3u8 or pls entry that is the name or `./` and the name,
 /// rewritten when the file is UTF-8; otherwise, and for an xspf, said and left.
@@ -1345,6 +1457,9 @@ pub fn apply(
     if preview.kind == "rename" || preview.kind == "folder" {
         return apply_rename(music, shares, mounter, journal, mpd_address, preview);
     }
+    if preview.kind == "organise" {
+        return apply_organise(music, shares, mounter, journal, mpd_address, preview);
+    }
     let ro = file_on_disk(music, &preview.kind, &preview.file);
     let (exists, size, mtime) = stat(&ro);
     if exists != preview.exists || size != preview.size || mtime != preview.mtime {
@@ -1659,6 +1774,143 @@ fn apply_rename(
     })
 }
 
+/// Selected files moved into Artist/Album folders under the library anchor.
+fn apply_organise(
+    music: &Path,
+    shares: &[Share],
+    mounter: &Mounter,
+    journal: &Journal,
+    mpd_address: &mpd::Address,
+    preview: &Preview,
+) -> Result<Applied, Msg> {
+    let todo: Vec<(&str, &str)> = preview
+        .renames
+        .iter()
+        .filter_map(|r| r.to.as_deref().map(|to| (r.name.as_str(), to)))
+        .collect();
+    let src_dir = folder_dir(music, &preview.path);
+    for (from, to) in &todo {
+        if !src_dir.join(from).exists() {
+            return Err(msg!(
+                "core.write.source_gone",
+                "{name}: not there any more; preview again",
+                name = from
+            ));
+        }
+        if music.join(to).exists() {
+            return Err(msg!(
+                "core.write.target_taken",
+                "{name}: a file of this name is there since the preview; preview again",
+                name = to
+            ));
+        }
+    }
+    let anchor = organise::library_anchor(&preview.path);
+    let mount_path = if anchor.is_empty() {
+        preview.path.clone()
+    } else {
+        anchor.clone()
+    };
+    let id = journal.new_id();
+    let (root, mount) = writable(music, shares, mounter, &mount_path)?;
+    let disk = |library: &str| -> PathBuf {
+        if mount_path.is_empty() {
+            return if library.is_empty() {
+                root.clone()
+            } else {
+                root.join(library)
+            };
+        }
+        if library == mount_path {
+            return root.clone();
+        }
+        let prefix = mount_path.clone() + "/";
+        match library.strip_prefix(&prefix) {
+            Some(rest) => root.join(rest),
+            None => root.join(library),
+        }
+    };
+    let mut entries = Vec::new();
+    let mut failure = None;
+    for (from, to) in &todo {
+        let src = disk(&walk::join(&preview.path, from));
+        let dst = disk(to);
+        if let Some(parent) = dst.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                failure = Some(text::at(parent.display(), e));
+                break;
+            }
+        }
+        match fs::rename(&src, &dst) {
+            Ok(()) => entries.push(Entry {
+                path: walk::join(&preview.path, from),
+                op: "rename".to_string(),
+                before: None,
+                before_bytes: None,
+                after: (*to).to_string(),
+            }),
+            Err(e) => {
+                failure = Some(text::at(src.display(), e));
+                break;
+            }
+        }
+    }
+    let moved = entries.len();
+    if let Some(mut m) = mount {
+        mounter.unmount(&mut m);
+    }
+    let batch = if entries.is_empty() {
+        None
+    } else {
+        let batch = Batch {
+            id: id.clone(),
+            kind: preview.kind.clone(),
+            path: preview.path.clone(),
+            when: now(),
+            note: msg!(
+                "core.write.note_organise",
+                "{n} {n|file|files} moved out of {folder}",
+                n = moved,
+                folder = if preview.path.is_empty() {
+                    library_root()
+                } else {
+                    Msg::raw(preview.path.clone())
+                }
+            ),
+            entries,
+            undone: false,
+        };
+        journal.record(&batch)?;
+        Some(batch.id)
+    };
+    if let Some(e) = failure {
+        return Err(match &batch {
+            Some(id) => msg!(
+                "core.write.rename_partial",
+                "{error}; the {n} {n|file|files} before it renamed and journaled as batch {batch}",
+                error = e,
+                n = moved,
+                batch = id
+            ),
+            None => e,
+        });
+    }
+    let update_path = if anchor.is_empty() {
+        preview.path.clone()
+    } else {
+        anchor
+    };
+    let (updated, update_error) = update_after(mpd_address, &update_path);
+    Ok(Applied {
+        batch: batch.unwrap_or_default(),
+        file: preview.path.clone(),
+        written: true,
+        count: moved,
+        updated,
+        update_error,
+    })
+}
+
 /// A file renamed within its folder; a change of case alone goes through a
 /// temporary name, since a share does not tell the cases apart.
 fn rename_in(dir: &Path, from: &str, to: &str) -> std::io::Result<()> {
@@ -1679,6 +1931,33 @@ enum Step {
     },
     /// A file renamed back.
     Rename { from: String, to: String },
+    /// A file moved back across folders (organise); library paths.
+    Move { from_path: String, to_path: String },
+}
+
+fn parent_library(path: &str) -> String {
+    match path.rfind('/') {
+        Some(i) => path[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+fn organise_disk(root: &Path, anchor: &str, library: &str) -> PathBuf {
+    if anchor.is_empty() {
+        return if library.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(library)
+        };
+    }
+    if library == anchor {
+        return root.to_path_buf();
+    }
+    let prefix = anchor.to_string() + "/";
+    match library.strip_prefix(&prefix) {
+        Some(rest) => root.join(rest),
+        None => root.join(library),
+    }
 }
 
 /// A batch undone: every entry checked first, in reverse, to be what the batch
@@ -1707,8 +1986,35 @@ pub fn undo(
     let mut steps = Vec::new();
     for entry in batch.entries.iter().rev() {
         if entry.op == "rename" {
+            let src_parent = parent_library(&entry.path);
+            let dst_parent = parent_library(&entry.after);
             let from = file_name(&entry.path).to_string();
             let to = file_name(&entry.after).to_string();
+            if src_parent != dst_parent || batch.kind == "organise" {
+                // Cross-folder move (organise): undo moves after → path.
+                let at = folder_dir(music, &dst_parent).join(&to);
+                let back = folder_dir(music, &src_parent).join(&from);
+                if !at.exists() {
+                    return Err(msg!(
+                        "core.write.not_at",
+                        "{path}: not at {after} any more; not undone",
+                        path = entry.path,
+                        after = entry.after
+                    ));
+                }
+                if back.exists() && !from.eq_ignore_ascii_case(&to) {
+                    return Err(msg!(
+                        "core.write.name_taken_since",
+                        "{path}: a file is there again at the old name; not undone",
+                        path = entry.path
+                    ));
+                }
+                steps.push(Step::Move {
+                    from_path: entry.after.clone(),
+                    to_path: entry.path.clone(),
+                });
+                continue;
+            }
             let folder = folder_dir(music, &batch.path);
             if !folder.join(&to).exists() {
                 return Err(msg!(
@@ -1751,7 +2057,17 @@ pub fn undo(
             bytes,
         });
     }
-    let (dir, mount) = target(music, shares, mounter, &batch.kind, &batch.path)?;
+    let undo_mount_path = if batch.kind == "organise" {
+        let a = organise::library_anchor(&batch.path);
+        if a.is_empty() {
+            batch.path.clone()
+        } else {
+            a
+        }
+    } else {
+        batch.path.clone()
+    };
+    let (dir, mount) = target(music, shares, mounter, &batch.kind, &undo_mount_path)?;
     let mut done = 0;
     let mut failure = None;
     for step in &steps {
@@ -1764,6 +2080,17 @@ pub fn undo(
                 .map_err(|e| text::at(walk::join(&batch.path, name), e)),
             Step::Rename { from, to } => {
                 rename_in(&dir, from, to).map_err(|e| text::at(walk::join(&batch.path, from), e))
+            }
+            Step::Move { from_path, to_path } => {
+                let from = music.join(from_path);
+                // When a share is mounted, music.join may be read-only; prefer paths under dir.
+                let from_disk = organise_disk(&dir, &undo_mount_path, from_path);
+                let to_disk = organise_disk(&dir, &undo_mount_path, to_path);
+                let src = if from_disk.exists() { from_disk } else { from };
+                if let Some(parent) = to_disk.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                fs::rename(&src, &to_disk).map_err(|e| text::at(src.display(), e))
             }
         };
         match result {
@@ -1937,6 +2264,7 @@ mod tests {
             name: None,
             edits: None,
             pattern: None,
+            moves: Vec::new(),
         }
     }
 
@@ -1954,6 +2282,7 @@ mod tests {
             name: None,
             edits: None,
             pattern: None,
+            moves: Vec::new(),
         }
     }
 
@@ -1971,6 +2300,7 @@ mod tests {
             name: None,
             edits: None,
             pattern: None,
+            moves: Vec::new(),
         }
     }
 
@@ -2508,6 +2838,7 @@ mod tests {
             name: None,
             edits: None,
             pattern: None,
+            moves: Vec::new(),
         };
         let p = prepare(&music, &shares, &d, &playlists, 1, &req).unwrap();
         assert_eq!(p.kind, "volumio_playlist");
@@ -2565,6 +2896,7 @@ mod tests {
             name: None,
             edits: None,
             pattern: Some(pattern.to_string()),
+            moves: Vec::new(),
         }
     }
 
@@ -2814,6 +3146,7 @@ mod tests {
                 name: Some("Nope".into()),
                 edits: None,
                 pattern: None,
+                moves: Vec::new(),
             },
         )
         .unwrap_err();
@@ -2837,6 +3170,7 @@ mod tests {
                 name: Some("Misty Mountains: Songs".into()),
                 edits: None,
                 pattern: None,
+                moves: Vec::new(),
             },
         )
         .unwrap();
@@ -2980,6 +3314,121 @@ mod tests {
         assert!(seen.album_artist.is_empty());
         assert_eq!(seen.title, ["Caf\u{c3}\u{a9} Society"]);
         assert_eq!(seen.artist, ["A", "B"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn organise_moves_selected_albums_and_undo_restores_the_dump() {
+        let dir = temp("organise");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pl = dir.join("playlists");
+        let dump = music.join("INTERNAL/Phil Collins/Phil Collins");
+        fs::create_dir_all(&dump).unwrap();
+        fs::write(
+            dump.join("h1.flac"),
+            real_flac(&[
+                ("ALBUM", "Hits"),
+                ("ALBUMARTIST", "Phil Collins"),
+                ("TITLE", "One"),
+            ]),
+        )
+        .unwrap();
+        fs::write(
+            dump.join("s1.flac"),
+            real_flac(&[
+                ("ALBUM", "But Seriously"),
+                ("ALBUMARTIST", "Phil Collins"),
+                ("TITLE", "Two"),
+            ]),
+        )
+        .unwrap();
+        fs::write(
+            dump.join("n1.flac"),
+            real_flac(&[
+                ("ALBUM", "No Jacket Required"),
+                ("ALBUMARTIST", "Phil Collins"),
+                ("TITLE", "Three"),
+            ]),
+        )
+        .unwrap();
+        let none = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            1,
+            &Request {
+                kind: "organise".into(),
+                path: "INTERNAL/Phil Collins/Phil Collins".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: None,
+                edits: None,
+                pattern: None,
+                moves: Vec::new(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(none.k, "core.organise.none_selected");
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            2,
+            &Request {
+                kind: "organise".into(),
+                path: "INTERNAL/Phil Collins/Phil Collins".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: None,
+                edits: None,
+                pattern: None,
+                moves: vec![
+                    "INTERNAL/Phil Collins/Hits".into(),
+                    "INTERNAL/Phil Collins/But Seriously".into(),
+                ],
+            },
+        )
+        .unwrap();
+        assert!(p.changed);
+        assert_eq!(p.renames.len(), 2);
+        assert!(p
+            .renames
+            .iter()
+            .any(|r| r.to.as_deref() == Some("INTERNAL/Phil Collins/Hits/h1.flac")));
+        assert!(p
+            .renames
+            .iter()
+            .any(|r| r.to.as_deref() == Some("INTERNAL/Phil Collins/But Seriously/s1.flac")));
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.count, 2);
+        assert!(music.join("INTERNAL/Phil Collins/Hits/h1.flac").is_file());
+        assert!(music
+            .join("INTERNAL/Phil Collins/But Seriously/s1.flac")
+            .is_file());
+        assert!(dump.join("n1.flac").is_file());
+        assert!(!dump.join("h1.flac").exists());
+        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        assert_eq!(u.count, 2);
+        assert!(dump.join("h1.flac").is_file());
+        assert!(dump.join("s1.flac").is_file());
+        assert!(dump.join("n1.flac").is_file());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

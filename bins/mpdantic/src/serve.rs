@@ -317,6 +317,10 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = folder_tags(shared, &r.query);
             (code, json, body)
         }
+        (_, "/api/organise") if get => {
+            let (code, body) = organise_groups(shared, &r.query);
+            (code, json, body)
+        }
         (_, "/api/folder") if get => {
             let (code, body) = folder_suggest(shared, &r.query);
             (code, json, body)
@@ -858,7 +862,7 @@ fn store_kinds(batch_kind: &str) -> &'static [&'static str] {
         "tags" => &["tags"],
         "cue" => &["cue"],
         "playlist" => &["playlists"],
-        "rename" | "folder" => &["cue", "tags", "playlists"],
+        "rename" | "folder" | "organise" => &["cue", "tags", "playlists"],
         _ => &[],
     }
 }
@@ -942,6 +946,7 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
                 })
                 .collect()
         }),
+        moves: strings("moves").unwrap_or_default(),
     };
     let shares = match mount::shares(&shared.networkfs) {
         Ok(s) => s,
@@ -1234,6 +1239,31 @@ fn mb_map(shared: &Shared, body: &[u8]) -> (u16, String) {
     let client = crate::mb::Client::from_settings(&shared.settings, shared.mb_cache.clone());
     match client.map_release(shared.library.music(), &path, id, &decoders) {
         Ok(mapped) => (200, json(&mapped)),
+        Err(e) => (400, error(&e)),
+    }
+}
+
+/// `GET /api/organise?path=<folder>`: album groups with concrete destination paths.
+fn organise_groups(shared: &Shared, query: &str) -> (u16, String) {
+    let path = pairs(query)
+        .into_iter()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+    let (path, _) = match Library::resolve(shared.library.music(), &path) {
+        Ok(v) => v,
+        Err(ListError::BadPath) => return (400, error(&walk::not_library_path())),
+        Err(ListError::NotFound) | Err(ListError::NotADirectory) => {
+            return (404, error(&walk::no_such_folder()))
+        }
+        Err(ListError::Io(s)) => return (500, error(&Msg::raw(s))),
+    };
+    let (_, decoders) = shared.decoders();
+    match crate::organise::groups_for(shared.library.music(), &path, &decoders) {
+        Ok(groups) => (
+            200,
+            json(&serde_json::json!({ "path": path, "groups": groups })),
+        ),
         Err(e) => (400, error(&e)),
     }
 }

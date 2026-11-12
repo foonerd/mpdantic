@@ -20,6 +20,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::mpd::Decoders;
+use crate::organise::{self, AlbumGroup};
 use crate::tagfix::{self, Edit, FileValues};
 use crate::text::Msg;
 
@@ -109,7 +110,7 @@ impl Client {
     pub fn search(&self, music: &Path, path: &str, decoders: &Decoders) -> Result<SearchPage, Msg> {
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
-        let groups = album_groups_for_folder(path, &files);
+        let groups = organise::album_groups_for_folder(path, &files);
         if groups.len() > 1 {
             return Ok(SearchPage {
                 query: Query {
@@ -390,15 +391,6 @@ pub struct ReleaseHit {
     pub status: String,
     pub track_count: usize,
     pub score: u32,
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct AlbumGroup {
-    pub album: String,
-    pub album_artist: String,
-    pub files: usize,
-    /// Where those files should live: `{library anchor}/{artist}/{album}`.
-    pub folder: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -757,107 +749,9 @@ fn parse_release(body: &str) -> Result<ReleaseDetail, Msg> {
     })
 }
 
-/// The library share this folder sits under: `INTERNAL`, `NAS/Audio`, `USB/…`.
-fn library_anchor(folder_path: &str) -> String {
-    let parts: Vec<&str> = folder_path
-        .split('/')
-        .filter(|p| !p.is_empty())
-        .collect();
-    match parts.as_slice() {
-        [] => String::new(),
-        ["NAS", share, ..] | ["USB", share, ..] => format!("{}/{}", parts[0], share),
-        [root, ..] => (*root).to_string(),
-    }
-}
-
-fn album_folder_path(anchor: &str, album_artist: &str, album: &str) -> String {
-    let artist = {
-        let s = crate::names::safe(album_artist);
-        if s.is_empty() {
-            "Unknown Artist".into()
-        } else {
-            s
-        }
-    };
-    let album = {
-        let s = crate::names::safe(album);
-        if s.is_empty() {
-            "Unknown Album".into()
-        } else {
-            s
-        }
-    };
-    if anchor.is_empty() {
-        format!("{artist}/{album}")
-    } else {
-        format!("{anchor}/{artist}/{album}")
-    }
-}
-
-/// Groups the folder's files by album tag (empty album is its own group), each
-/// with the concrete library path those files should move to.
-fn album_groups_for_folder(folder_path: &str, files: &[FileValues]) -> Vec<AlbumGroup> {
-    let anchor = library_anchor(folder_path);
-    album_groups(files)
-        .into_iter()
-        .map(|mut g| {
-            g.folder = album_folder_path(&anchor, &g.album_artist, &g.album);
-            g
-        })
-        .collect()
-}
-
-/// Groups the folder's files by album tag (empty album is its own group).
-fn album_groups(files: &[FileValues]) -> Vec<AlbumGroup> {
-    // key → (display album, artist votes, count)
-    let mut map: BTreeMap<String, (String, BTreeMap<String, usize>, usize)> = BTreeMap::new();
-    for f in files {
-        let album = first_str(f, "album")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("");
-        let key = album.to_ascii_lowercase();
-        let artist = first_str(f, "albumartist")
-            .or_else(|| first_str(f, "artist"))
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("")
-            .to_string();
-        let entry = map
-            .entry(key)
-            .or_insert_with(|| (album.to_string(), BTreeMap::new(), 0));
-        if entry.0.is_empty() && !album.is_empty() {
-            entry.0 = album.to_string();
-        }
-        if !artist.is_empty() {
-            *entry.1.entry(artist).or_insert(0) += 1;
-        }
-        entry.2 += 1;
-    }
-    map.into_values()
-        .map(|(album, artists, files)| {
-            let album_artist = artists
-                .into_iter()
-                .max_by_key(|(_, n)| *n)
-                .map(|(a, _)| a)
-                .unwrap_or_default();
-            AlbumGroup {
-                album,
-                album_artist,
-                files,
-                folder: String::new(),
-            }
-        })
-        .collect()
-}
-
 /// More than one distinct non-empty album tag refuses map (one release onto a dump).
 fn refuse_mixed_album(files: &[FileValues]) -> Result<(), Msg> {
-    let named = album_groups(files)
-        .into_iter()
-        .filter(|g| !g.album.is_empty())
-        .count();
-    if named > 1 {
+    if organise::mixed_named_albums(files) {
         return Err(msg!(
             "core.mb.mixed_album",
             "the folder's files carry more than one album tag; split into one folder per album before writing a release"
@@ -1289,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_album_tags_in_the_folder_refuse_map_but_group_for_search() {
+    fn mixed_album_tags_in_the_folder_refuse_map() {
         let files = vec![
             file(
                 "a.flac",
@@ -1305,10 +1199,6 @@ mod tests {
                     ("albumartist".into(), vec!["Phil Collins".into()]),
                 ]),
             ),
-            file(
-                "c.flac",
-                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
-            ),
         ];
         let err = refuse_mixed_album(&files).unwrap_err();
         assert_eq!(err.k, "core.mb.mixed_album");
@@ -1317,26 +1207,6 @@ mod tests {
             BTreeMap::from([("album".into(), vec!["Hits".into()])]),
         )])
         .is_ok());
-        let groups = album_groups_for_folder("INTERNAL/Phil Collins/Phil Collins", &files);
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].album, "But Seriously");
-        assert_eq!(groups[0].files, 1);
-        assert_eq!(
-            groups[0].folder,
-            "INTERNAL/Phil Collins/But Seriously"
-        );
-        assert_eq!(groups[1].album, "Hits");
-        assert_eq!(groups[1].files, 2);
-        assert_eq!(groups[1].album_artist, "Phil Collins");
-        assert_eq!(groups[1].folder, "INTERNAL/Phil Collins/Hits");
-        assert_eq!(
-            library_anchor("NAS/Audio/Various"),
-            "NAS/Audio"
-        );
-        assert_eq!(
-            album_folder_path("NAS/Audio", "Albert Hammond Jr.", "Yours To Keep"),
-            "NAS/Audio/Albert Hammond Jr/Yours To Keep"
-        );
     }
 
     #[test]

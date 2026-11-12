@@ -39,6 +39,7 @@ mod mb;
 mod mount;
 mod mpd;
 mod names;
+mod organise;
 mod playlist;
 mod plcheck;
 mod plfix;

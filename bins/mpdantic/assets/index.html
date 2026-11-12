@@ -301,6 +301,13 @@
         <div id="mb-preview-box"></div>
       </div>
       <div class="write">
+        <b data-i18n="page.organise.title">Organise</b>
+        <div class="help" data-i18n="page.organise.help">One album per folder. Scan the folder in hand, then tick Move or Skip for each album. Preview shows the destinations; Write moves the selected files. Anything skipped stays here — the dump folder is not deleted.</div>
+        <div class="line"><button id="organise-scan" data-i18n="page.organise.scan">Scan this folder</button><button id="preview-organise" disabled data-i18n="page.preview">Preview</button></div>
+        <div id="organise-box"></div>
+        <div id="preview-organise-box"></div>
+      </div>
+      <div class="write">
         <b data-i18n="page.folder.title">Folder name</b>
         <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, or a name you type. The name is made safe for a share. Browse also offers Rename on each folder row. Nothing is written before the preview and Write; the undo gives the name back.</div>
         <div id="folder-tags-box"></div>
@@ -1105,6 +1112,13 @@
           box.appendChild(card);
         });
         box.appendChild(el('div', 'help', t('page.mb.mixed_next')));
+        fillOrganiseFromGroups(groups);
+        const go = el('button', '', t('page.organise.open'));
+        go.addEventListener('click', () => {
+          const block = $('organise-box');
+          if (block) block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+        box.appendChild(go);
         return;
       }
       const q = page.query || {};
@@ -1226,6 +1240,100 @@
     });
   }
   makeNamer({ box: $('names-box'), previewBox: $('names-preview-box') }, () => current.path);
+
+  // --------------------------------------------------------------- Organise
+
+  // Album groups in the folder in hand: Move / Skip per album, then Preview /
+  // Write through the organise batch. MB mixed_album can pass groups in.
+  let organiseGroups = [];
+  function renderOrganiseList() {
+    const box = $('organise-box');
+    const preview = $('preview-organise-box');
+    preview.textContent = '';
+    box.textContent = '';
+    if (!organiseGroups.length) {
+      box.appendChild(el('div', 'help', t('page.organise.empty')));
+      $('preview-organise').disabled = true;
+      return;
+    }
+    organiseGroups.forEach((g, i) => {
+      const card = el('div', 'sugg');
+      const top = el('div', 'top');
+      top.appendChild(el('span', 'tag warn', t('page.files', { n: g.files })));
+      const title = el('span', '');
+      title.appendChild(el('code', '', g.album || t('page.none')));
+      if (g.album_artist) title.appendChild(text(' · ' + g.album_artist));
+      top.appendChild(title);
+      const pick = el('select');
+      [['move', 'page.organise.move'], ['skip', 'page.organise.skip']].forEach(([value, key]) => {
+        const o = el('option', '', t(key));
+        o.value = value;
+        pick.appendChild(o);
+      });
+      const defaultMove = !!(g.album && String(g.album).trim());
+      pick.value = g.action || (defaultMove ? 'move' : 'skip');
+      g.action = pick.value;
+      pick.addEventListener('change', () => {
+        organiseGroups[i].action = pick.value;
+        $('preview-organise').disabled = !organiseGroups.some((x) => x.action === 'move');
+      });
+      top.appendChild(pick);
+      card.appendChild(top);
+      if (g.folder) card.appendChild(el('div', 'ex', g.folder));
+      box.appendChild(card);
+    });
+    $('preview-organise').disabled = !organiseGroups.some((x) => x.action === 'move');
+  }
+  function fillOrganiseFromGroups(groups) {
+    organiseGroups = (groups || []).map((g) => ({
+      album: g.album || '',
+      album_artist: g.album_artist || '',
+      files: g.files || 0,
+      folder: g.folder || '',
+      action: (g.album && String(g.album).trim()) ? 'move' : 'skip',
+    }));
+    renderOrganiseList();
+  }
+  async function scanOrganise() {
+    const box = $('organise-box');
+    $('preview-organise-box').textContent = '';
+    box.textContent = '';
+    box.appendChild(el('div', 'progress', t('page.organise.scanning')));
+    $('organise-scan').disabled = true;
+    try {
+      const page = await api('/api/organise?path=' + encodeURIComponent(current.path));
+      fillOrganiseFromGroups(page.groups || []);
+    } catch (e) {
+      organiseGroups = [];
+      box.textContent = '';
+      box.appendChild(el('div', 'help bad', String(e.message || e)));
+      $('preview-organise').disabled = true;
+    } finally {
+      $('organise-scan').disabled = false;
+    }
+  }
+  $('organise-scan').addEventListener('click', scanOrganise);
+  $('preview-organise').addEventListener('click', async () => {
+    const moves = organiseGroups.filter((g) => g.action === 'move').map((g) => g.folder).filter(Boolean);
+    const box = $('preview-organise-box');
+    const again = async () => {
+      try {
+        const p = await api('/api/batches', {
+          method: 'POST',
+          headers: JSON_BODY,
+          body: JSON.stringify({ kind: 'organise', path: current.path, moves }),
+        });
+        renderPreview(p, box, again, async () => {
+          await list(current.path);
+          await scanOrganise();
+        });
+      } catch (e) {
+        box.textContent = '';
+        box.appendChild(el('div', 'help bad', String(e.message || e)));
+      }
+    };
+    again();
+  });
 
   function refreshFolderTagsBlock() {
     const box = $('folder-tags-box');
@@ -2410,6 +2518,10 @@
       label.appendChild(input);
       row.appendChild(label);
       card.appendChild(row);
+    } else if (p.kind === 'organise') {
+      top.appendChild(el('b', '', t('page.preview.organise', { folder: theLibrary(p.path) })));
+      top.appendChild(el('span', 'help', p.place === 'local' ? t('page.preview.local') : t('page.preview.on_share', { share: p.share || '', folder: p.share_folder || '/' })));
+      card.appendChild(top);
     } else if (p.kind === 'rename' || p.kind === 'folder') {
       top.appendChild(el('b', '', p.kind === 'folder'
         ? t('page.preview.rename_folder', { folder: theLibrary(p.path) })
@@ -2553,14 +2665,16 @@
       draw();
       card.appendChild(list);
     }
-    if (p.kind === 'rename' || p.kind === 'folder') {
+    if (p.kind === 'rename' || p.kind === 'folder' || p.kind === 'organise') {
       // Each file (or the folder leaf) as it is and as it would be named, or why
       // it is left; then the sheets and playlists that follow, for file rename.
       const renames = p.renames || [];
       const moving = renames.filter((r) => r.to);
       card.appendChild(el('div', 'help', p.kind === 'folder'
         ? t('page.preview.folder_rename')
-        : t('page.preview.renames', { n: moving.length, total: renames.length })));
+        : p.kind === 'organise'
+          ? t('page.preview.organise_moves', { n: moving.length })
+          : t('page.preview.renames', { n: moving.length, total: renames.length })));
       const list = el('div', 'files');
       renames.forEach((r) => {
         const row = el('div', 'sugg');
@@ -2576,6 +2690,9 @@
         list.appendChild(row);
       });
       card.appendChild(list);
+      if (p.kind === 'organise') {
+        card.appendChild(el('div', 'help', t('page.preview.organise_left')));
+      }
       const refs = p.refs || [];
       if (refs.length) {
         card.appendChild(el('div', 'help', t('page.preview.refs', { n: refs.length })));
@@ -2681,6 +2798,7 @@
       : p.kind === 'tags' ? t('page.write.write_files', { n: changing })
       : p.kind === 'rename' ? t('page.write.rename_files', { n: (p.renames || []).filter((r) => r.to).length })
       : p.kind === 'folder' ? t('page.write.rename_folder')
+      : p.kind === 'organise' ? t('page.write.organise', { n: (p.renames || []).filter((r) => r.to).length })
       : p.op === 'remove' ? t('page.write.remove_mpdignore')
       : (p.changed ? t('page.write.write_mpdignore') : t('page.write.nothing_to_change'));
     const write = el('button', 'primary', p.changed ? label : t('page.write.nothing_to_write'));
@@ -2712,9 +2830,11 @@
     try {
       const a = await api('/api/batches/' + p.id + '/apply', { method: 'POST' });
       box.textContent = '';
-      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : (p.kind === 'rename' || p.kind === 'folder') ? 'renamed' : 'written', p.kind));
+      box.appendChild(outcome(a, p.op === 'remove' ? 'removed' : (p.kind === 'rename' || p.kind === 'folder' || p.kind === 'organise') ? 'renamed' : 'written', p.kind));
       if (p.kind === 'cue' || p.kind === 'playlist' || p.kind === 'rename' || p.kind === 'folder') {
         box.appendChild(el('div', 'help', t('page.after.check_again')));
+      } else if (p.kind === 'organise') {
+        box.appendChild(el('div', 'help', t('page.after.organise')));
       } else if (p.kind === 'tags') {
         box.appendChild(el('div', 'help', t('page.after.tags_written', { n: a.count })));
       } else if (p.kind === 'mpdignore') {
