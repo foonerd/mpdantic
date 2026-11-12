@@ -10,6 +10,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 - Tag check T10 also flags a value that carries a line break (for example an album artist of two lines), not only placeholders and empty values.
 - MusicBrainz search: when the album artist looks like a sort-name (`Collins, Phil`), the ladder retries as the display form (`Phil Collins`) after the tagged form misses.
 - MusicBrainz Look up uses a shared `musicbrainz_albumid` already on the folder's files (`tagged_id`) before the text ladder; a stale or conflicting id falls through to search.
+- MusicBrainz map writes `musicbrainz_albumid`, `musicbrainz_trackid` and `musicbrainz_releasetrackid` onto paired files (grid unchanged).
 
 ### Changed
 

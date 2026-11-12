@@ -178,6 +178,20 @@ fn field_key(kind: &Kind, field: &str) -> Option<&'static str> {
         (Kind::Ilst, "genre") => "\u{a9}gen",
         (Kind::Ilst, "composer") => "\u{a9}wrt",
         (Kind::Ilst, "comment") => "\u{a9}cmt",
+        (Kind::VorbisComments, "musicbrainz_albumid") => "MUSICBRAINZ_ALBUMID",
+        (Kind::VorbisComments, "musicbrainz_trackid") => "MUSICBRAINZ_TRACKID",
+        (Kind::VorbisComments, "musicbrainz_releasetrackid") => "MUSICBRAINZ_RELEASETRACKID",
+        (Kind::Id3v2, "musicbrainz_albumid") => "TXXX:MusicBrainz Album Id",
+        (Kind::Id3v2, "musicbrainz_trackid") => "TXXX:MusicBrainz Track Id",
+        (Kind::Id3v2, "musicbrainz_releasetrackid") => "TXXX:MusicBrainz Release Track Id",
+        (Kind::Ape, "musicbrainz_albumid") => "MUSICBRAINZ_ALBUMID",
+        (Kind::Ape, "musicbrainz_trackid") => "MUSICBRAINZ_TRACKID",
+        (Kind::Ape, "musicbrainz_releasetrackid") => "MUSICBRAINZ_RELEASETRACKID",
+        (Kind::Ilst, "musicbrainz_albumid") => "----:com.apple.iTunes:MusicBrainz Album Id",
+        (Kind::Ilst, "musicbrainz_trackid") => "----:com.apple.iTunes:MusicBrainz Track Id",
+        (Kind::Ilst, "musicbrainz_releasetrackid") => {
+            "----:com.apple.iTunes:MusicBrainz Release Track Id"
+        }
         _ => return None,
     })
 }
@@ -673,6 +687,17 @@ pub const FIELDS: &[&str] = &[
     "comment",
 ];
 
+/// Keys the write path accepts that the grid does not show (MusicBrainz map).
+const WRITE_EXTRA: &[&str] = &[
+    "musicbrainz_albumid",
+    "musicbrainz_trackid",
+    "musicbrainz_releasetrackid",
+];
+
+fn is_write_field(field: &str) -> bool {
+    FIELDS.contains(&field) || WRITE_EXTRA.contains(&field)
+}
+
 /// One file's edits: the fields set by hand; an empty value removes the key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Edit {
@@ -884,11 +909,11 @@ pub fn plan_edits(
         let mut refused: Vec<String> = e
             .set
             .keys()
-            .filter(|k| !FIELDS.contains(&k.as_str()))
+            .filter(|k| !is_write_field(k))
             .cloned()
             .collect();
-        // In the grid's order, so the card lists the changes as the columns run.
-        for field in FIELDS {
+        // Grid fields first, then MusicBrainz ids the map writes.
+        for field in FIELDS.iter().chain(WRITE_EXTRA.iter()) {
             let Some(value) = e.set.get(*field) else {
                 continue;
             };

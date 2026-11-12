@@ -467,13 +467,17 @@ pub struct SearchPage {
     pub groups: Vec<AlbumGroup>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 pub struct ReleaseTrack {
     pub number: String,
     pub title: String,
     pub artist: String,
     pub length_ms: Option<u64>,
     pub disc: u32,
+    /// MusicBrainz recording id (`musicbrainz_trackid`).
+    pub recording_id: String,
+    /// MusicBrainz release-track id (`musicbrainz_releasetrackid`).
+    pub track_id: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -831,6 +835,16 @@ fn parse_release(body: &str) -> Result<ReleaseDetail, Msg> {
                     .or_else(|| t.pointer("/recording/length"))
                     .and_then(|x| x.as_u64()),
                 disc,
+                recording_id: t
+                    .pointer("/recording/id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                track_id: t
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             });
         }
     }
@@ -1012,6 +1026,15 @@ fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<MapPlan, M
         }
         if tr.disc > 0 {
             set.insert("disc".into(), tr.disc.to_string());
+        }
+        if !release.id.is_empty() {
+            set.insert("musicbrainz_albumid".into(), release.id.clone());
+        }
+        if !tr.recording_id.is_empty() {
+            set.insert("musicbrainz_trackid".into(), tr.recording_id.clone());
+        }
+        if !tr.track_id.is_empty() {
+            set.insert("musicbrainz_releasetrackid".into(), tr.track_id.clone());
         }
         if set.is_empty() {
             unmatched_files += 1;
@@ -1457,6 +1480,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "2".into(),
@@ -1464,6 +1489,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
         ]);
         // File order is reverse of the release; titles must win over order.
@@ -1501,6 +1528,51 @@ mod tests {
     }
 
     #[test]
+    fn map_writes_musicbrainz_ids_onto_each_paired_file() {
+        let release = ReleaseDetail {
+            id: "11111111-1111-1111-1111-111111111111".into(),
+            title: "Demo".into(),
+            artist: "Band".into(),
+            date: "1999-05-01".into(),
+            tracks: vec![ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+                recording_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
+                track_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".into(),
+            }],
+        };
+        let files = vec![file(
+            "01.flac",
+            BTreeMap::from([("title".into(), vec!["One".into()])]),
+        )];
+        let plan = map_edits(&files, &release).unwrap();
+        assert_eq!(
+            plan.edits[0]
+                .set
+                .get("musicbrainz_albumid")
+                .map(String::as_str),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert_eq!(
+            plan.edits[0]
+                .set
+                .get("musicbrainz_trackid")
+                .map(String::as_str),
+            Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        );
+        assert_eq!(
+            plan.edits[0]
+                .set
+                .get("musicbrainz_releasetrackid")
+                .map(String::as_str),
+            Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        );
+    }
+
+    #[test]
     fn empty_titles_pair_by_disc_and_track() {
         let release = demo_release(vec![
             ReleaseTrack {
@@ -1509,6 +1581,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "2".into(),
@@ -1516,6 +1590,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
         ]);
         let files = vec![
@@ -1548,6 +1624,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "2".into(),
@@ -1555,6 +1633,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
         ]);
         let files = vec![
@@ -1580,6 +1660,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "2".into(),
@@ -1587,6 +1669,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "3".into(),
@@ -1594,6 +1678,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
         ]);
         let files = vec![
@@ -1621,6 +1707,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
             ReleaseTrack {
                 number: "2".into(),
@@ -1628,6 +1716,8 @@ mod tests {
                 artist: "Band".into(),
                 length_ms: None,
                 disc: 1,
+                recording_id: String::new(),
+                track_id: String::new(),
             },
         ]);
         let files = vec![
