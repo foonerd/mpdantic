@@ -189,6 +189,7 @@
   "page.mb.country": "Paese",
   "page.mb.status": "Stato",
   "page.mb.unmatched": "{files} {files|file|file} e {tracks} {tracks|traccia|tracce} non hanno potuto essere accoppiati.",
+  "page.mb.step.tagged_id": "Questa cartella porta già un id di pubblicazione MusicBrainz; quella pubblicazione è offerta per prima.",
   "page.mb.step.sort_name": "Nessun risultato per l’artista come nei tag; cercato come «{artist}».",
   "page.mb.step.without_suffix": "Nessun risultato per l’album come nei tag; cercato senza il suffisso di edizione come «{album}».",
   "page.mb.step.without_tracks": "Nessun risultato con il numero di tracce bloccato; cercato «{album}» senza bloccare il numero di tracce.",

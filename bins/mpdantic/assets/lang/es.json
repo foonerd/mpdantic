@@ -189,6 +189,7 @@
   "page.mb.country": "País",
   "page.mb.status": "Estado",
   "page.mb.unmatched": "{files} {files|archivo|archivos} y {tracks} {tracks|pista|pistas} no pudieron emparejarse.",
+  "page.mb.step.tagged_id": "Esta carpeta ya lleva un id de publicación de MusicBrainz; esa publicación se ofrece primero.",
   "page.mb.step.sort_name": "Ningún resultado con el artista tal como está etiquetado; se buscó como «{artist}».",
   "page.mb.step.without_suffix": "Ningún resultado con el álbum tal como está etiquetado; se buscó sin el sufijo de edición como «{album}».",
   "page.mb.step.without_tracks": "Ningún resultado con el número de pistas fijo; se buscó «{album}» sin fijar el número de pistas.",

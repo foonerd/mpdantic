@@ -1124,7 +1124,9 @@
       const q = page.query || {};
       const s = page.searched || q;
       box.appendChild(el('div', 'help', t('page.mb.query', { artist: q.artist || '—', album: q.album || '—', tracks: q.tracks || 0 })));
-      if (page.step === 'sort_name') {
+      if (page.step === 'tagged_id') {
+        box.appendChild(el('div', 'help', t('page.mb.step.tagged_id')));
+      } else if (page.step === 'sort_name') {
         box.appendChild(el('div', 'help', t('page.mb.step.sort_name', { artist: s.artist || '—' })));
       } else if (page.step === 'without_suffix') {
         box.appendChild(el('div', 'help', t('page.mb.step.without_suffix', { album: s.album || '—' })));

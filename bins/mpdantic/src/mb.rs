@@ -7,7 +7,9 @@
 //! release is allowed: paired files get edits; unmatched files and missing tracks
 //! are reported as guidance. The search is a short ladder: as tagged, then a
 //! `Last, First` sort-name flipped to display form, then without an edition
-//! suffix, then without locking the track count; the card says which step hit.
+//! suffix, then without locking the track count. A shared `musicbrainz_albumid`
+//! on the files short-circuits the ladder (`tagged_id`). The card says which
+//! step hit.
 //! One request per second on the public site, a cache under the data folder,
 //! backoff on 503. A local mirror from the settings skips the gap. No AcoustID,
 //! no write to MusicBrainz.
@@ -132,6 +134,22 @@ impl Client {
             });
         }
         let query = query_from_files(&files);
+        if let Some(id) = album_id_from_files(&files) {
+            match self.hit_from_release_id(&id) {
+                Ok(hit) => {
+                    return Ok(SearchPage {
+                        query: query.clone(),
+                        searched: query,
+                        step: "tagged_id".into(),
+                        releases: vec![hit],
+                        groups,
+                    });
+                }
+                Err(_) => {
+                    // Stale or unreachable id: fall through to the text ladder.
+                }
+            }
+        }
         if query.artist.is_empty() && query.album.is_empty() {
             return Err(msg!(
                 "core.mb.no_query",
@@ -141,6 +159,38 @@ impl Client {
         let mut page = self.ladder_search(query)?;
         page.groups = groups;
         Ok(page)
+    }
+
+    /// One release by MBID as a search hit (warms the same cache map uses).
+    fn hit_from_release_id(&self, release_id: &str) -> Result<ReleaseHit, Msg> {
+        if !is_mbid(release_id) {
+            return Err(msg!("core.mb.bad_id", "not a MusicBrainz release id"));
+        }
+        let url = format!(
+            "{}/ws/2/release/{}?inc=recordings+artist-credits&fmt=json",
+            self.base, release_id
+        );
+        let body = self.get_cached(&url)?;
+        let detail = parse_release(&body)?;
+        let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        Ok(ReleaseHit {
+            id: detail.id,
+            title: detail.title,
+            artist: detail.artist,
+            date: detail.date,
+            country: v
+                .get("country")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            status: v
+                .get("status")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            track_count: detail.tracks.len(),
+            score: 100,
+        })
     }
 
     /// The search ladder for a query already taken from the folder's tags.
@@ -408,7 +458,7 @@ pub struct SearchPage {
     pub query: Query,
     /// What the Lucene query actually used (may be normalised, tracks dropped).
     pub searched: Query,
-    /// Which ladder step produced `releases`: `as_tagged`, `sort_name`,
+    /// Which ladder step produced `releases`: `tagged_id`, `as_tagged`, `sort_name`,
     /// `without_suffix`, `without_tracks`, or `mixed_album` when the folder is a mix/dump guide.
     pub step: String,
     pub releases: Vec<ReleaseHit>,
@@ -592,6 +642,28 @@ fn query_from_files(files: &[FileValues]) -> Query {
         album: first("album"),
         tracks: files.len(),
     }
+}
+
+/// One shared MusicBrainz release id on the folder's files, or none when absent or conflicting.
+fn album_id_from_files(files: &[FileValues]) -> Option<String> {
+    let mut found: Option<String> = None;
+    for f in files {
+        let Some(ids) = f.values.get("musicbrainz_albumid") else {
+            continue;
+        };
+        for raw in ids {
+            let id = raw.trim();
+            if !is_mbid(id) {
+                continue;
+            }
+            match &found {
+                None => found = Some(id.to_string()),
+                Some(prev) if prev == id => {}
+                Some(_) => return None,
+            }
+        }
+    }
+    found
 }
 
 fn lucene_escape(s: &str) -> String {
@@ -1129,6 +1201,62 @@ mod tests {
         );
         assert_eq!(normalise_album("21"), "21");
         assert_eq!(normalise_album("  Demo [Deluxe] "), "Demo");
+    }
+
+    #[test]
+    fn a_shared_album_id_on_the_files_is_taken_and_a_conflict_is_not() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        let one = file(
+            "01.flac",
+            BTreeMap::from([("musicbrainz_albumid".into(), vec![id.into()])]),
+        );
+        let two = file(
+            "02.flac",
+            BTreeMap::from([("musicbrainz_albumid".into(), vec![id.into()])]),
+        );
+        assert_eq!(
+            album_id_from_files(&[one.clone(), two]).as_deref(),
+            Some(id)
+        );
+        let other = file(
+            "03.flac",
+            BTreeMap::from([(
+                "musicbrainz_albumid".into(),
+                vec!["22222222-2222-2222-2222-222222222222".into()],
+            )]),
+        );
+        assert_eq!(album_id_from_files(&[one, other]), None);
+        assert_eq!(
+            album_id_from_files(&[file(
+                "x.flac",
+                BTreeMap::from([("musicbrainz_albumid".into(), vec!["not-an-id".into()])])
+            )]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_tagged_release_id_becomes_a_search_hit() {
+        let dir = std::env::temp_dir().join(format!("mpdantic-mb-tagged-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        let base = "https://musicbrainz.org";
+        let id = "11111111-1111-1111-1111-111111111111";
+        let release_body = r#"{"id":"11111111-1111-1111-1111-111111111111","title":"Demo","date":"1999-05-01","country":"US","status":"Official","artist-credit":[{"name":"Band","joinphrase":""}],"media":[{"position":1,"tracks":[{"number":"1","title":"One","length":1000},{"number":"2","title":"Two","length":2000}]}]}"#;
+        let release_url =
+            format!("{base}/ws/2/release/{id}?inc=recordings+artist-credits&fmt=json");
+        let mut map = BTreeMap::new();
+        map.insert(release_url, (200, release_body.into()));
+        let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
+        let hit = client.hit_from_release_id(id).unwrap();
+        assert_eq!(hit.id, id);
+        assert_eq!(hit.title, "Demo");
+        assert_eq!(hit.artist, "Band");
+        assert_eq!(hit.track_count, 2);
+        assert_eq!(hit.score, 100);
+        assert_eq!(hit.country, "US");
+        assert_eq!(hit.status, "Official");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

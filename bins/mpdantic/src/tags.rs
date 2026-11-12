@@ -659,6 +659,8 @@ pub struct Seen {
     pub genre: Vec<String>,
     pub composer: Vec<String>,
     pub comment: Vec<String>,
+    /// MusicBrainz release id when present (Vorbis / APE name, or ID3 TXXX / MP4 freeform).
+    pub musicbrainz_albumid: Vec<String>,
     /// Keys MPD does not read, with the block they are in.
     pub ignored: Vec<String>,
     /// An ID3v1 block with nothing else to read.
@@ -682,6 +684,7 @@ impl Seen {
             "genre" => &mut self.genre,
             "composer" => &mut self.composer,
             "comment" => &mut self.comment,
+            "musicbrainz_albumid" => &mut self.musicbrainz_albumid,
             _ => return,
         };
         list.push(value.to_string());
@@ -747,6 +750,11 @@ pub fn view(raw: &Raw) -> Seen {
                             let desc = k[5..].to_lowercase();
                             if desc == "cuesheet" {
                                 seen.cuesheet = true;
+                                continue;
+                            }
+                            if desc == "musicbrainz album id" {
+                                seen.put("musicbrainz_albumid", &item.value);
+                                continue;
                             }
                             if desc.starts_with("musicbrainz ") {
                                 continue;
@@ -814,6 +822,7 @@ pub fn view(raw: &Raw) -> Seen {
                         "soaa" => "albumartistsort",
                         "soal" => "albumsort",
                         "sonm" => "titlesort",
+                        "----:com.apple.iTunes:MusicBrainz Album Id" => "musicbrainz_albumid",
                         _ => {
                             seen.ignored.push(format!("{} (MP4 atom)", item.key));
                             continue;
@@ -1154,6 +1163,7 @@ pub mod tests {
         assert_eq!(s.album_artist, ["AA", "AA2"]);
         assert_eq!(s.date, ["2001", "2002", "2003"]);
         assert_eq!(s.artist, ["A"]);
+        assert_eq!(s.musicbrainz_albumid, ["id"]);
         assert!(s.cuesheet);
         assert_eq!(s.latin1, 1);
         assert!(!s.id3v1_only);

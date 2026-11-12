@@ -189,6 +189,7 @@
   "page.mb.country": "Pays",
   "page.mb.status": "Statut",
   "page.mb.unmatched": "{files} {files|fichier|fichiers} et {tracks} {tracks|piste|pistes} n’ont pas pu être appariés.",
+  "page.mb.step.tagged_id": "Ce dossier porte déjà un identifiant de publication MusicBrainz ; cette publication est proposée en premier.",
   "page.mb.step.sort_name": "Aucun résultat pour l’artiste tel qu’étiqueté ; recherche comme « {artist} ».",
   "page.mb.step.without_suffix": "Aucun résultat pour l’album tel qu’étiqueté ; recherche sans le suffixe d’édition comme « {album} ».",
   "page.mb.step.without_tracks": "Aucun résultat avec le nombre de pistes figé ; recherche de « {album} » sans figer le nombre de pistes.",

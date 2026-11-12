@@ -744,6 +744,12 @@ pub fn folder_values(
             for (field, list) in lists {
                 values.insert(field.to_string(), list.clone());
             }
+            if !seen.musicbrainz_albumid.is_empty() {
+                values.insert(
+                    "musicbrainz_albumid".into(),
+                    seen.musicbrainz_albumid.clone(),
+                );
+            }
             FileValues {
                 path: library_path(folder, &name),
                 name,

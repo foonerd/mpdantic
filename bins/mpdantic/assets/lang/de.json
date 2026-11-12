@@ -189,6 +189,7 @@
   "page.mb.country": "Land",
   "page.mb.status": "Status",
   "page.mb.unmatched": "{files} {files|Datei|Dateien} und {tracks} {tracks|Titel|Titel} konnten nicht zugeordnet werden.",
+  "page.mb.step.tagged_id": "Dieser Ordner trägt schon eine MusicBrainz-Release-ID; diese Veröffentlichung wird zuerst angeboten.",
   "page.mb.step.sort_name": "Kein Treffer für den Künstler wie getaggt; als „{artist}“ gesucht.",
   "page.mb.step.without_suffix": "Kein Treffer für das Album wie getaggt; ohne die Editionssuffixe als „{album}“ gesucht.",
   "page.mb.step.without_tracks": "Kein Treffer mit fester Titelanzahl; „{album}“ ohne die Titelanzahl gesucht.",

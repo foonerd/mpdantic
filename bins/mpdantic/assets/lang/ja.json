@@ -189,6 +189,7 @@
   "page.mb.country": "国",
   "page.mb.status": "状態",
   "page.mb.unmatched": "{files} {files|ファイル}と {tracks} {tracks|曲} を対応付けられませんでした。",
+  "page.mb.step.tagged_id": "このフォルダーには既に MusicBrainz のリリース ID があります。そのリリースを先に提示します。",
   "page.mb.step.sort_name": "タグどおりのアーティストではヒットなし。「{artist}」として検索しました。",
   "page.mb.step.without_suffix": "タグどおりのアルバムではヒットなし。エディション接尾辞を除き「{album}」で検索しました。",
   "page.mb.step.without_tracks": "曲数固定ではヒットなし。曲数を固定せず「{album}」で検索しました。",

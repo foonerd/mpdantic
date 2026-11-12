@@ -189,6 +189,7 @@
   "page.mb.country": "Land",
   "page.mb.status": "Status",
   "page.mb.unmatched": "{files} {files|bestand|bestanden} en {tracks} {tracks|nummer|nummers} konden niet worden gekoppeld.",
+  "page.mb.step.tagged_id": "Deze map draagt al een MusicBrainz-release-id; die uitgave wordt eerst aangeboden.",
   "page.mb.step.sort_name": "Geen treffer voor de artiest zoals getagd; gezocht als „{artist}“.",
   "page.mb.step.without_suffix": "Geen treffer voor het album zoals getagd; gezocht zonder het editionsuffix als „{album}“.",
   "page.mb.step.without_tracks": "Geen treffer met vast aantal nummers; „{album}“ gezocht zonder het aantal nummers vast te zetten.",
