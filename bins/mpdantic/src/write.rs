@@ -845,46 +845,96 @@ fn prepare_folder(
     if raw.is_empty() {
         return Err(msg!("core.folder.no_name", "no name given for the folder"));
     }
-    if raw.contains('/') || raw.contains('\\') {
+    if raw.contains('\\') || raw.contains("..") {
         return Err(msg!(
-            "core.folder.no_slash",
-            "a folder name cannot contain a slash"
+            "core.folder.bad_path",
+            "a folder path cannot contain .. or a backslash"
         ));
     }
-    let to = names::safe(raw);
-    if to.is_empty() {
+    let slash_count = raw.matches('/').count();
+    if slash_count > 1 {
         return Err(msg!(
-            "core.folder.empty_name",
-            "the name is empty after it is made safe"
+            "core.folder.one_slash",
+            "use at most one slash (Artist/Album)"
         ));
     }
-    if to == leaf {
-        return Err(msg!(
-            "core.folder.as_is",
-            "the folder already has that name"
-        ));
-    }
-    let parent_dir = folder_dir(music, &parent);
-    let present: BTreeSet<String> = fs::read_dir(&parent_dir)
-        .map_err(|e| text::at(parent_dir.display(), e))?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_lowercase())
-        .collect();
+    let (base, from_rel, to_rel) = if slash_count == 1 {
+        let (artist_raw, album_raw) = raw.split_once('/').unwrap();
+        let artist = names::safe(artist_raw.trim());
+        let album = names::safe(album_raw.trim());
+        if artist.is_empty() || album.is_empty() {
+            return Err(msg!(
+                "core.folder.empty_name",
+                "the name is empty after it is made safe"
+            ));
+        }
+        let base = crate::folders::layout_base(&parent);
+        let to_rel = format!("{artist}/{album}");
+        let dest = if base.is_empty() {
+            to_rel.clone()
+        } else {
+            format!("{base}/{to_rel}")
+        };
+        if dest == path {
+            return Err(msg!(
+                "core.folder.as_is",
+                "the folder already has that name"
+            ));
+        }
+        let from_rel = if base.is_empty() {
+            path.clone()
+        } else {
+            path.strip_prefix(&(base.clone() + "/"))
+                .unwrap_or(&path)
+                .to_string()
+        };
+        (base, from_rel, to_rel)
+    } else {
+        let to = names::safe(raw);
+        if to.is_empty() {
+            return Err(msg!(
+                "core.folder.empty_name",
+                "the name is empty after it is made safe"
+            ));
+        }
+        if to == leaf {
+            return Err(msg!(
+                "core.folder.as_is",
+                "the folder already has that name"
+            ));
+        }
+        (parent.clone(), leaf.clone(), to)
+    };
+    let base_dir = folder_dir(music, &base);
+    let dest_disk = base_dir.join(&to_rel);
     let mut refused = Vec::new();
-    let key = to.to_lowercase();
-    if present.contains(&key) && key != leaf.to_lowercase() {
+    if dest_disk.exists() {
         refused.push((
-            to.clone(),
+            to_rel.clone(),
             msg!("core.names.exists", "a file of this name is there already"),
         ));
+    } else if slash_count == 0 {
+        // Sibling leaf rename: also refuse a case-insensitive clash with another sibling.
+        let present: BTreeSet<String> = fs::read_dir(&base_dir)
+            .map_err(|e| text::at(base_dir.display(), e))?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_lowercase())
+            .collect();
+        let key = to_rel.to_lowercase();
+        if present.contains(&key) && key != leaf.to_lowercase() {
+            refused.push((
+                to_rel.clone(),
+                msg!("core.names.exists", "a file of this name is there already"),
+            ));
+        }
     }
-    let place = placed(shares, &parent)?;
-    let mut p = empty(id, "folder", parent.clone(), path.clone(), "rename", place);
+    let place = placed(shares, &base)?;
+    let mut p = empty(id, "folder", base.clone(), path.clone(), "rename", place);
     p.exists = true;
     p.changed = refused.is_empty();
     p.renames = vec![Rename {
-        name: leaf,
-        to: Some(to),
+        name: from_rel,
+        to: Some(to_rel),
         note: None,
     }];
     p.refused = refused;
@@ -1759,6 +1809,13 @@ fn apply_rename(
     let mut entries = Vec::new();
     let mut failure = None;
     for (from, to) in &todo {
+        let dest = dir.join(to);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                failure = Some(text::at(parent.display(), e));
+                break;
+            }
+        }
         match rename_in(&dir, from, to) {
             Ok(()) => entries.push(Entry {
                 path: walk::join(&preview.path, from),
@@ -2273,7 +2330,23 @@ pub fn undo(
                 if let Some(parent) = to_disk.parent() {
                     let _ = fs::create_dir_all(parent);
                 }
-                fs::rename(&src, &to_disk).map_err(|e| text::at(src.display(), e))
+                match fs::rename(&src, &to_disk) {
+                    Ok(()) => {
+                        // Folder layout undo: drop an empty Artist/ folder left behind.
+                        if batch.kind == "folder" {
+                            if let Some(parent) = Path::new(from_path).parent() {
+                                let p = organise_disk(
+                                    &dir,
+                                    &undo_mount_path,
+                                    &parent.to_string_lossy(),
+                                );
+                                let _ = fs::remove_dir(p);
+                            }
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(text::at(src.display(), e)),
+                }
             }
         };
         match result {
@@ -3385,6 +3458,66 @@ mod tests {
         assert!(!music
             .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
             .exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_moves_to_artist_album_under_the_grandparent_and_undo_clears_an_empty_artist() {
+        let dir = temp("folder-layout");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pl = dir.join("playlists");
+        let leaf = music.join("INTERNAL/Misc/MR0XF1~N");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(leaf.join("01.flac"), real_flac(&[("TITLE", "One")])).unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            1,
+            &Request {
+                kind: "folder".into(),
+                path: "INTERNAL/Misc/MR0XF1~N".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: Some("Peter Hollens/Misty Mountains: Songs".into()),
+                edits: None,
+                pattern: None,
+                moves: Vec::new(),
+                duplicates: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(p.path, "INTERNAL");
+        assert_eq!(p.renames[0].name, "Misc/MR0XF1~N");
+        assert_eq!(
+            p.renames[0].to.as_deref(),
+            Some("Peter Hollens/Misty Mountains_ Songs")
+        );
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert_eq!(a.count, 1);
+        assert!(music
+            .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs/01.flac")
+            .is_file());
+        assert!(!leaf.exists());
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.kind == "folder" && !b.undone)
+            .unwrap();
+        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        assert!(leaf.is_dir());
+        assert!(!music.join("INTERNAL/Peter Hollens").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

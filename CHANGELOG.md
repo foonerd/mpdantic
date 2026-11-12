@@ -7,6 +7,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 ### Added
 
 - Organise stage 2: when a destination already holds a bit-identical file, Preview offers leave / replace / remove for that copy (no silent delete).
+- Folder rename **Artist / Album**: a fourth suggestion and a one-slash custom path move the folder under the grandparent as `Artist/Album`, creating the artist folder when needed; undo restores the leaf and drops an empty artist folder this write left behind.
 
 ### Fixed
 

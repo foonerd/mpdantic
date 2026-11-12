@@ -309,7 +309,7 @@
       </div>
       <div class="write">
         <b data-i18n="page.folder.title">Folder name</b>
-        <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, or a name you type. The name is made safe for a share. Browse also offers Rename on each folder row. Nothing is written before the preview and Write; the undo gives the name back.</div>
+        <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, as Artist/Album under the parent tree, or a name you type. The name is made safe for a share. Browse also offers Rename on a folder row. Nothing is written before the preview and Write; the undo gives the name back.</div>
         <div id="folder-tags-box"></div>
         <div id="folder-tags-preview-box"></div>
       </div>
@@ -621,11 +621,12 @@
       };
       if (s.album) pick(t('page.folder.from_album'), s.album);
       if (s.albumartist) pick(t('page.folder.from_artist'), s.albumartist);
+      if (s.layout) pick(t('page.folder.from_layout'), s.layout);
       const field = el('input');
       field.type = 'text';
       field.spellcheck = false;
       field.placeholder = t('page.folder.custom');
-      field.value = s.album || s.albumartist || '';
+      field.value = s.layout || s.album || s.albumartist || '';
       field.style.minWidth = '16rem';
       line.appendChild(field);
       const preview = el('button', '', t('page.preview'));

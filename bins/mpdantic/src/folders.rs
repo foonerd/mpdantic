@@ -1,6 +1,7 @@
 //! Folder name suggestions from the folder's audio tags: album, albumartist (else
-//! artist), for the leaf rename of the folder in hand. The safe form is `names::safe`.
-//! Mixed album or artist tags offer no chip for that field (custom stays available).
+//! artist), for the leaf rename of the folder in hand, and an Artist/Album layout
+//! under the grandparent. The safe form is `names::safe`. Mixed album or artist
+//! tags offer no chip for that field (custom stays available).
 
 use std::collections::BTreeMap;
 
@@ -25,9 +26,23 @@ pub struct Suggest {
     /// Safe albumartist (else artist) when tags agree and it differs from the leaf.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub albumartist: Option<String>,
+    /// Safe `artist/album` under the layout base when both chips exist and the
+    /// folder is not already there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
     /// Why a chip is missing, when useful.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Msg>,
+}
+
+/// Grandparent of `parent`, or `parent` itself when it is a library root.
+pub fn layout_base(parent: &str) -> String {
+    if parent.is_empty() || is_root_folder(parent) {
+        return parent.to_string();
+    }
+    split_leaf(parent)
+        .map(|(gp, _)| gp)
+        .unwrap_or_else(|| parent.to_string())
 }
 
 /// A library root, or a NAS share root: not renamed.
@@ -108,12 +123,30 @@ pub fn suggest(path: &str, files: &[FileValues]) -> Result<Suggest, Msg> {
         }
         FieldAgree::None => None,
     };
+    let layout = match (&albumartist, &album) {
+        (Some(artist), Some(album_name)) => {
+            let rel = format!("{artist}/{album_name}");
+            let base = layout_base(&parent);
+            let dest = if base.is_empty() {
+                rel.clone()
+            } else {
+                format!("{base}/{rel}")
+            };
+            if dest == path {
+                None
+            } else {
+                Some(rel)
+            }
+        }
+        _ => None,
+    };
     Ok(Suggest {
         path: path.to_string(),
         leaf,
         parent,
         album,
         albumartist,
+        layout,
         notes,
     })
 }
@@ -204,6 +237,14 @@ mod tests {
             Some("Misty Mountains_ Songs Inspired by The Hobbit and Lord of the Rings")
         );
         assert_eq!(s.albumartist.as_deref(), Some("Peter Hollens"));
+        assert_eq!(
+            s.layout.as_deref(),
+            Some(
+                "Peter Hollens/Misty Mountains_ Songs Inspired by The Hobbit and Lord of the Rings"
+            )
+        );
+        assert_eq!(layout_base("INTERNAL/Peter Hollens"), "INTERNAL");
+        assert_eq!(layout_base("INTERNAL"), "INTERNAL");
         assert!(is_root_folder("INTERNAL"));
         assert!(is_root_folder("NAS/multimedia"));
         assert!(!is_root_folder("INTERNAL/Peter Hollens/MR0XF1~N"));
