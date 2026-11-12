@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-12
+
+The eighth test cut, a pre-release as the seven before: **Update library** defers MPD's update (and Volumio's album-list rebuild) until you ask, so many albums cost one rebuild. Driven on the same two players. Every write is still undoable from the Written tab.
+
 ### Changed
 
 - Library writes and undos no longer call MPD immediately. **Update library** flushes every pending folder with one `update`, so Volumio rebuilds its album list once. Leaving the pages with pending folders asks whether to update now, leave without updating, or stay. Files were already on disk; the dialog is not a save prompt.
