@@ -129,7 +129,8 @@ JS
 
 echo "check: plugin"
 with_node --check plugin/index.js plugin/helpers.js
-with_node --test plugin/test/
+# Node 24 treats a bare directory as one failed module; name the files.
+with_node --test plugin/test/*.js
 
 echo "check: pages"
 # The inline script of every page the core serves, parsed by Node: a page that does

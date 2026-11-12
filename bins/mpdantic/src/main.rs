@@ -40,6 +40,7 @@ mod mount;
 mod mpd;
 mod names;
 mod organise;
+mod pending;
 mod playlist;
 mod plcheck;
 mod plfix;
@@ -190,6 +191,7 @@ fn main() {
         album: Mutex::new(None),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
         journal: undo::Journal::new(&args.data.join("undo")),
+        pending: pending::Pending::open(&args.data),
         findings: findings::Store::new(&args.data),
         previews: Mutex::new(std::collections::HashMap::new()),
         next_preview: std::sync::atomic::AtomicU64::new(0),

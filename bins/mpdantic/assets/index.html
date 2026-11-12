@@ -208,6 +208,7 @@
   <span class="sub" id="version"></span>
   <span class="grow"></span>
   <span class="badge" id="state">...</span>
+  <button class="small" id="library-update" hidden data-i18n="page.library.update" data-i18n-title="page.library.update_title">Update library</button>
   <button class="small" id="close" hidden data-i18n="page.close">Close</button>
 </div>
 <div class="container">
@@ -371,8 +372,9 @@
   <div class="panel" id="panel-undo" hidden>
     <div class="head">
       <b data-i18n="page.tab.undo">Written</b>
-      <span class="sub" data-i18n="page.undo.sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after. Vacuum clears the journal when undo is no longer needed.</span>
+      <span class="sub" data-i18n="page.undo.sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since. Press Update library when you are ready — MPD is told once, and Volumio rebuilds its album list once. Vacuum clears the journal when undo is no longer needed.</span>
       <span class="grow"></span>
+      <button id="library-update-undo" data-i18n="page.library.update" data-i18n-title="page.library.update_title" hidden>Update library</button>
       <button id="vacuum" data-i18n="page.undo.vacuum" data-i18n-title="page.undo.vacuum_title">Vacuum</button>
     </div>
     <div class="body">
@@ -430,6 +432,16 @@
     <div class="actions">
       <button class="primary" id="vacuum-cancel" data-i18n="page.cancel">Cancel</button>
       <button id="vacuum-go" data-i18n="page.undo.vacuum_confirm_action">Vacuum</button>
+    </div>
+  </div>
+</div>
+<div class="dialog" id="library-leave-dialog" hidden>
+  <div class="card" role="dialog" aria-modal="true">
+    <div class="text" id="library-leave-text"></div>
+    <div class="actions">
+      <button id="library-leave-stay" data-i18n="page.library.leave_stay">Stay</button>
+      <button id="library-leave-without" data-i18n="page.library.leave_without">Leave without updating</button>
+      <button class="primary" id="library-leave-update" data-i18n="page.library.leave_update">Update library</button>
     </div>
   </div>
 </div>
@@ -2964,14 +2976,114 @@
   function outcome(a, verb, kind) {
     const done = el('div', 'done');
     done.appendChild(el('span', 'tag ok', t('page.outcome.' + verb)));
-    const update = a.updated !== null && a.updated !== undefined
+    const update = a.pending
+      ? t('page.outcome.pending')
+      : a.updated !== null && a.updated !== undefined
       ? t('page.outcome.updating', { job: a.updated })
       : a.update_error ? t('page.outcome.not_updated', { error: a.update_error })
       : verb === 'undone' ? t('page.outcome.read_next')
       : kind === 'volumio_list' ? t('page.outcome.list_next')
+      : kind === 'volumio_playlist' || kind === 'playlist' ? t('page.outcome.listed')
       : t('page.outcome.listed');
     done.appendChild(text(' ' + a.file + '. ' + update));
     return done;
+  }
+
+  let libraryPending = [];
+  async function refreshLibraryPending() {
+    try {
+      const a = await api('/api/library/pending');
+      libraryPending = a.paths || [];
+    } catch (e) {
+      libraryPending = [];
+    }
+    const on = libraryPending.length > 0;
+    const head = $('library-update');
+    const undoBtn = $('library-update-undo');
+    if (head) {
+      head.hidden = !on;
+      head.disabled = !on;
+      head.title = on
+        ? t('page.library.update_title') + ' ' + t('page.library.pending_paths', { n: libraryPending.length })
+        : t('page.library.update_title');
+    }
+    if (undoBtn) {
+      undoBtn.hidden = !on;
+      undoBtn.disabled = !on;
+    }
+  }
+
+  async function updateLibrary(button) {
+    if (button) button.disabled = true;
+    const note = $('undo-note');
+    try {
+      const a = await api('/api/library/update', { method: 'POST' });
+      if (note) {
+        note.textContent = '';
+        const done = el('div', 'done');
+        if (a.updated !== null && a.updated !== undefined) {
+          done.appendChild(el('span', 'tag ok', t('page.library.update')));
+          done.appendChild(text(' ' + t('page.library.updated', { job: a.updated })));
+        } else {
+          done.className = 'done bad';
+          done.textContent = t('page.library.not_updated', { error: a.update_error || '' });
+        }
+        note.appendChild(done);
+        note.hidden = false;
+      }
+      await refreshLibraryPending();
+      return !a.update_error && a.updated !== null && a.updated !== undefined;
+    } catch (e) {
+      if (note) {
+        note.textContent = '';
+        note.appendChild(el('div', 'done bad', String(e.message || e)));
+        note.hidden = false;
+      }
+      if (button) button.disabled = false;
+      await refreshLibraryPending();
+      return false;
+    }
+  }
+
+  function leavePlugin() {
+    window.close();
+    setTimeout(() => {
+      if (window.closed) return;
+      if (window.history.length > 1) window.history.back();
+      else window.location.href = 'http://' + window.location.hostname + '/';
+    }, 100);
+  }
+
+  function askLibraryLeave(onLeave) {
+    const d = $('library-leave-dialog');
+    $('library-leave-text').textContent = t('page.library.leave_text', { n: libraryPending.length });
+    const finish = async (choice) => {
+      d.hidden = true;
+      $('library-leave-stay').onclick = null;
+      $('library-leave-without').onclick = null;
+      $('library-leave-update').onclick = null;
+      d.onkeydown = null;
+      if (choice === 'stay') return;
+      if (choice === 'update') {
+        const ok = await updateLibrary($('library-leave-update'));
+        if (!ok) return;
+      }
+      onLeave();
+    };
+    $('library-leave-stay').onclick = () => finish('stay');
+    $('library-leave-without').onclick = () => finish('without');
+    $('library-leave-update').onclick = () => finish('update');
+    d.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); finish('stay'); } };
+    d.hidden = false;
+    $('library-leave-update').focus();
+  }
+
+  function guardLeave(onLeave) {
+    if (!libraryPending.length) {
+      onLeave();
+      return;
+    }
+    askLibraryLeave(onLeave);
   }
 
   async function applyBatch(p, button, box, closed) {
@@ -2997,6 +3109,7 @@
       (a.findings || []).forEach(fxFolderUpdated);
       if (closed) closed();
       loadUndo();
+      refreshLibraryPending();
     } catch (e) {
       box.appendChild(el('div', 'done bad', String(e.message || e)));
       button.disabled = false;
@@ -3076,6 +3189,7 @@
       note.appendChild(outcome(a, 'undone'));
       note.hidden = false;
       loadUndo();
+      refreshLibraryPending();
     } catch (e) {
       row.appendChild(el('div', 'done bad', String(e.message || e)));
       button.disabled = false;
@@ -3095,17 +3209,18 @@
   // Close: only when this page is the window itself. Inside Volumio's own iframe page
   // its arrow back is the way out. The window closes where the browser allows (one the
   // UI opened), else the page steps back, else it goes to the player's own page.
+  // Pending library updates ask before leaving.
   if (window.parent === window) {
     $('close').hidden = false;
-    $('close').addEventListener('click', () => {
-      window.close();
-      setTimeout(() => {
-        if (window.closed) return;
-        if (window.history.length > 1) window.history.back();
-        else window.location.href = 'http://' + window.location.hostname + '/';
-      }, 100);
-    });
+    $('close').addEventListener('click', () => guardLeave(leavePlugin));
   }
+  $('library-update').addEventListener('click', () => updateLibrary($('library-update')));
+  $('library-update-undo').addEventListener('click', () => updateLibrary($('library-update-undo')));
+  window.addEventListener('beforeunload', (e) => {
+    if (!libraryPending.length) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
 
   $('more').addEventListener('click', () => load(current.path, true));
   Object.values(panels).forEach((p) => {
@@ -3124,6 +3239,7 @@
   load(fromHash(), false);
   loadPrefs();
   loadUndo();
+  refreshLibraryPending();
   loadOverviews();
   resume();
   status();

@@ -4,6 +4,10 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Changed
+
+- Library writes and undos no longer call MPD immediately. **Update library** flushes every pending folder with one `update`, so Volumio rebuilds its album list once. Leaving the pages with pending folders asks whether to update now, leave without updating, or stay. Files were already on disk; the dialog is not a save prompt.
+
 ## [0.1.6] - 2026-11-12
 
 The seventh test cut, a pre-release as the six before: playlist Discard and Written Vacuum; folder Artist/Album layout and soft hints; Organise bit-identical collisions; MusicBrainz sort-name, tagged release id and map MBIDs. Driven on the same two players. Every write is still undoable from the Written tab.

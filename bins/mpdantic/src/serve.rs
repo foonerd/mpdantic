@@ -126,6 +126,8 @@ pub struct Shared {
     pub album: Mutex<Option<report::Album>>,
     pub mounter: mount::Mounter,
     pub journal: undo::Journal,
+    /// Library folders waiting for Update library.
+    pub pending: crate::pending::Pending,
     /// The findings of the last check of each kind, kept whole.
     pub findings: findings::Store,
     /// The previews prepared and not yet applied, by id, with a TTL and a cap.
@@ -418,6 +420,31 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
             let (code, body) = apply_batch(shared, id);
             (code, json, body)
         }
+        (_, "/api/library/pending") if get => {
+            let paths = shared.pending.list();
+            (
+                200,
+                json,
+                serde_json::json!({ "paths": paths, "pending": !paths.is_empty() }).to_string()
+                    + "\n",
+            )
+        }
+        ("POST", "/api/library/update") => match write::flush(&shared.pending, &shared.mpd) {
+            Ok(flushed) => {
+                let code = if flushed.update_error.is_some() {
+                    500
+                } else {
+                    200
+                };
+                (
+                    code,
+                    json,
+                    serde_json::to_string(&flushed).unwrap_or_default() + "\n",
+                )
+            }
+            Err(e) if e.k == "core.library.nothing_pending" => (400, json, error(&e)),
+            Err(e) => (500, json, error(&e)),
+        },
         (_, "/api/undo") if get => {
             let list: Vec<serde_json::Value> = shared
                 .journal
@@ -1002,7 +1029,8 @@ fn prepare_batch(shared: &Shared, body: &[u8]) -> (u16, String) {
     }
 }
 
-/// `POST /api/batches/<id>/apply`: the preview written, journaled, MPD told.
+/// `POST /api/batches/<id>/apply`: the preview written and journaled; library
+/// folders enqueue Update library.
 fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
     let preview = {
         let mut previews = shared.previews.lock().unwrap_or_else(|e| e.into_inner());
@@ -1028,7 +1056,7 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
         &shares,
         &shared.mounter,
         &shared.journal,
-        &shared.mpd,
+        &shared.pending,
         &preview,
     ) {
         Ok(applied) => {
@@ -1059,7 +1087,7 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
     }
 }
 
-/// `POST /api/undo/<id>`: the batch undone, MPD told.
+/// `POST /api/undo/<id>`: the batch undone; library folders enqueue Update library.
 fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
     let shares = mount::shares(&shared.networkfs).unwrap_or_default();
     // The batch's kind and folder, for the findings of the folder after the undo.
@@ -1074,7 +1102,7 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
         &shares,
         &shared.mounter,
         &shared.journal,
-        &shared.mpd,
+        &shared.pending,
         id,
     ) {
         Ok(applied) => {
@@ -1497,6 +1525,7 @@ mod tests {
             album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),
             journal: undo::Journal::new(&data.join("undo")),
+            pending: crate::pending::Pending::open(&data),
             findings: findings::Store::new(&data),
             previews: Mutex::new(HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(0),
@@ -1616,7 +1645,22 @@ mod tests {
         );
         assert!(out.starts_with("HTTP/1.0 200"), "{out}");
         let applied: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
-        assert_eq!(applied["updated"], 7);
+        assert!(applied["updated"].is_null(), "update deferred: {applied}");
+        assert_eq!(applied["pending"], true);
+        let out = talk(server.port, "GET /api/library/pending HTTP/1.0\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let pending: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(pending["pending"], true);
+        let out = talk(
+            server.port,
+            "POST /api/library/update HTTP/1.0\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.0 200"), "{out}");
+        let flushed: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(flushed["updated"], 7);
+        let out = talk(server.port, "GET /api/library/pending HTTP/1.0\r\n\r\n");
+        let pending2: serde_json::Value = serde_json::from_str(body(&out)).unwrap();
+        assert_eq!(pending2["pending"], false);
         let batch = applied["batch"].as_str().unwrap().to_string();
         assert_eq!(
             std::fs::read_to_string(root.join("USB/.mpdignore")).unwrap(),

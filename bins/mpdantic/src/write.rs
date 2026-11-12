@@ -1,6 +1,7 @@
 //! A batch of writes: prepared without writing, shown whole, confirmed once, applied
-//! with a check that each file is what the preview read, journaled for the undo, and
-//! followed by MPD's update of the folder. Three kinds: `mpdignore`, lines into the
+//! with a check that each file is what the preview read, and journaled for the undo.
+//! Library kinds enqueue the folder for a later MPD update (Update library); kinds
+//! outside the library skip MPD. Three kinds: `mpdignore`, lines into the
 //! `.mpdignore` of the folder in hand; `cue`, a sheet's text repaired or the sheet
 //! removed; `tags`, the tags of the folder's audio files edited key by key.
 
@@ -21,6 +22,7 @@ use crate::mount::{self, Mount, Mounter, Share, Where};
 use crate::mpd::{self, Decoders};
 use crate::names;
 use crate::organise;
+use crate::pending::Pending;
 use crate::playlist;
 use crate::plcheck;
 use crate::plfix::{self, EntryChange};
@@ -204,7 +206,21 @@ pub struct Applied {
     pub written: bool,
     /// The files written (`tags`); one otherwise.
     pub count: usize,
-    /// MPD's update job for the folder, or why there is none.
+    /// MPD's update job when a flush ran; apply/undo leave this unset.
+    pub updated: Option<u64>,
+    pub update_error: Option<Msg>,
+    /// True when the write is on disk but MPD has not been told yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+}
+
+/// What Update library did.
+#[derive(Serialize, Debug)]
+pub struct Flushed {
+    /// The single path sent to MPD (common ancestor, or empty for the whole library).
+    pub path: String,
+    /// The pending folders cleared on success.
+    pub paths: Vec<String>,
     pub updated: Option<u64>,
     pub update_error: Option<Msg>,
 }
@@ -1591,35 +1607,84 @@ fn note_for(preview: &Preview, written: usize) -> Msg {
     }
 }
 
-fn update_after(mpd_address: &mpd::Address, folder: &str) -> (Option<u64>, Option<Msg>) {
-    match mpd::update(mpd_address, folder) {
-        Ok(n) => (Some(n), None),
-        Err(e) => (None, Some(e)),
+/// Record a library folder for a later Update library press.
+fn defer_update(pending: &Pending, folder: &str) -> (Option<u64>, Option<Msg>, bool) {
+    match pending.add(folder) {
+        Ok(()) => (None, None, true),
+        Err(e) => (None, Some(e), false),
+    }
+}
+
+fn applied(
+    batch: String,
+    file: String,
+    count: usize,
+    updated: Option<u64>,
+    update_error: Option<Msg>,
+    pending: bool,
+) -> Applied {
+    Applied {
+        batch,
+        file,
+        written: true,
+        count,
+        updated,
+        update_error,
+        pending,
+    }
+}
+
+/// One MPD `update` covering every pending folder; clears the set on success.
+pub fn flush(pending: &Pending, mpd_address: &mpd::Address) -> Result<Flushed, Msg> {
+    let paths = pending.list();
+    if paths.is_empty() {
+        return Err(msg!(
+            "core.library.nothing_pending",
+            "nothing pending to update"
+        ));
+    }
+    let path = pending.flush_path();
+    match mpd::update(mpd_address, &path) {
+        Ok(n) => {
+            pending.clear()?;
+            Ok(Flushed {
+                path,
+                paths,
+                updated: Some(n),
+                update_error: None,
+            })
+        }
+        Err(e) => Ok(Flushed {
+            path,
+            paths,
+            updated: None,
+            update_error: Some(e),
+        }),
     }
 }
 
 /// The preview applied: the file checked to be what the preview read, the folder
 /// made writable, the file written or removed, the batch journaled with the file's
-/// bytes as they were, MPD told.
+/// bytes as they were; library folders enqueue a later MPD update.
 pub fn apply(
     music: &Path,
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     preview: &Preview,
 ) -> Result<Applied, Msg> {
     if !preview.changed {
         return Err(msg!("core.write.nothing_to_write", "nothing to write"));
     }
     if preview.kind == "tags" {
-        return apply_tags(music, shares, mounter, journal, mpd_address, preview);
+        return apply_tags(music, shares, mounter, journal, pending, preview);
     }
     if preview.kind == "rename" || preview.kind == "folder" {
-        return apply_rename(music, shares, mounter, journal, mpd_address, preview);
+        return apply_rename(music, shares, mounter, journal, pending, preview);
     }
     if preview.kind == "organise" {
-        return apply_organise(music, shares, mounter, journal, mpd_address, preview);
+        return apply_organise(music, shares, mounter, journal, pending, preview);
     }
     let ro = file_on_disk(music, &preview.kind, &preview.file);
     let (exists, size, mtime) = stat(&ro);
@@ -1673,19 +1738,19 @@ pub fn apply(
     }
     let batch = journaled?;
     // A write outside the library is nothing to MPD.
-    let (updated, update_error) = if outside(&preview.kind) {
-        (None, None)
+    let (updated, update_error, is_pending) = if outside(&preview.kind) {
+        (None, None, false)
     } else {
-        update_after(mpd_address, &preview.path)
+        defer_update(pending, &preview.path)
     };
-    Ok(Applied {
+    Ok(applied(
         batch,
-        file: preview.file.clone(),
-        written: true,
-        count: 1,
+        preview.file.clone(),
+        1,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 /// The folder's files written one by one through lofty: each checked to be what the
@@ -1696,7 +1761,7 @@ fn apply_tags(
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     preview: &Preview,
 ) -> Result<Applied, Msg> {
     let todo: Vec<&FilePlan> = preview
@@ -1766,15 +1831,15 @@ fn apply_tags(
             None => e,
         });
     }
-    let (updated, update_error) = update_after(mpd_address, &preview.path);
-    Ok(Applied {
-        batch: batch.unwrap_or_default(),
-        file: preview.path.clone(),
-        written: true,
-        count: written,
+    let (updated, update_error, is_pending) = defer_update(pending, &preview.path);
+    Ok(applied(
+        batch.unwrap_or_default(),
+        preview.path.clone(),
+        written,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 /// The folder's files renamed one by one, then the sheets and playlists that name
@@ -1787,7 +1852,7 @@ fn apply_rename(
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     preview: &Preview,
 ) -> Result<Applied, Msg> {
     let todo: Vec<(&str, &str)> = preview
@@ -1931,15 +1996,15 @@ fn apply_rename(
             None => e,
         });
     }
-    let (updated, update_error) = update_after(mpd_address, &preview.path);
-    Ok(Applied {
-        batch: batch.unwrap_or_default(),
-        file: preview.path.clone(),
-        written: true,
-        count: renamed,
+    let (updated, update_error, is_pending) = defer_update(pending, &preview.path);
+    Ok(applied(
+        batch.unwrap_or_default(),
+        preview.path.clone(),
+        renamed,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 /// Selected files moved into Artist/Album folders under the library anchor.
@@ -1948,7 +2013,7 @@ fn apply_organise(
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     preview: &Preview,
 ) -> Result<Applied, Msg> {
     let moves: Vec<(&str, &str)> = preview
@@ -2118,15 +2183,15 @@ fn apply_organise(
     } else {
         anchor
     };
-    let (updated, update_error) = update_after(mpd_address, &update_path);
-    Ok(Applied {
-        batch: batch.unwrap_or_default(),
-        file: preview.path.clone(),
-        written: true,
-        count: moved,
+    let (updated, update_error, is_pending) = defer_update(pending, &update_path);
+    Ok(applied(
+        batch.unwrap_or_default(),
+        preview.path.clone(),
+        moved,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 /// A file renamed within its folder; a change of case alone goes through a
@@ -2193,7 +2258,7 @@ pub fn undo(
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     id: &str,
 ) -> Result<Applied, Msg> {
     let batch = journal.load(id).ok_or_else(undo::no_such_batch)?;
@@ -2201,7 +2266,7 @@ pub fn undo(
         return Err(msg!("core.write.already_undone", "already undone"));
     }
     if batch.kind == "tags" {
-        return undo_tags(music, shares, mounter, journal, mpd_address, &batch);
+        return undo_tags(music, shares, mounter, journal, pending, &batch);
     }
     let Some(first) = batch.entries.first() else {
         return Err(msg!("core.write.empty_batch", "an empty batch"));
@@ -2393,19 +2458,19 @@ pub fn undo(
         ));
     }
     journal.mark_undone(id)?;
-    let (updated, update_error) = if outside(&batch.kind) {
-        (None, None)
+    let (updated, update_error, is_pending) = if outside(&batch.kind) {
+        (None, None, false)
     } else {
-        update_after(mpd_address, &batch.path)
+        defer_update(pending, &batch.path)
     };
-    Ok(Applied {
-        batch: id.to_string(),
-        file: first.path.clone(),
-        written: true,
-        count: done,
+    Ok(applied(
+        id.to_string(),
+        first.path.clone(),
+        done,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 /// Values the same as the batch wrote them: as they are, or as the same number,
@@ -2429,7 +2494,7 @@ fn undo_tags(
     shares: &[Share],
     mounter: &Mounter,
     journal: &Journal,
-    mpd_address: &mpd::Address,
+    pending: &Pending,
     batch: &Batch,
 ) -> Result<Applied, Msg> {
     let mut todo: Vec<(String, String, Vec<KeyChange>)> = Vec::new();
@@ -2494,15 +2559,15 @@ fn undo_tags(
         ));
     }
     journal.mark_undone(&batch.id)?;
-    let (updated, update_error) = update_after(mpd_address, &batch.path);
-    Ok(Applied {
-        batch: batch.id.clone(),
-        file: batch.path.clone(),
-        written: true,
-        count: put_back,
+    let (updated, update_error, is_pending) = defer_update(pending, &batch.path);
+    Ok(applied(
+        batch.id.clone(),
+        batch.path.clone(),
+        put_back,
         updated,
         update_error,
-    })
+        is_pending,
+    ))
 }
 
 #[cfg(test)]
@@ -2510,6 +2575,7 @@ mod tests {
     use super::*;
     use crate::mount::tests::sample_config;
     use crate::mpd::tests::{decoders_of, fake_mpd};
+    use crate::pending::Pending;
     use crate::tagfix::tests::{faulty_flac, real_flac};
     use std::sync::{Arc, Mutex};
 
@@ -2723,7 +2789,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let p = prepare(
             &music,
             &shares,
@@ -2733,9 +2800,10 @@ mod tests {
             &request("INTERNAL/Jazz", &["*.iso", "[#]recycle"]),
         )
         .unwrap();
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert!(a.written);
-        assert_eq!(a.updated, Some(7));
+        assert!(a.pending);
+        assert_eq!(a.updated, None);
         assert_eq!(
             fs::read_to_string(music.join("INTERNAL/Jazz/.mpdignore")).unwrap(),
             "*.iso\n[#]recycle\n"
@@ -2751,7 +2819,7 @@ mod tests {
         assert_eq!(list[0].entries[0].before, None);
         assert_eq!(list[0].entries[0].before_bytes, None);
         // The same preview again: the file moved on.
-        assert!(apply(&music, &shares, &mounter, &journal, &address, &p)
+        assert!(apply(&music, &shares, &mounter, &journal, &pending, &p)
             .unwrap_err()
             .contains("changed since"));
         // A second batch on top (the file whole, a line added), then both undone in
@@ -2765,7 +2833,7 @@ mod tests {
             &request("INTERNAL/Jazz", &["*.iso", "[#]recycle", "*.mov"]),
         )
         .unwrap();
-        let a2 = apply(&music, &shares, &mounter, &journal, &address, &p2).unwrap();
+        let a2 = apply(&music, &shares, &mounter, &journal, &pending, &p2).unwrap();
         assert_eq!(
             fs::read_to_string(music.join("INTERNAL/Jazz/.mpdignore")).unwrap(),
             "*.iso\n[#]recycle\n*.mov\n"
@@ -2778,22 +2846,23 @@ mod tests {
         );
         // The first cannot be undone while the second sits on it.
         assert!(
-            undo(&music, &shares, &mounter, &journal, &address, &a.batch)
+            undo(&music, &shares, &mounter, &journal, &pending, &a.batch)
                 .unwrap_err()
                 .contains("changed since")
         );
-        let u2 = undo(&music, &shares, &mounter, &journal, &address, &a2.batch).unwrap();
-        assert_eq!(u2.updated, Some(7));
+        let u2 = undo(&music, &shares, &mounter, &journal, &pending, &a2.batch).unwrap();
+        assert!(u2.pending);
+        assert_eq!(u2.updated, None);
         assert_eq!(
             fs::read_to_string(music.join("INTERNAL/Jazz/.mpdignore")).unwrap(),
             "*.iso\n[#]recycle\n"
         );
-        let u1 = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u1 = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u1.written);
         assert!(!music.join("INTERNAL/Jazz/.mpdignore").exists());
         assert!(journal.load(&a.batch).unwrap().undone);
         assert!(
-            undo(&music, &shares, &mounter, &journal, &address, &a.batch)
+            undo(&music, &shares, &mounter, &journal, &pending, &a.batch)
                 .unwrap_err()
                 .contains("already")
         );
@@ -2806,7 +2875,7 @@ mod tests {
             &request("INTERNAL/Jazz", &[""]),
         )
         .unwrap();
-        assert!(apply(&music, &shares, &mounter, &journal, &address, &empty)
+        assert!(apply(&music, &shares, &mounter, &journal, &pending, &empty)
             .unwrap_err()
             .contains("nothing"));
         fs::remove_dir_all(&dir).unwrap();
@@ -2841,7 +2910,8 @@ mod tests {
             }),
         );
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let p = prepare(
             &music,
             &shares,
@@ -2851,7 +2921,7 @@ mod tests {
             &request("NAS/multimedia/Dune", &["*.srt", "*.txt"]),
         )
         .unwrap();
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert!(a.written);
         assert_eq!(
             fs::read_to_string(music.join("NAS/multimedia/Dune/.mpdignore")).unwrap(),
@@ -2865,7 +2935,7 @@ mod tests {
         );
         assert_eq!(words[1][0], "/bin/umount");
         assert!(!dir.join("run/mounts/k1/Dune").exists());
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u.written);
         assert!(!music.join("NAS/multimedia/Dune/.mpdignore").exists());
         assert_eq!(calls.lock().unwrap().len(), 4);
@@ -2880,7 +2950,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let original: &[u8] = b"\xEF\xBB\xBFTITLE \"Caf\xe9\"\r\nFILE \"album.flac\" BINARY\r\nTRACK 01 AUDIO\r\nINDEX 01 00:00:00\r\n";
         fs::write(music.join("INTERNAL/Jazz/album.flac"), b"x").unwrap();
         fs::write(music.join("INTERNAL/Jazz/album.cue"), original).unwrap();
@@ -2913,8 +2984,9 @@ mod tests {
         );
         assert_eq!(p.lines_changed, 1);
         assert!(p.remaining.is_empty(), "{:?}", p.remaining);
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
-        assert_eq!(a.updated, Some(7));
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
+        assert!(a.pending);
+        assert_eq!(a.updated, None);
         assert_eq!(
             fs::read(music.join("INTERNAL/Jazz/album.cue")).unwrap(),
             p.after.as_bytes()
@@ -2942,10 +3014,10 @@ mod tests {
         .unwrap();
         assert!(!again.changed);
         assert!(again.repairs.is_empty());
-        assert!(apply(&music, &shares, &mounter, &journal, &address, &again)
+        assert!(apply(&music, &shares, &mounter, &journal, &pending, &again)
             .unwrap_err()
             .contains("nothing"));
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u.written);
         assert_eq!(
             fs::read(music.join("INTERNAL/Jazz/album.cue")).unwrap(),
@@ -2990,7 +3062,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let text = b"FILE \"image.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n";
         fs::write(music.join("INTERNAL/Jazz/image.flac"), b"x").unwrap();
         fs::write(music.join("INTERNAL/Jazz/a.cue"), text).unwrap();
@@ -3022,7 +3095,7 @@ mod tests {
         assert_eq!(p.op, "remove");
         assert!(p.changed);
         assert!(p.after.is_empty());
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert!(!music.join("INTERNAL/Jazz/b.cue").exists());
         assert_eq!(
             journal.load(&a.batch).unwrap().note,
@@ -3032,12 +3105,12 @@ mod tests {
         // Something else put a file there: the undo does not write over it.
         fs::write(music.join("INTERNAL/Jazz/b.cue"), b"new").unwrap();
         assert!(
-            undo(&music, &shares, &mounter, &journal, &address, &a.batch)
+            undo(&music, &shares, &mounter, &journal, &pending, &a.batch)
                 .unwrap_err()
                 .contains("there again")
         );
         fs::remove_file(music.join("INTERNAL/Jazz/b.cue")).unwrap();
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u.written);
         assert_eq!(fs::read(music.join("INTERNAL/Jazz/b.cue")).unwrap(), text);
         assert!(journal.load(&a.batch).unwrap().undone);
@@ -3052,7 +3125,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let text = b"#EXTM3U\n01.flac\n";
         fs::create_dir_all(music.join("INTERNAL/Jazz")).unwrap();
         fs::write(music.join("INTERNAL/Jazz/mix.m3u"), text).unwrap();
@@ -3077,13 +3151,13 @@ mod tests {
         assert_eq!(p.op, "remove");
         assert!(p.changed);
         assert!(p.after.is_empty());
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert!(!music.join("INTERNAL/Jazz/mix.m3u").exists());
         assert_eq!(
             journal.load(&a.batch).unwrap().note,
             "playlist INTERNAL/Jazz/mix.m3u discarded"
         );
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u.written);
         assert_eq!(fs::read(music.join("INTERNAL/Jazz/mix.m3u")).unwrap(), text);
         assert!(prepare(
@@ -3165,7 +3239,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         // Volumio's folder is made by the write when it is not there.
         let playlists = dir.join("playlists");
         fs::write(
@@ -3203,9 +3278,11 @@ mod tests {
         assert_eq!(p.imported[0].title.as_deref(), Some("One"));
         assert_eq!(p.imported[1].state, "left_out");
         assert_eq!(p.left_out, 1);
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.updated, None, "nothing for MPD to update");
+        assert!(!a.pending, "Volumio playlists stay off the pending set");
         assert_eq!(a.update_error, None);
+        assert!(pending.list().is_empty());
         let written: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(playlists.join("mix")).unwrap()).unwrap();
         assert_eq!(written[0]["uri"], "mnt/INTERNAL/Jazz/01.flac");
@@ -3225,7 +3302,7 @@ mod tests {
         assert_eq!(other.file, playlists.join("Mix two").display().to_string());
         req.name = Some("a/b".into());
         assert!(prepare(&music, &shares, &d, &playlists, 4, &req).is_err());
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert!(u.written);
         assert_eq!(u.updated, None);
         assert!(!playlists.join("mix").exists());
@@ -3260,7 +3337,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let jazz = music.join("INTERNAL/Jazz");
         let flac = |title: Option<&str>, track: Option<&str>| {
             let mut tags: Vec<(&str, &str)> = vec![("ARTIST", "A")];
@@ -3354,7 +3432,7 @@ mod tests {
             r("list.pls").after,
             "[playlist]\nFile1=02 Two.flac\nNumberOfEntries=1\n"
         );
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.count, 2);
         assert!(jazz.join("01 One_ Alpha_Beta.flac").is_file());
         assert!(jazz.join("02 Two.flac").is_file());
@@ -3379,10 +3457,10 @@ mod tests {
         assert_eq!(batch.entries[2].op, "write_text");
         assert_eq!(batch.note.en, "2 files renamed in INTERNAL/Jazz");
         // The same preview applied again: its sources are gone.
-        let e = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap_err();
+        let e = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap_err();
         assert_eq!(e.k, "core.write.source_gone");
         // The undo: the playlists and the sheet written back, the names given back.
-        let u = undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &batch.id).unwrap();
         assert_eq!(u.count, 5);
         assert!(jazz.join("a.flac").is_file() && jazz.join("b.flac").is_file());
         assert!(!jazz.join("02 Two.flac").exists());
@@ -3440,7 +3518,7 @@ mod tests {
             .any(|c| c.key == "TRACKNUMBER" && c.after == vec!["07".to_string()]));
         // Written, then set back: the track written "07" reads back as the number, and
         // the undo takes it for what the batch wrote.
-        apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         let written = tags::view(&tags::read(&jazz.join("07 Seven.flac"), "flac"));
         assert_eq!(written.title, vec!["Seven".to_string()]);
         let batch = journal
@@ -3448,7 +3526,7 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == "tags" && !b.undone)
             .unwrap();
-        let u = undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &batch.id).unwrap();
         assert_eq!(u.count, 1);
         let back = tags::view(&tags::read(&jazz.join("07 Seven.flac"), "flac"));
         assert_eq!(back.title, vec!["Two".to_string()]);
@@ -3465,7 +3543,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let pl = dir.join("playlists");
         let leaf = music.join("INTERNAL/Peter Hollens/MR0XF1~N");
         fs::create_dir_all(&leaf).unwrap();
@@ -3532,7 +3611,7 @@ mod tests {
         assert!(p.changed);
         assert_eq!(p.renames[0].name, "MR0XF1~N");
         assert_eq!(p.renames[0].to.as_deref(), Some("Misty Mountains_ Songs"));
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.count, 1);
         assert!(music
             .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
@@ -3543,7 +3622,7 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == "folder")
             .unwrap();
-        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        undo(&music, &shares, &mounter, &journal, &pending, &batch.id).unwrap();
         assert!(leaf.is_dir());
         assert!(!music
             .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
@@ -3559,7 +3638,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let pl = dir.join("playlists");
         let leaf = music.join("INTERNAL/Misc/MR0XF1~N");
         fs::create_dir_all(&leaf).unwrap();
@@ -3594,7 +3674,7 @@ mod tests {
             p.renames[0].to.as_deref(),
             Some("Peter Hollens/Misty Mountains_ Songs")
         );
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.count, 1);
         assert!(music
             .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs/01.flac")
@@ -3605,7 +3685,7 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == "folder" && !b.undone)
             .unwrap();
-        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        undo(&music, &shares, &mounter, &journal, &pending, &batch.id).unwrap();
         assert!(leaf.is_dir());
         assert!(!music.join("INTERNAL/Peter Hollens").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -3622,7 +3702,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let pl = dir.join("playlists");
         let leaf = music.join("INTERNAL/Peter Hollens/MR0XF1~N");
         fs::create_dir_all(&leaf).unwrap();
@@ -3657,7 +3738,7 @@ mod tests {
             p.renames[0].to.as_deref(),
             Some("Peter Hollens/Misty Mountains_ Songs")
         );
-        apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert!(music
             .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs/01.flac")
             .is_file());
@@ -3667,7 +3748,7 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == "folder" && !b.undone)
             .unwrap();
-        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        undo(&music, &shares, &mounter, &journal, &pending, &batch.id).unwrap();
         assert!(leaf.is_dir());
         assert!(music.join("INTERNAL/Peter Hollens").is_dir());
         assert!(!music
@@ -3684,7 +3765,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         fs::write(music.join("INTERNAL/Jazz/a.flac"), faulty_flac()).unwrap();
         fs::write(
             music.join("INTERNAL/Jazz/b.flac"),
@@ -3731,9 +3813,10 @@ mod tests {
             values.album,
             [("One".to_string(), 1), ("Two".to_string(), 1)]
         );
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.count, 2);
-        assert_eq!(a.updated, Some(7));
+        assert!(a.pending);
+        assert_eq!(a.updated, None);
         assert_eq!(a.file, "INTERNAL/Jazz");
         let batch = journal.load(&a.batch).unwrap();
         assert_eq!(batch.kind, "tags");
@@ -3749,7 +3832,7 @@ mod tests {
         assert_eq!(seen.album_artist, ["The Band"]);
         assert_eq!(seen.title, ["Caf\u{e9} Society"]);
         // The same preview again: the files moved on.
-        assert!(apply(&music, &shares, &mounter, &journal, &address, &p)
+        assert!(apply(&music, &shares, &mounter, &journal, &pending, &p)
             .unwrap_err()
             .contains("changed since"));
         // Nothing left: the folder reads clean.
@@ -3776,14 +3859,14 @@ mod tests {
             real_flac(&[("ALBUM", "Three"), ("ARTIST", "A"), ("TITLE", "B")]),
         )
         .unwrap();
-        let err = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap_err();
+        let err = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap_err();
         assert!(err.contains("b.flac: ALBUM changed since"), "{err}");
         fs::write(
             music.join("INTERNAL/Jazz/b.flac"),
             real_flac(&[("ALBUM", "One"), ("ARTIST", "A"), ("TITLE", "B")]),
         )
         .unwrap();
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert_eq!(u.count, 2);
         assert!(journal.load(&a.batch).unwrap().undone);
         let seen = tags::view(&tags::read(&music.join("INTERNAL/Jazz/b.flac"), "flac"));
@@ -3803,7 +3886,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let pl = dir.join("playlists");
         let dump = music.join("INTERNAL/Phil Collins/Phil Collins");
         fs::create_dir_all(&dump).unwrap();
@@ -3896,7 +3980,7 @@ mod tests {
             .renames
             .iter()
             .any(|r| r.to.as_deref() == Some("INTERNAL/Phil Collins/But Seriously/s1.flac")));
-        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &p).unwrap();
         assert_eq!(a.count, 2);
         assert!(music.join("INTERNAL/Phil Collins/Hits/h1.flac").is_file());
         assert!(music
@@ -3904,7 +3988,7 @@ mod tests {
             .is_file());
         assert!(dump.join("n1.flac").is_file());
         assert!(!dump.join("h1.flac").exists());
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert_eq!(u.count, 2);
         assert!(dump.join("h1.flac").is_file());
         assert!(dump.join("s1.flac").is_file());
@@ -3920,7 +4004,8 @@ mod tests {
         let d = decoders();
         let mounter = local_mounter(&dir);
         let journal = Journal::new(&dir.join("undo"));
-        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pending = Pending::open(&dir);
+        let _address = fake_mpd("OK MPD 0.24.6\n");
         let pl = dir.join("playlists");
         let dump = music.join("INTERNAL/Phil Collins/Phil Collins");
         let hits = music.join("INTERNAL/Phil Collins/Hits");
@@ -3971,14 +4056,63 @@ mod tests {
         assert!(remove.changed);
         assert_eq!(remove.renames.len(), 1);
         assert!(remove.renames[0].to.is_none());
-        let a = apply(&music, &shares, &mounter, &journal, &address, &remove).unwrap();
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &remove).unwrap();
         assert_eq!(a.count, 1);
         assert!(!dump.join("h1.flac").exists());
         assert!(hits.join("h1.flac").is_file());
-        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
         assert_eq!(u.count, 1);
         assert!(dump.join("h1.flac").is_file());
         assert!(hits.join("h1.flac").is_file());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn deferred_writes_flush_once_across_folders() {
+        let dir = temp("flush");
+        let music = dir.join("music");
+        fs::create_dir_all(music.join("INTERNAL/A")).unwrap();
+        fs::create_dir_all(music.join("INTERNAL/B")).unwrap();
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let pending = Pending::open(&dir);
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let p1 = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            1,
+            &request("INTERNAL/A", &["*.iso"]),
+        )
+        .unwrap();
+        let p2 = prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            2,
+            &request("INTERNAL/B", &["*.iso"]),
+        )
+        .unwrap();
+        let a1 = apply(&music, &shares, &mounter, &journal, &pending, &p1).unwrap();
+        let a2 = apply(&music, &shares, &mounter, &journal, &pending, &p2).unwrap();
+        assert!(a1.pending && a2.pending);
+        assert_eq!(
+            pending.list(),
+            vec!["INTERNAL/A".to_string(), "INTERNAL/B".to_string()]
+        );
+        assert_eq!(pending.flush_path(), "INTERNAL");
+        let f = flush(&pending, &address).unwrap();
+        assert_eq!(f.updated, Some(7));
+        assert_eq!(f.path, "INTERNAL");
+        assert!(pending.list().is_empty());
+        assert_eq!(
+            flush(&pending, &address).unwrap_err().k,
+            "core.library.nothing_pending"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }
