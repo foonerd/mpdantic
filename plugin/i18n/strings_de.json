@@ -38,6 +38,20 @@
     "STATUS_DOWN": "Der Kern läuft nicht.",
     "ERR_CORE": "Der Kern konnte nicht gestartet werden: {{error}}",
     "ERR_PORT": "Kein Port: {{value}}. Verwenden Sie eine Zahl von 1024 bis 65535.",
-    "ERR_ADDRESS": "Keine Adresse: {{value}}. Ein Hostname oder eine IP-Adresse, oder leer."
+    "ERR_ADDRESS": "Keine Adresse: {{value}}. Ein Hostname oder eine IP-Adresse, oder leer.",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "Release-Suche für die Tags. Standard ist die öffentliche MusicBrainz-Seite mit einer Anfrage pro Sekunde. Ein lokaler Spiegel hebt diese Grenze auf, wenn Sie einen betreiben; die URL gilt nur bei eingeschaltetem Schalter.",
+    "MB_MIRROR": "Lokalen MusicBrainz-Spiegel verwenden",
+    "MB_MIRROR_DESC": "Aus: musicbrainz.org. Ein: die URL darunter. Speichern, bevor die Seiten eine Änderung übernehmen.",
+    "MB_URL": "Spiegel-URL",
+    "MB_URL_DESC": "Basisadresse des Spiegels, zum Beispiel http://192.168.1.10:5000. Ein abschließendes /ws/2 ist optional.",
+    "MB_TEST": "Spiegel prüfen",
+    "MB_TEST_DESC": "Eine kleine Release-Suche an den Spiegel senden und zeigen, ob er antwortet.",
+    "MB_SAVED": "Gespeichert. MusicBrainz-Abfragen nutzen {{where}}.",
+    "MB_WHERE_PUBLIC": "die öffentliche MusicBrainz-Seite",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "Der Spiegel hat geantwortet (HTTP {{status}}).",
+    "MB_TEST_FAIL": "Der Spiegel hat nicht geantwortet: {{error}}",
+    "ERR_MB_URL": "Keine Spiegel-URL: {{value}}. http:// oder https:// und ein Host."
   }
 }

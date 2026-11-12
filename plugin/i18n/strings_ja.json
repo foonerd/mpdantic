@@ -38,6 +38,20 @@
     "STATUS_DOWN": "コアが動作していません。",
     "ERR_CORE": "コアを起動できませんでした: {{error}}",
     "ERR_PORT": "ポートではありません: {{value}}。1024 から 65535 までの数字を使ってください。",
-    "ERR_ADDRESS": "アドレスではありません: {{value}}。ホスト名か IP アドレス、または空欄にしてください。"
+    "ERR_ADDRESS": "アドレスではありません: {{value}}。ホスト名か IP アドレス、または空欄にしてください。",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "タグ付けのためのリリース検索。既定では公開の MusicBrainz を秒間1リクエストで使います。ローカルミラーを動かしている場合はその制限を外せます。URL はスイッチがオンのときだけ使われます。",
+    "MB_MIRROR": "ローカルの MusicBrainz ミラーを使う",
+    "MB_MIRROR_DESC": "オフ: musicbrainz.org。オン: 下の URL。ページが反映する前に保存してください。",
+    "MB_URL": "ミラーの URL",
+    "MB_URL_DESC": "ミラーのベースアドレス（例: http://192.168.1.10:5000）。末尾の /ws/2 は任意です。",
+    "MB_TEST": "ミラーを試す",
+    "MB_TEST_DESC": "ミラーに小さなリリース検索を送り、応答したかを表示します。",
+    "MB_SAVED": "保存しました。MusicBrainz の検索は {{where}} を使います。",
+    "MB_WHERE_PUBLIC": "公開の MusicBrainz サイト",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "ミラーが応答しました（HTTP {{status}}）。",
+    "MB_TEST_FAIL": "ミラーが応答しませんでした: {{error}}",
+    "ERR_MB_URL": "ミラーの URL ではありません: {{value}}。http:// または https:// とホストを使ってください。"
   }
 }

@@ -6,6 +6,9 @@ accepted = [
     "MIT",
     "BSD-3-Clause",
     "Unicode-3.0",
+    # ureq's rustls stack (ring, webpki, webpki-roots).
+    "ISC",
+    "CDLA-Permissive-2.0",
 ]
 # The core is built for Linux only; the graph is resolved for its targets.
 targets = [

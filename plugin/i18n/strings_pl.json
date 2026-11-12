@@ -38,6 +38,20 @@
     "STATUS_DOWN": "Rdzeń nie działa.",
     "ERR_CORE": "Nie udało się uruchomić rdzenia: {{error}}",
     "ERR_PORT": "To nie jest port: {{value}}. Użyj liczby od 1024 do 65535.",
-    "ERR_ADDRESS": "To nie jest adres: {{value}}. Nazwa hosta lub adres IP, albo puste pole."
+    "ERR_ADDRESS": "To nie jest adres: {{value}}. Nazwa hosta lub adres IP, albo puste pole.",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "Wyszukiwanie wydań do tagów. Domyślnie używana jest publiczna strona MusicBrainz z jednym żądaniem na sekundę. Lokalne lustro zdejmuje ten limit, gdy je uruchomisz; adres URL działa tylko przy włączonym przełączniku.",
+    "MB_MIRROR": "Używaj lokalnego lustra MusicBrainz",
+    "MB_MIRROR_DESC": "Wyłączone: musicbrainz.org. Włączone: adres URL poniżej. Zapisz, zanim strony przejmą zmianę.",
+    "MB_URL": "URL lustra",
+    "MB_URL_DESC": "Adres bazowy lustra, np. http://192.168.1.10:5000. Końcowe /ws/2 jest opcjonalne.",
+    "MB_TEST": "Przetestuj lustro",
+    "MB_TEST_DESC": "Wyślij do lustra małe wyszukiwanie wydań i pokaż, czy odpowiedziało.",
+    "MB_SAVED": "Zapisano. Wyszukiwania MusicBrainz będą używać {{where}}.",
+    "MB_WHERE_PUBLIC": "publicznej strony MusicBrainz",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "Lustro odpowiedziało (HTTP {{status}}).",
+    "MB_TEST_FAIL": "Lustro nie odpowiedziało: {{error}}",
+    "ERR_MB_URL": "To nie jest URL lustra: {{value}}. Użyj http:// lub https:// i hosta."
   }
 }

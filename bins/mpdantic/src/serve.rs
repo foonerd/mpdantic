@@ -116,8 +116,11 @@ pub struct Shared {
     pub volumio_playlists: std::path::PathBuf,
     /// The shell's plan for the output buffer (`buffer.json` beside the settings).
     pub buffer_plan: std::path::PathBuf,
-    /// The settings the shell writes, read at each page for the player's language.
+    /// The settings the shell writes, read at each page for the player's language
+    /// and the MusicBrainz mirror.
     pub settings: std::path::PathBuf,
+    /// MusicBrainz response cache under the data folder.
+    pub mb_cache: std::path::PathBuf,
     /// One measurement of the album query at a time, and the last one made.
     pub measuring: std::sync::atomic::AtomicBool,
     pub album: Mutex<Option<report::Album>>,
@@ -312,6 +315,14 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         (_, "/api/report") if get => (200, json, report_json(shared)),
         (_, "/api/tags") if get => {
             let (code, body) = folder_tags(shared, &r.query);
+            (code, json, body)
+        }
+        ("POST", "/api/mb/search") => {
+            let (code, body) = mb_search(shared, &r.body);
+            (code, json, body)
+        }
+        ("POST", "/api/mb/map") => {
+            let (code, body) = mb_map(shared, &r.body);
             (code, json, body)
         }
         (_, "/api/mpdignore") if get => {
@@ -1152,6 +1163,67 @@ fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()) + "\n"
 }
 
+/// Resolve a library folder path for MusicBrainz and the tag editor alike.
+fn folder_path(shared: &Shared, path: &str) -> Result<(String, std::path::PathBuf), (u16, String)> {
+    match Library::resolve(shared.library.music(), path) {
+        Ok(v) => Ok(v),
+        Err(ListError::BadPath) => Err((400, error(&walk::not_library_path()))),
+        Err(ListError::NotFound) | Err(ListError::NotADirectory) => {
+            Err((404, error(&walk::no_such_folder())))
+        }
+        Err(ListError::Io(s)) => Err((500, error(&Msg::raw(s)))),
+    }
+}
+
+/// `POST /api/mb/search` with `{ "path": "<folder>" }`: release hits for the folder's tags.
+fn mb_search(shared: &Shared, body: &[u8]) -> (u16, String) {
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
+    };
+    let path = request["path"].as_str().unwrap_or("");
+    let (path, dir) = match folder_path(shared, path) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if !dir.is_dir() {
+        return (404, error(&walk::no_such_folder()));
+    }
+    let (_, decoders) = shared.decoders();
+    let client = crate::mb::Client::from_settings(&shared.settings, shared.mb_cache.clone());
+    match client.search(shared.library.music(), &path, &decoders) {
+        Ok(page) => (200, json(&page)),
+        Err(e) => (400, error(&e)),
+    }
+}
+
+/// `POST /api/mb/map` with `{ "path": "<folder>", "id": "<release-mbid>" }`: tagedit edits.
+fn mb_map(shared: &Shared, body: &[u8]) -> (u16, String) {
+    let Ok(request) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (
+            400,
+            error(&msg!("core.api.not_json", "the body is not JSON")),
+        );
+    };
+    let path = request["path"].as_str().unwrap_or("");
+    let id = request["id"].as_str().unwrap_or("");
+    let (path, dir) = match folder_path(shared, path) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if !dir.is_dir() {
+        return (404, error(&walk::no_such_folder()));
+    }
+    let (_, decoders) = shared.decoders();
+    let client = crate::mb::Client::from_settings(&shared.settings, shared.mb_cache.clone());
+    match client.map_release(shared.library.music(), &path, id, &decoders) {
+        Ok(mapped) => (200, json(&mapped)),
+        Err(e) => (400, error(&e)),
+    }
+}
+
 /// `GET /api/tags?path=<folder>`: the folder's audio files with MPD's view of every
 /// field the editor offers.
 fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
@@ -1325,6 +1397,7 @@ mod tests {
             volumio_playlists: data.join("volumio-playlists"),
             buffer_plan: data.join("buffer.json"),
             settings: data.join("settings.json"),
+            mb_cache: data.join("mb-cache"),
             measuring: std::sync::atomic::AtomicBool::new(false),
             album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),

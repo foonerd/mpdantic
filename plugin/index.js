@@ -364,6 +364,9 @@ Mpdantic.prototype.getUIConfig = function () {
             setValue(buffer, 'buffer_auto', plan.enabled);
             const auto = buffer.find((x) => x.id === 'buffer_auto');
             if (auto) auto.doc = h.bufferSummary(plan, (k, v) => self.i18n(k, v));
+            const mb = section('mb_section');
+            setValue(mb, 'mb_mirror', c.get('mb_mirror', false) === true);
+            setValue(mb, 'mb_url', String(c.get('mb_url', '') || ''));
             defer.resolve(uiconf);
         })
         .fail((e) => {
@@ -399,6 +402,79 @@ Mpdantic.prototype.updateManagement = function (data) {
             self.toast('error', 'ERR_CORE', { error: msg(e) });
         })
         .then(() => libQ.resolve());
+};
+
+// The MusicBrainz section saved: mirror switch and URL; written into settings.json
+// for the core. A bad URL with the switch on is refused.
+Mpdantic.prototype.updateMusicBrainz = function (data) {
+    const self = this;
+    const mirror = !!(data && data.mb_mirror === true);
+    let url = '';
+    if (mirror) {
+        const checked = h.validateMbUrl(data && data.mb_url);
+        if (!checked.ok) {
+            self.toast('error', 'ERR_MB_URL', { value: String(data && data.mb_url) });
+            return libQ.resolve();
+        }
+        url = checked.value;
+    }
+    self.config.set('mb_mirror', mirror);
+    self.config.set('mb_url', url);
+    try { self.writeSettings(); } catch (e) { self.logger.error(LOG + 'settings: ' + msg(e)); }
+    const where = mirror
+        ? self.i18n('MB_WHERE_MIRROR', { url: url })
+        : self.i18n('MB_WHERE_PUBLIC');
+    self.toast('success', 'MB_SAVED', { where: where });
+    return self.startCore()
+        .fail((e) => {
+            self.logger.error(LOG + 'restart: ' + msg(e));
+            self.toast('error', 'ERR_CORE', { error: msg(e) });
+        })
+        .then(() => libQ.resolve());
+};
+
+// A tiny release search against the mirror URL from the form (or the saved one).
+Mpdantic.prototype.testMusicBrainz = function (data) {
+    const self = this;
+    const mirror = data && Object.prototype.hasOwnProperty.call(data, 'mb_mirror')
+        ? data.mb_mirror === true
+        : self.config.get('mb_mirror', false) === true;
+    const typed = data && Object.prototype.hasOwnProperty.call(data, 'mb_url')
+        ? data.mb_url
+        : self.config.get('mb_url', '');
+    if (!mirror) {
+        self.toast('info', 'MB_SAVED', { where: self.i18n('MB_WHERE_PUBLIC') });
+        return libQ.resolve();
+    }
+    const base = h.mbEndpoint(true, typed);
+    if (!base) {
+        self.toast('error', 'ERR_MB_URL', { value: String(typed) });
+        return libQ.resolve();
+    }
+    const target = base + '/ws/2/release/?query=*&fmt=json&limit=1';
+    const defer = libQ.defer();
+    const lib = target.startsWith('https:') ? require('https') : require('http');
+    const req = lib.get(target, {
+        headers: {
+            'User-Agent': 'MPDantic/' + (require('./package.json').version) + ' ( https://github.com/foonerd/mpdantic )',
+            Accept: 'application/json'
+        },
+        timeout: 10000
+    }, (res) => {
+        res.resume();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+            self.toast('success', 'MB_TEST_OK', { status: String(res.statusCode) });
+        } else {
+            self.toast('error', 'MB_TEST_FAIL', { error: 'HTTP ' + res.statusCode });
+        }
+        defer.resolve();
+    });
+    req.on('timeout', () => { req.destroy(); });
+    req.on('error', (e) => {
+        self.toast('error', 'MB_TEST_FAIL', { error: msg(e) });
+        defer.resolve();
+    });
+    return defer.promise;
 };
 
 // The status button: what the core says, as one toast.

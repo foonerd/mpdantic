@@ -38,6 +38,20 @@
     "STATUS_DOWN": "核心未运行。",
     "ERR_CORE": "无法启动核心：{{error}}",
     "ERR_PORT": "不是端口：{{value}}。请使用 1024 到 65535 之间的数字。",
-    "ERR_ADDRESS": "不是地址：{{value}}。请输入主机名或 IP 地址，或留空。"
+    "ERR_ADDRESS": "不是地址：{{value}}。请输入主机名或 IP 地址，或留空。",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "用于打标签的发行版查询。默认使用公共 MusicBrainz 站点，每秒一次请求。若您自行运行本地镜像，可去掉该限制；仅在开关打开时使用下方 URL。",
+    "MB_MIRROR": "使用本地 MusicBrainz 镜像",
+    "MB_MIRROR_DESC": "关：musicbrainz.org。开：下方 URL。请先保存，页面才会采用更改。",
+    "MB_URL": "镜像 URL",
+    "MB_URL_DESC": "镜像的基址，例如 http://192.168.1.10:5000。末尾的 /ws/2 可选。",
+    "MB_TEST": "测试镜像",
+    "MB_TEST_DESC": "向镜像发起一次小型发行版搜索，并显示是否有应答。",
+    "MB_SAVED": "已保存。MusicBrainz 查询将使用{{where}}。",
+    "MB_WHERE_PUBLIC": "公共 MusicBrainz 站点",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "镜像已应答（HTTP {{status}}）。",
+    "MB_TEST_FAIL": "镜像未应答：{{error}}",
+    "ERR_MB_URL": "不是镜像 URL：{{value}}。请使用 http:// 或 https:// 以及主机名。"
   }
 }

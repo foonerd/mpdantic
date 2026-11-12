@@ -283,6 +283,13 @@
         <div id="preview-edits-box"></div>
       </div>
       <div class="write">
+        <b data-i18n="page.mb.title">MusicBrainz</b>
+        <div class="help" data-i18n="page.mb.help">Look up a release for the folder in hand from its album artist, album and track count. Pick one hit, then Preview shows the tags as they would be written file by file through the same path as the editor. The public MusicBrainz site is used at one request per second unless a local mirror is set on the plugin's settings page.</div>
+        <div class="line"><button id="mb-search" data-i18n="page.mb.search">Look up this folder</button></div>
+        <div id="mb-box"></div>
+        <div id="mb-preview-box"></div>
+      </div>
+      <div class="write">
         <b data-i18n="page.names.title">File names and tags</b>
         <div class="help" data-i18n="page.names.help">One pattern, either way: the files named from their tags, or the tags read from the file names. The placeholders are the fields of the grid; the text between them is taken as it is. A name is made safe for a share: slashes, colons and the characters Windows refuses become underscores. A sheet or a playlist in the folder that names a renamed file is rewritten with it. Nothing is written before the preview and Write; the undo gives the names back.</div>
         <div id="names-box"></div>
@@ -915,6 +922,94 @@
   // The Tags tab's editor, on the folder in hand.
   const tabEditor = makeEditor({ box: $('editor-box'), count: $('edit-count'), preview: $('preview-edits'), previewBox: $('preview-edits-box') });
   $('open-editor').addEventListener('click', () => tabEditor.open(current.path, false));
+
+  // ----------------------------------------------------------- MusicBrainz M1
+
+  // Release lookup for the folder in hand: search, pick a hit, map onto the files,
+  // Preview/Write through the existing tagedit path.
+  $('mb-search').addEventListener('click', async () => {
+    const box = $('mb-box');
+    const preview = $('mb-preview-box');
+    preview.textContent = '';
+    box.textContent = '';
+    box.appendChild(el('div', 'progress', t('page.mb.searching')));
+    $('mb-search').disabled = true;
+    try {
+      const page = await api('/api/mb/search', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ path: current.path }) });
+      box.textContent = '';
+      const q = page.query || {};
+      const s = page.searched || q;
+      box.appendChild(el('div', 'help', t('page.mb.query', { artist: q.artist || '—', album: q.album || '—', tracks: q.tracks || 0 })));
+      if (page.step === 'without_suffix') {
+        box.appendChild(el('div', 'help', t('page.mb.step.without_suffix', { album: s.album || '—' })));
+        box.appendChild(el('div', 'help', t('page.mb.rewrite_hint')));
+      } else if (page.step === 'without_tracks') {
+        box.appendChild(el('div', 'help', t('page.mb.step.without_tracks', { album: s.album || '—' })));
+        box.appendChild(el('div', 'help', t('page.mb.rewrite_hint')));
+      }
+      const hits = page.releases || [];
+      if (!hits.length) {
+        box.appendChild(el('div', 'help', t('page.mb.none')));
+        return;
+      }
+      box.appendChild(el('div', 'help', t('page.mb.pick')));
+      const table = el('table', 'fx-table');
+      const head = el('thead');
+      const hr = el('tr');
+      ['page.mb.score', 'page.field.album', 'page.field.albumartist', 'page.mb.date', 'page.mb.country', 'page.mb.status', 'page.mb.tracks', ''].forEach((k) => {
+        hr.appendChild(el('th', '', k ? t(k) : ''));
+      });
+      head.appendChild(hr);
+      table.appendChild(head);
+      const body = el('tbody');
+      hits.forEach((hit) => {
+        const tr = el('tr');
+        tr.style.cursor = 'pointer';
+        [String(hit.score || ''), hit.title || '', hit.artist || '', hit.date || '', hit.country || '', hit.status || '', String(hit.track_count || '')].forEach((v) => {
+          tr.appendChild(el('td', '', v));
+        });
+        const td = el('td');
+        const b = el('button', 'small', t('page.mb.use'));
+        const use = async () => {
+          preview.textContent = '';
+          preview.appendChild(el('div', 'progress', t('page.mb.searching')));
+          try {
+            const mapped = await api('/api/mb/map', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ path: current.path, id: hit.id }) });
+            const note = el('div', 'help');
+            if (mapped.unmatched_files || mapped.unmatched_tracks) {
+              note.textContent = t('page.mb.unmatched', { files: mapped.unmatched_files || 0, tracks: mapped.unmatched_tracks || 0 });
+            }
+            const again = async () => {
+              try {
+                const p = await api('/api/batches', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: 'tagedit', path: current.path, edits: mapped.edits || [] }) });
+                renderPreview(p, preview, again, null);
+                if (note.textContent) preview.insertBefore(note, preview.firstChild);
+              } catch (e) {
+                preview.textContent = '';
+                preview.appendChild(el('div', 'help bad', String(e.message || e)));
+              }
+            };
+            await again();
+          } catch (e) {
+            preview.textContent = '';
+            preview.appendChild(el('div', 'help bad', t('page.mb.error', { error: e.message || e })));
+          }
+        };
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); use(); });
+        tr.addEventListener('click', use);
+        td.appendChild(b);
+        tr.appendChild(td);
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+      box.appendChild(table);
+    } catch (e) {
+      box.textContent = '';
+      box.appendChild(el('div', 'help bad', t('page.mb.error', { error: e.message || e })));
+    } finally {
+      $('mb-search').disabled = false;
+    }
+  });
 
   // ----------------------------------------------------- file names and tags
 

@@ -38,6 +38,20 @@
     "STATUS_DOWN": "O núcleo não está em execução.",
     "ERR_CORE": "Não foi possível iniciar o núcleo: {{error}}",
     "ERR_PORT": "Não é uma porta: {{value}}. Use um número de 1024 a 65535.",
-    "ERR_ADDRESS": "Não é um endereço: {{value}}. Um nome de anfitrião ou um endereço IP, ou vazio."
+    "ERR_ADDRESS": "Não é um endereço: {{value}}. Um nome de anfitrião ou um endereço IP, ou vazio.",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "Pesquisa de edições para as etiquetas. Por omissão usa-se o sítio público MusicBrainz a um pedido por segundo. Um espelho local remove esse limite se o tiver a correr; o URL só conta com o interruptor ligado.",
+    "MB_MIRROR": "Usar um espelho MusicBrainz local",
+    "MB_MIRROR_DESC": "Desligado: musicbrainz.org. Ligado: o URL abaixo. Guarde antes de as páginas adotarem a alteração.",
+    "MB_URL": "URL do espelho",
+    "MB_URL_DESC": "Endereço base do espelho, por exemplo http://192.168.1.10:5000. Um /ws/2 final é opcional.",
+    "MB_TEST": "Testar o espelho",
+    "MB_TEST_DESC": "Pedir ao espelho uma pesquisa pequena de edições e mostrar se respondeu.",
+    "MB_SAVED": "Guardado. As pesquisas MusicBrainz usarão {{where}}.",
+    "MB_WHERE_PUBLIC": "o sítio público MusicBrainz",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "O espelho respondeu (HTTP {{status}}).",
+    "MB_TEST_FAIL": "O espelho não respondeu: {{error}}",
+    "ERR_MB_URL": "Não é um URL de espelho: {{value}}. Use http:// ou https:// e um anfitrião."
   }
 }

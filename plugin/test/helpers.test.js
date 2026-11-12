@@ -32,14 +32,27 @@ test('an address is empty, a host name or an IP address', () => {
 });
 
 test('the settings carry the port and the language, the defaults when a value is not one', () => {
-    assert.deepEqual(h.settingsFrom(() => '8031', 'de'), { port: 8031, language: 'de' });
-    assert.deepEqual(h.settingsFrom(() => 'nonsense', 'zh_TW'), { port: h.DEFAULT_PORT, language: 'zh_TW' });
-    assert.deepEqual(h.settingsFrom((k, d) => d), { port: h.DEFAULT_PORT, language: 'en' });
+    assert.deepEqual(h.settingsFrom(() => '8031', 'de'), { port: 8031, language: 'de', mb_mirror: false, mb_url: '' });
+    assert.deepEqual(h.settingsFrom(() => 'nonsense', 'zh_TW'), { port: h.DEFAULT_PORT, language: 'zh_TW', mb_mirror: false, mb_url: '' });
+    assert.deepEqual(h.settingsFrom((k, d) => d), { port: h.DEFAULT_PORT, language: 'en', mb_mirror: false, mb_url: '' });
     assert.equal(h.languageCode(' ja '), 'ja');
     assert.equal(h.languageCode('../x'), 'en');
     assert.equal(h.languageCode('DE'), 'en');
     assert.equal(h.languageCode(''), 'en');
     assert.equal(h.languageCode(undefined), 'en');
+});
+
+test('a MusicBrainz mirror URL is normalised, and the endpoint follows the switch', () => {
+    assert.deepEqual(h.validateMbUrl('http://192.168.1.10:5000/'), { ok: true, value: 'http://192.168.1.10:5000' });
+    assert.deepEqual(h.validateMbUrl('https://mb.local/ws/2'), { ok: true, value: 'https://mb.local' });
+    assert.deepEqual(h.validateMbUrl('ftp://x'), { ok: false });
+    assert.deepEqual(h.validateMbUrl(''), { ok: false });
+    assert.deepEqual(h.validateMbUrl('not a url'), { ok: false });
+    assert.equal(h.mbEndpoint(false, 'http://x'), h.MB_PUBLIC);
+    assert.equal(h.mbEndpoint(true, 'http://192.168.1.10:5000/ws/2/'), 'http://192.168.1.10:5000');
+    assert.equal(h.mbEndpoint(true, ''), null);
+    const get = (k, d) => ({ mb_mirror: true, mb_url: 'http://mb.lan:5000/', port: '6218' }[k] !== undefined ? ({ mb_mirror: true, mb_url: 'http://mb.lan:5000/', port: '6218' }[k]) : d);
+    assert.deepEqual(h.settingsFrom(get, 'en'), { port: 6218, language: 'en', mb_mirror: true, mb_url: 'http://mb.lan:5000' });
 });
 
 test('the player address is the wired interface first, then wireless, then any', () => {

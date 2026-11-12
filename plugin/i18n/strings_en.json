@@ -38,6 +38,20 @@
     "STATUS_DOWN": "The core is not running.",
     "ERR_CORE": "The core could not be started: {{error}}",
     "ERR_PORT": "Not a port: {{value}}. Use a number from 1024 to 65535.",
-    "ERR_ADDRESS": "Not an address: {{value}}. A host name or an IP address, or empty."
+    "ERR_ADDRESS": "Not an address: {{value}}. A host name or an IP address, or empty.",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "Release lookups for tagging. By default the public MusicBrainz site is used at one request per second. A local mirror removes that limit when you run one; the URL is only used when the switch is on.",
+    "MB_MIRROR": "Use a local MusicBrainz mirror",
+    "MB_MIRROR_DESC": "Off: musicbrainz.org. On: the URL below. Save before the pages pick up a change.",
+    "MB_URL": "Mirror URL",
+    "MB_URL_DESC": "Base address of the mirror, for example http://192.168.1.10:5000. A trailing /ws/2 is optional.",
+    "MB_TEST": "Test the mirror",
+    "MB_TEST_DESC": "Ask the mirror for a tiny release search and show whether it answered.",
+    "MB_SAVED": "Saved. MusicBrainz lookups will use {{where}}.",
+    "MB_WHERE_PUBLIC": "the public MusicBrainz site",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "The mirror answered (HTTP {{status}}).",
+    "MB_TEST_FAIL": "The mirror did not answer: {{error}}",
+    "ERR_MB_URL": "Not a mirror URL: {{value}}. Use http:// or https:// and a host."
   }
 }

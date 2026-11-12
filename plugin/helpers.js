@@ -29,11 +29,45 @@ function languageCode(value) {
     return /^[a-z]{2,3}(_[A-Z]{2})?$/.test(text) ? text : 'en';
 }
 
+const MB_PUBLIC = 'https://musicbrainz.org';
+
+// A MusicBrainz base URL as typed for a local mirror: http(s), host, optional port
+// and path; trailing slashes and a trailing /ws/2 are dropped. Empty is refused.
+function validateMbUrl(value) {
+    const text = String(value === undefined || value === null ? '' : value).trim();
+    if (text === '') return { ok: false };
+    let u;
+    try { u = new URL(text); } catch (e) { return { ok: false }; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false };
+    if (u.username || u.password) return { ok: false };
+    if (!u.hostname) return { ok: false };
+    let base = u.origin + (u.pathname || '/');
+    base = base.replace(/\/+$/, '');
+    if (base.endsWith('/ws/2')) base = base.slice(0, -5);
+    if (!base || base === 'http:' || base === 'https:') return { ok: false };
+    return { ok: true, value: base };
+}
+
+// Where release lookups go: the public site, or the operator's mirror when the
+// switch is on and the URL is one.
+function mbEndpoint(mirror, url) {
+    if (!mirror) return MB_PUBLIC;
+    const checked = validateMbUrl(url);
+    return checked.ok ? checked.value : null;
+}
+
 // The settings as the core reads them, from the configuration's values and the
 // player's language.
 function settingsFrom(get, language) {
     const port = validatePort(get('port', DEFAULT_PORT));
-    return { port: port.ok ? port.value : DEFAULT_PORT, language: languageCode(language) };
+    const mirror = get('mb_mirror', false) === true;
+    const url = validateMbUrl(get('mb_url', ''));
+    return {
+        port: port.ok ? port.value : DEFAULT_PORT,
+        language: languageCode(language),
+        mb_mirror: mirror,
+        mb_url: mirror && url.ok ? url.value : ''
+    };
 }
 
 // The IPv4 address browsers reach the player by: a wired interface first, else
@@ -271,7 +305,7 @@ function announceWrite(writeFileSync, text) {
 }
 
 module.exports = {
-    DEFAULT_PORT, validatePort, validateAddress, languageCode, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
+    DEFAULT_PORT, MB_PUBLIC, validatePort, validateAddress, validateMbUrl, mbEndpoint, languageCode, settingsFrom, lanAddress, pageLinks, avahiService, summarize,
     BUFFER, MPD_MARKER, parseMpdVersion, mpdOverrides, bufferPlan, mpdConfigText, mpdConfCurrent, bufferSummary, bufferPlanFile,
     registerMpdHook, unregisterMpdHook, announceWrite
 };

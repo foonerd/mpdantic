@@ -4,6 +4,11 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Added
+
+- MusicBrainz stage 1 on the Tags tab: look up a release from the folder's album artist, album and track count, pick a hit, Preview/Write the mapped tags through the existing tagedit path. Public MusicBrainz at one request per second with a User-Agent, 503 backoff and a cache under the data folder; no AcoustID. The plugin settings page offers a local-mirror switch, URL and Test (the mirror stack itself is later).
+- MusicBrainz search ladder: as tagged → without edition suffix → without locking track count; the card says which step hit and that Write takes MusicBrainz's tags (an edition suffix on the album may go).
+
 ### Security
 
 - A library path whose links resolve outside the music directory, or outside Volumio's NAS / USB / INTERNAL roots, is refused before list, check or write.

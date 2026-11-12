@@ -38,6 +38,20 @@
     "STATUS_DOWN": "Le noyau n'est pas en cours d'exécution.",
     "ERR_CORE": "Le noyau n'a pas pu être démarré : {{error}}",
     "ERR_PORT": "Pas un port : {{value}}. Utilisez un nombre de 1024 à 65535.",
-    "ERR_ADDRESS": "Pas une adresse : {{value}}. Un nom d'hôte ou une adresse IP, ou vide."
+    "ERR_ADDRESS": "Pas une adresse : {{value}}. Un nom d'hôte ou une adresse IP, ou vide.",
+    "MB_SECTION": "MusicBrainz",
+    "MB_SECTION_DESC": "Recherche de parutions pour les balises. Par défaut, le site public MusicBrainz à une requête par seconde. Un miroir local lève cette limite si vous en faites tourner un ; l’URL ne compte que lorsque le commutateur est activé.",
+    "MB_MIRROR": "Utiliser un miroir MusicBrainz local",
+    "MB_MIRROR_DESC": "Désactivé : musicbrainz.org. Activé : l’URL ci-dessous. Enregistrez avant que les pages reprennent le changement.",
+    "MB_URL": "URL du miroir",
+    "MB_URL_DESC": "Adresse de base du miroir, par exemple http://192.168.1.10:5000. Un /ws/2 final est facultatif.",
+    "MB_TEST": "Tester le miroir",
+    "MB_TEST_DESC": "Demander au miroir une petite recherche de parution et indiquer s’il a répondu.",
+    "MB_SAVED": "Enregistré. Les recherches MusicBrainz utiliseront {{where}}.",
+    "MB_WHERE_PUBLIC": "le site public MusicBrainz",
+    "MB_WHERE_MIRROR": "{{url}}",
+    "MB_TEST_OK": "Le miroir a répondu (HTTP {{status}}).",
+    "MB_TEST_FAIL": "Le miroir n’a pas répondu : {{error}}",
+    "ERR_MB_URL": "Pas une URL de miroir : {{value}}. Utilisez http:// ou https:// et un hôte."
   }
 }
