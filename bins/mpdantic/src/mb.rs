@@ -1,10 +1,12 @@
 //! MusicBrainz release lookup for a folder (M1): search by album artist, album and
 //! track count, pick a release, map its tracks onto the folder's files, hand the
-//! edits to the existing tag write path. The search is a short ladder: as tagged,
-//! then without an edition suffix, then without locking the track count; the card
-//! says which step hit. One request per second on the public site, a cache under
-//! the data folder, backoff on 503. A local mirror from the settings skips the gap.
-//! No AcoustID, no write to MusicBrainz.
+//! edits to the existing tag write path. Mixed album tags refuse search and map;
+//! map also refuses a file/track count mismatch or an incomplete title/track pair
+//! (no order-only zip). The search is a short ladder: as tagged, then without an
+//! edition suffix, then without locking the track count; the card says which step
+//! hit. One request per second on the public site, a cache under the data folder,
+//! backoff on 503. A local mirror from the settings skips the gap. No AcoustID,
+//! no write to MusicBrainz.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -100,10 +102,12 @@ impl Client {
     }
 
     /// Search releases for the folder's tags; empty artist and album refuse.
+    /// Mixed album tags in the folder refuse before any lookup.
     /// Ladder: as tagged → normalised album with tracks → normalised without tracks.
     pub fn search(&self, music: &Path, path: &str, decoders: &Decoders) -> Result<SearchPage, Msg> {
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
+        refuse_mixed_album(&files)?;
         let query = query_from_files(&files);
         if query.artist.is_empty() && query.album.is_empty() {
             return Err(msg!(
@@ -169,6 +173,7 @@ impl Client {
     }
 
     /// The release's tracks mapped onto the folder's files as tagedit edits.
+    /// Refuses mixed albums, a file/track count mismatch, or an incomplete pair.
     pub fn map_release(
         &self,
         music: &Path,
@@ -181,16 +186,25 @@ impl Client {
         }
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
+        refuse_mixed_album(&files)?;
         let url = format!(
             "{}/ws/2/release/{}?inc=recordings+artist-credits&fmt=json",
             self.base, release_id
         );
         let body = self.get_cached(&url)?;
         let release = parse_release(&body)?;
-        let edits = map_edits(&files, &release);
+        if files.len() != release.tracks.len() {
+            return Err(msg!(
+                "core.mb.count_mismatch",
+                "the folder has {files} files but the release has {tracks} tracks",
+                files = files.len(),
+                tracks = release.tracks.len()
+            ));
+        }
+        let edits = map_edits(&files, &release)?;
         Ok(Mapped {
-            unmatched_files: files.len().saturating_sub(edits.len()),
-            unmatched_tracks: release.tracks.len().saturating_sub(edits.len()),
+            unmatched_files: 0,
+            unmatched_tracks: 0,
             release,
             edits,
         })
@@ -709,28 +723,146 @@ fn parse_release(body: &str) -> Result<ReleaseDetail, Msg> {
     })
 }
 
-/// Sort files by disc, track number, then name; zip with release tracks in order.
-fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Vec<EditJson> {
-    let mut indexed: Vec<(u32, u32, &FileValues)> = files
-        .iter()
-        .map(|f| {
-            let disc = first_num(f, "disc").unwrap_or(1);
-            let track = first_num(f, "track").unwrap_or(0);
-            (disc, track, f)
-        })
-        .collect();
-    indexed.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.cmp(&b.1))
-            .then(a.2.name.cmp(&b.2.name))
-    });
-    let mut edits = Vec::new();
-    for (i, (_, _, file)) in indexed.into_iter().enumerate() {
-        let Some(tr) = release.tracks.get(i) else {
-            break;
-        };
-        if !file.writable {
+/// More than one distinct non-empty album tag in the folder refuses lookup and map.
+fn refuse_mixed_album(files: &[FileValues]) -> Result<(), Msg> {
+    let mut albums = BTreeMap::<String, ()>::new();
+    for f in files {
+        let Some(album) = first_str(f, "album") else {
             continue;
+        };
+        let key = album.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        albums.insert(key, ());
+        if albums.len() > 1 {
+            return Err(msg!(
+                "core.mb.mixed_album",
+                "the folder's files carry more than one album tag; open the album's own folder"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Title key for pairing: lowercased, punctuation and ellipsis stripped, spaces collapsed.
+fn normalise_title(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut space = false;
+    for c in s.chars() {
+        let c = match c {
+            '…' | '·' => ' ',
+            _ => c,
+        };
+        if c.is_alphanumeric() {
+            for d in c.to_lowercase() {
+                out.push(d);
+            }
+            space = false;
+        } else if (c.is_whitespace() || c == '-' || c == '_') && !out.is_empty() && !space {
+            out.push(' ');
+            space = true;
+        }
+        // other punctuation dropped
+    }
+    out.trim().to_string()
+}
+
+fn first_str<'a>(f: &'a FileValues, field: &str) -> Option<&'a str> {
+    f.values
+        .get(field)?
+        .first()
+        .map(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Pair each file to one release track by unique normalised title, then by disc+track.
+/// Leftovers or an unwritable file refuse; no order-only zip.
+fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Result<Vec<EditJson>, Msg> {
+    let n = files.len();
+    debug_assert_eq!(n, release.tracks.len());
+    let mut file_of_track: Vec<Option<usize>> = vec![None; n];
+    let mut track_of_file: Vec<Option<usize>> = vec![None; n];
+
+    // Pass 1: unique exact normalised title.
+    for (fi, file) in files.iter().enumerate() {
+        if track_of_file[fi].is_some() {
+            continue;
+        }
+        let Some(raw) = first_str(file, "title") else {
+            continue;
+        };
+        let key = normalise_title(raw);
+        if key.is_empty() {
+            continue;
+        }
+        let mut hits: Vec<usize> = Vec::new();
+        for (ti, tr) in release.tracks.iter().enumerate() {
+            if file_of_track[ti].is_some() {
+                continue;
+            }
+            if normalise_title(&tr.title) == key {
+                hits.push(ti);
+            }
+        }
+        if hits.len() == 1 {
+            let ti = hits[0];
+            track_of_file[fi] = Some(ti);
+            file_of_track[ti] = Some(fi);
+        }
+    }
+
+    // Pass 2: unique disc + track number among the remainder.
+    for (fi, file) in files.iter().enumerate() {
+        if track_of_file[fi].is_some() {
+            continue;
+        }
+        let Some(track_no) = first_num(file, "track") else {
+            continue;
+        };
+        if track_no == 0 {
+            continue;
+        }
+        let disc = first_num(file, "disc").unwrap_or(1);
+        let mut hits: Vec<usize> = Vec::new();
+        for (ti, tr) in release.tracks.iter().enumerate() {
+            if file_of_track[ti].is_some() {
+                continue;
+            }
+            let tr_no = tr
+                .number
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap_or(0);
+            if tr_no == track_no && tr.disc == disc {
+                hits.push(ti);
+            }
+        }
+        if hits.len() == 1 {
+            let ti = hits[0];
+            track_of_file[fi] = Some(ti);
+            file_of_track[ti] = Some(fi);
+        }
+    }
+
+    if track_of_file.iter().any(|t| t.is_none()) || file_of_track.iter().any(|f| f.is_none()) {
+        return Err(msg!(
+            "core.mb.pair_failed",
+            "could not pair every file to a release track by title or track number"
+        ));
+    }
+
+    let mut edits = Vec::with_capacity(n);
+    for (fi, file) in files.iter().enumerate() {
+        let ti = track_of_file[fi].expect("paired");
+        let tr = &release.tracks[ti];
+        if !file.writable {
+            return Err(msg!(
+                "core.mb.pair_failed",
+                "could not pair every file to a release track by title or track number"
+            ));
         }
         let mut set = BTreeMap::new();
         if !tr.title.is_empty() {
@@ -767,7 +899,13 @@ fn map_edits(files: &[FileValues], release: &ReleaseDetail) -> Vec<EditJson> {
             });
         }
     }
-    edits
+    if edits.len() != n {
+        return Err(msg!(
+            "core.mb.pair_failed",
+            "could not pair every file to a release track by title or track number"
+        ));
+    }
+    Ok(edits)
 }
 
 fn first_num(f: &FileValues, field: &str) -> Option<u32> {
@@ -871,7 +1009,7 @@ mod tests {
                 problem: None,
             },
         ];
-        let edits = map_edits(&files, &release);
+        let edits = map_edits(&files, &release).unwrap();
         assert_eq!(edits.len(), 2);
         assert_eq!(edits[0].set.get("title").map(String::as_str), Some("One"));
         assert_eq!(edits[0].set.get("album").map(String::as_str), Some("Demo"));
@@ -1006,5 +1144,212 @@ mod tests {
         assert_eq!(page.searched.tracks, 0);
         assert_eq!(page.releases.len(), 1);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn file(name: &str, values: BTreeMap<String, Vec<String>>) -> FileValues {
+        FileValues {
+            name: name.into(),
+            path: format!("INTERNAL/Album/{name}"),
+            format: "flac".into(),
+            writable: true,
+            values,
+            problem: None,
+        }
+    }
+
+    fn demo_release(tracks: Vec<ReleaseTrack>) -> ReleaseDetail {
+        ReleaseDetail {
+            id: "11111111-1111-1111-1111-111111111111".into(),
+            title: "Demo".into(),
+            artist: "Band".into(),
+            date: "1999-05-01".into(),
+            tracks,
+        }
+    }
+
+    #[test]
+    fn mixed_album_tags_in_the_folder_refuse() {
+        let files = vec![
+            file(
+                "a.flac",
+                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
+            ),
+            file(
+                "b.flac",
+                BTreeMap::from([("album".into(), vec!["But Seriously".into()])]),
+            ),
+        ];
+        let err = refuse_mixed_album(&files).unwrap_err();
+        assert_eq!(err.k, "core.mb.mixed_album");
+        assert!(refuse_mixed_album(&[file(
+            "a.flac",
+            BTreeMap::from([("album".into(), vec!["Hits".into()])]),
+        )])
+        .is_ok());
+    }
+
+    #[test]
+    fn titles_pair_even_when_file_order_disagrees() {
+        let release = demo_release(vec![
+            ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "2".into(),
+                title: "Two".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+        ]);
+        // File order is reverse of the release; titles must win over order.
+        let files = vec![
+            file(
+                "02.flac",
+                BTreeMap::from([
+                    ("title".into(), vec!["Two".into()]),
+                    ("track".into(), vec!["9".into()]),
+                ]),
+            ),
+            file(
+                "01.flac",
+                BTreeMap::from([
+                    ("title".into(), vec!["One".into()]),
+                    ("track".into(), vec!["8".into()]),
+                ]),
+            ),
+        ];
+        let edits = map_edits(&files, &release).unwrap();
+        assert_eq!(edits[0].name, "02.flac");
+        assert_eq!(edits[0].set.get("title").map(String::as_str), Some("Two"));
+        assert_eq!(edits[0].set.get("track").map(String::as_str), Some("2"));
+        assert_eq!(edits[1].name, "01.flac");
+        assert_eq!(edits[1].set.get("title").map(String::as_str), Some("One"));
+    }
+
+    #[test]
+    fn empty_titles_pair_by_disc_and_track() {
+        let release = demo_release(vec![
+            ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "2".into(),
+                title: "Two".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+        ]);
+        let files = vec![
+            file(
+                "b.flac",
+                BTreeMap::from([("track".into(), vec!["2".into()])]),
+            ),
+            file(
+                "a.flac",
+                BTreeMap::from([("track".into(), vec!["1".into()])]),
+            ),
+        ];
+        let edits = map_edits(&files, &release).unwrap();
+        assert_eq!(edits[0].set.get("title").map(String::as_str), Some("Two"));
+        assert_eq!(edits[1].set.get("title").map(String::as_str), Some("One"));
+    }
+
+    #[test]
+    fn unpaired_files_refuse_without_order_zip() {
+        let release = demo_release(vec![
+            ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "2".into(),
+                title: "Two".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+        ]);
+        let files = vec![
+            file(
+                "a.flac",
+                BTreeMap::from([("title".into(), vec!["Something Else".into()])]),
+            ),
+            file(
+                "b.flac",
+                BTreeMap::from([("title".into(), vec!["Also Wrong".into()])]),
+            ),
+        ];
+        let err = map_edits(&files, &release).unwrap_err();
+        assert_eq!(err.k, "core.mb.pair_failed");
+    }
+
+    #[test]
+    fn a_count_mismatch_is_the_dump_shape() {
+        // Three files tagged as one album vs a two-track release: map_release
+        // refuses before pairing (Phil Collins dump class).
+        let files = vec![
+            file(
+                "01.flac",
+                BTreeMap::from([
+                    ("album".into(), vec!["Hits".into()]),
+                    ("title".into(), vec!["One".into()]),
+                ]),
+            ),
+            file(
+                "02.flac",
+                BTreeMap::from([
+                    ("album".into(), vec!["Hits".into()]),
+                    ("title".into(), vec!["Two".into()]),
+                ]),
+            ),
+            file(
+                "03.flac",
+                BTreeMap::from([
+                    ("album".into(), vec!["Hits".into()]),
+                    ("title".into(), vec!["Three".into()]),
+                ]),
+            ),
+        ];
+        refuse_mixed_album(&files).unwrap();
+        let release = demo_release(vec![
+            ReleaseTrack {
+                number: "1".into(),
+                title: "One".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+            ReleaseTrack {
+                number: "2".into(),
+                title: "Two".into(),
+                artist: "Band".into(),
+                length_ms: None,
+                disc: 1,
+            },
+        ]);
+        assert_ne!(files.len(), release.tracks.len());
+    }
+
+    #[test]
+    fn a_title_normalises_punctuation_and_ellipsis() {
+        assert_eq!(
+            normalise_title("Against All Odds (Take a Look at Me Now)"),
+            "against all odds take a look at me now"
+        );
+        assert_eq!(normalise_title("…Hits"), "hits");
+        assert_eq!(normalise_title("  Both  Sides! "), "both sides");
     }
 }

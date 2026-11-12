@@ -1,6 +1,6 @@
 {
   "name": "mpdantic",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Audits and repairs a music library for MPD: output buffer sizing by RAM, .mpdignore management, CUE sheet repair, playlist rebasing, tag validation. Rust core, thin Node shell.",
   "main": "index.js",
   "scripts": {

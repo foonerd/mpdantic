@@ -4,6 +4,14 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-12
+
+The sixth test cut, a pre-release as the five before: MusicBrainz map refuses unsafe folders and pairs by title or track number, on the same two players. Every write is still undoable from the Written tab.
+
+### Fixed
+
+- MusicBrainz map no longer order-zips release tracks onto folder files. A folder with more than one album tag refuses search and map; a file count that is not the release track count refuses map; pairing is by normalised title then disc+track, and an incomplete pair refuses — so a multi-album dump cannot scramble titles onto a short Hits release.
+
 ## [0.1.4] - 2026-11-12
 
 The fifth test cut, a pre-release as the four before: MusicBrainz release lookup on the Tags tab, and the confinement and mount hardening from the audit sits after 0.1.3, on the same two players. Every write is still undoable from the Written tab.
