@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 leído como Latin-1",
   "code.T08": "solo ID3v1",
   "code.T09": "una etiqueta dada dos veces",
-  "code.T10": "un marcador de posición o un valor vacío",
+  "code.T10": "un marcador de posición, un valor vacío o un valor con un salto de línea",
   "code.T11": "una hoja cue incrustada junto a una externa",
   "code.T12": "no leído",
   "core.analyse.excluded": "{path} ({line} en {from})",

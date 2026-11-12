@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 被当作 Latin-1 读取",
   "code.T08": "只有 ID3v1",
   "code.T09": "重复出现的标签",
-  "code.T10": "占位值或空值",
+  "code.T10": "占位符、空值或带换行的值",
   "code.T11": "外部 cue 文件旁边有内嵌 cue",
   "code.T12": "未读取",
   "core.analyse.excluded": "{path}（{from} 中的 {line}）",

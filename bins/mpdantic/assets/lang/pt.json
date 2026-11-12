@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 lido como Latin-1",
   "code.T08": "só ID3v1",
   "code.T09": "uma etiqueta dada duas vezes",
-  "code.T10": "um marcador ou um valor vazio",
+  "code.T10": "um marcador, um valor vazio ou um valor com uma quebra de linha",
   "code.T11": "uma folha cue embebida ao lado de uma externa",
   "code.T12": "não lido",
   "core.analyse.excluded": "{path} ({line} em {from})",

@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 letto come Latin-1",
   "code.T08": "solo ID3v1",
   "code.T09": "un tag dato due volte",
-  "code.T10": "un segnaposto o un valore vuoto",
+  "code.T10": "un segnaposto, un valore vuoto o un valore con un’interruzione di riga",
   "code.T11": "un foglio cue incorporato accanto a uno esterno",
   "code.T12": "non letto",
   "core.analyse.excluded": "{path} ({line} in {from})",

@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 lu comme du Latin-1",
   "code.T08": "ID3v1 seul",
   "code.T09": "un tag donné deux fois",
-  "code.T10": "une valeur de remplissage ou une valeur vide",
+  "code.T10": "un substitut, une valeur vide ou une valeur avec un saut de ligne",
   "code.T11": "une fiche cue intégrée à côté d'une externe",
   "code.T12": "non lu",
   "core.analyse.excluded": "{path} ({line} dans {from})",

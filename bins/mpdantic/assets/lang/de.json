@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 als Latin-1 gelesen",
   "code.T08": "nur ID3v1",
   "code.T09": "ein Tag doppelt vorhanden",
-  "code.T10": "ein Platzhalter oder ein leerer Wert",
+  "code.T10": "ein Platzhalter, ein leerer Wert oder ein Wert mit Zeilenumbruch",
   "code.T11": "ein eingebettetes Cue-Sheet neben einem externen",
   "code.T12": "nicht gelesen",
   "core.analyse.excluded": "{path} ({line} in {from})",

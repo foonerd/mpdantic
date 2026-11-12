@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 が Latin-1 として読まれている",
   "code.T08": "ID3v1 のみ",
   "code.T09": "二重に与えられたタグ",
-  "code.T10": "仮の値または空の値",
+  "code.T10": "プレースホルダー、空の値、または改行を含む値",
   "code.T11": "外部 cue シートの隣にある埋め込み cue シート",
   "code.T12": "未読み込み",
   "core.analyse.excluded": "{path} ({from} の {line})",

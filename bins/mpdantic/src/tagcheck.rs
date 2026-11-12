@@ -70,7 +70,7 @@ pub fn code_text(code: &str) -> &'static str {
         "T07" => "UTF-8 read as Latin-1",
         "T08" => "ID3v1 only",
         "T09" => "a tag given twice",
-        "T10" => "a placeholder or an empty value",
+        "T10" => "a placeholder, an empty value, or a value with a line break",
         "T11" => "an embedded cue sheet beside an external one",
         "T12" => "not read",
         _ => "",
@@ -557,13 +557,16 @@ fn file_findings(
             || PLACEHOLDERS.contains(&t.as_str())
             || (t.starts_with("track ") && t[6..].chars().all(|c| c.is_ascii_digit()))
     };
+    let broken_line = |v: &String| v.contains('\n') || v.contains('\r');
     if let Some(v) = seen
         .title
         .iter()
         .chain(&seen.artist)
+        .chain(&seen.album_artist)
         .chain(&seen.album)
-        .find(|v| placeholder(v))
+        .find(|v| placeholder(v) || broken_line(v))
     {
+        let shown = v.trim().replace(['\r', '\n'], " / ");
         found(
             report,
             sink,
@@ -574,7 +577,7 @@ fn file_findings(
                 "core.tagcheck.placeholder",
                 "{path}: \"{value}\"",
                 path = path,
-                value = v.trim()
+                value = shown
             ),
         );
     }
@@ -817,6 +820,48 @@ mod tests {
         assert_eq!(r.read, 0);
         assert!(r.findings.is_empty());
         assert!(r.splits.is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_value_with_a_line_break_is_t10() {
+        let root = std::env::temp_dir().join(format!(
+            "mpdantic-t10-break-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("INTERNAL/One")).unwrap();
+        fs::write(
+            root.join("INTERNAL/One/a.flac"),
+            flac_bytes(
+                44100,
+                44100,
+                &[
+                    ("ARTIST", "A"),
+                    ("ALBUMARTIST", "Michael Jackson\nalbum_Michael Jackson"),
+                    ("ALBUM", "Thriller"),
+                    ("TITLE", "One"),
+                    ("TRACKNUMBER", "1"),
+                ],
+            ),
+        )
+        .unwrap();
+        let mut sink = crate::findings::Collector::default();
+        check_folder(&root, "INTERNAL/One", &decoders(), note(), &mut sink).unwrap();
+        let t10: Vec<_> = sink.rows.iter().filter(|w| w.code == "T10").collect();
+        assert_eq!(t10.len(), 1, "{:?}", sink.rows);
+        assert!(
+            t10[0]
+                .text
+                .en
+                .contains("Michael Jackson / album_Michael Jackson"),
+            "{:?}",
+            t10[0].text
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 }

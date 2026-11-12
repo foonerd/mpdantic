@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 read as Latin-1",
   "code.T08": "ID3v1 only",
   "code.T09": "a tag given twice",
-  "code.T10": "a placeholder or an empty value",
+  "code.T10": "a placeholder, an empty value, or a value with a line break",
   "code.T11": "an embedded cue sheet beside an external one",
   "code.T12": "not read",
   "core.analyse.excluded": "{path} ({line} at {from})",

@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 als Latin-1 gelezen",
   "code.T08": "alleen ID3v1",
   "code.T09": "een tag tweemaal gegeven",
-  "code.T10": "een plaatshouder of een lege waarde",
+  "code.T10": "een plaatshouder, een lege waarde of een waarde met een regeleinde",
   "code.T11": "een ingebedde cue-sheet naast een externe",
   "code.T12": "niet gelezen",
   "core.analyse.excluded": "{path} ({line} in {from})",

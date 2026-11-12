@@ -7,6 +7,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 ### Fixed
 
 - MusicBrainz map no longer refuses when the folder has fewer or more files than the release has tracks. Unique title / track pairing still applies; unmatched files and missing tracks are noted on Preview. Mixed-album folders and a complete pairing miss still refuse.
+- Tag check T10 also flags a value that carries a line break (for example an album artist of two lines), not only placeholders and empty values.
 
 ## [0.1.5] - 2026-11-12
 

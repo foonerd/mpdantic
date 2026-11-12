@@ -469,7 +469,7 @@
   "code.T07": "UTF-8 odczytany jako Latin-1",
   "code.T08": "tylko ID3v1",
   "code.T09": "tag podany dwukrotnie",
-  "code.T10": "wartość zastępcza albo pusta",
+  "code.T10": "symbol zastępczy, pusta wartość lub wartość z łamaniem wiersza",
   "code.T11": "osadzony arkusz cue obok zewnętrznego",
   "code.T12": "nie odczytano",
   "core.analyse.excluded": "{path} ({line} w {from})",
