@@ -4,6 +4,12 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.3] - 2026-11-12
+
+The fourth test cut, a pre-release as the three before: large-library findings worked through by code, on the same two players. Every write is still undoable from the Written tab.
+
 ### Changed
 
 - Large-library findings UX: each T/C/P code on the check report leads into the work list for that code; with a code chip on, findings are a paginated file table (twenty at a time) with dismiss, clickable path and bulk dismiss (selected, this page, or all open for the code); tag repair cards list only files that change by default, with Show unchanged for the rest.
