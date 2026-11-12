@@ -440,8 +440,12 @@ fn start_job(shared: &Shared, body: &[u8]) -> (u16, String) {
             )),
         );
     }
-    if Library::check(&path).is_none() {
-        return (400, error(&walk::not_library_path()));
+    if let Err(e) = Library::resolve(shared.library.music(), &path) {
+        return match e {
+            ListError::BadPath => (400, error(&walk::not_library_path())),
+            ListError::NotFound | ListError::NotADirectory => (404, error(&walk::no_such_folder())),
+            ListError::Io(s) => (500, error(&Msg::raw(s))),
+        };
     }
     let music = shared.library.music().to_path_buf();
     let (note, decoders) = shared.decoders();
@@ -1081,13 +1085,13 @@ fn folder_tags(shared: &Shared, query: &str) -> (u16, String) {
         .find(|(k, _)| k == "path")
         .map(|(_, v)| v)
         .unwrap_or_default();
-    let Some(path) = Library::check(&path) else {
-        return (400, error(&walk::not_library_path()));
-    };
-    let dir = if path.is_empty() {
-        shared.library.music().to_path_buf()
-    } else {
-        shared.library.music().join(&path)
+    let (path, dir) = match Library::resolve(shared.library.music(), &path) {
+        Ok(v) => v,
+        Err(ListError::BadPath) => return (400, error(&walk::not_library_path())),
+        Err(ListError::NotFound) | Err(ListError::NotADirectory) => {
+            return (404, error(&walk::no_such_folder()))
+        }
+        Err(ListError::Io(s)) => return (500, error(&Msg::raw(s))),
     };
     if !dir.is_dir() {
         return (404, error(&walk::no_such_folder()));
@@ -1144,13 +1148,13 @@ fn folder_ignore(shared: &Shared, query: &str) -> (u16, String) {
         .find(|(k, _)| k == "path")
         .map(|(_, v)| v)
         .unwrap_or_default();
-    let Some(path) = Library::check(&path) else {
-        return (400, error(&walk::not_library_path()));
-    };
-    let dir = if path.is_empty() {
-        shared.library.music().to_path_buf()
-    } else {
-        shared.library.music().join(&path)
+    let (path, dir) = match Library::resolve(shared.library.music(), &path) {
+        Ok(v) => v,
+        Err(ListError::BadPath) => return (400, error(&walk::not_library_path())),
+        Err(ListError::NotFound) | Err(ListError::NotADirectory) => {
+            return (404, error(&walk::no_such_folder()))
+        }
+        Err(ListError::Io(s)) => return (500, error(&Msg::raw(s))),
     };
     if !dir.is_dir() {
         return (404, error(&walk::no_such_folder()));

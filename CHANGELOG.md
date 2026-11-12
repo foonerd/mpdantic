@@ -4,7 +4,9 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
-Nothing yet.
+### Security
+
+- A library path whose links resolve outside the music directory, or outside Volumio's NAS / USB / INTERNAL roots, is refused before list, check or write.
 
 ## [0.1.3] - 2026-11-12
 

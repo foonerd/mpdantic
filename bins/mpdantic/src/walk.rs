@@ -93,17 +93,23 @@ pub struct Start {
 
 /// The lists in force above and at the folder: the root's, then each step down.
 pub fn start(music: &Path, path: &str) -> Result<Start, Msg> {
-    let path = Library::check(path).ok_or_else(not_library_path)?;
+    let (path, dir) = Library::resolve(music, path).map_err(|e| match e {
+        crate::library::ListError::BadPath => not_library_path(),
+        crate::library::ListError::NotFound | crate::library::ListError::NotADirectory => {
+            no_such_folder()
+        }
+        crate::library::ListError::Io(s) => Msg::raw(s),
+    })?;
     let mut in_force = InForce::default();
     if let Some(list) = read_list(music) {
         in_force.push(String::new(), list);
     }
-    let mut dir = PathBuf::from(music);
+    let mut step = PathBuf::from(music);
     let mut rel = String::new();
     for component in path.split('/').filter(|c| !c.is_empty()) {
-        dir.push(component);
+        step.push(component);
         rel = join(&rel, component);
-        if let Some(list) = read_list(&dir) {
+        if let Some(list) = read_list(&step) {
             in_force.push(rel.clone(), list);
         }
     }

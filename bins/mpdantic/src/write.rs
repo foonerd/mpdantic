@@ -212,6 +212,17 @@ fn folder_dir(music: &Path, folder: &str) -> PathBuf {
     }
 }
 
+/// An MPD path checked and kept under the library (or a Volumio root) after links.
+fn resolve_library(music: &Path, path: &str) -> Result<(String, PathBuf), Msg> {
+    Library::resolve(music, path).map_err(|e| match e {
+        crate::library::ListError::BadPath => walk::not_library_path(),
+        crate::library::ListError::NotFound | crate::library::ListError::NotADirectory => {
+            walk::no_such_folder()
+        }
+        crate::library::ListError::Io(s) => Msg::raw(s),
+    })
+}
+
 /// Where a batch's folder is written, as the preview says it: local, or on a share
 /// at a folder.
 struct Placed {
@@ -354,12 +365,11 @@ fn prepare_volumio(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
+    let (path, full) = resolve_library(music, &req.path)?;
     let suffix = classify::suffix(&path).unwrap_or_default();
     if !playlist::SUFFIXES.contains(&suffix.as_str()) {
         return Err(not_a_playlist());
     }
-    let full = music.join(&path);
     if !full.is_file() {
         return Err(no_such_playlist());
     }
@@ -408,8 +418,7 @@ fn prepare_volumio(
 
 /// `.mpdignore` lines into the folder in hand, against the file as it is.
 fn prepare_lines(music: &Path, shares: &[Share], id: u64, req: &Request) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
-    let dir = folder_dir(music, &path);
+    let (path, dir) = resolve_library(music, &req.path)?;
     if !dir.is_dir() {
         return Err(walk::no_such_folder());
     }
@@ -521,11 +530,10 @@ fn prepare_cue(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
+    let (path, full) = resolve_library(music, &req.path)?;
     if classify::suffix(&path).as_deref() != Some(classify::CUE_SUFFIX) {
         return Err(msg!("core.write.not_cue", "not a CUE sheet"));
     }
-    let full = music.join(&path);
     if !full.is_file() {
         return Err(msg!("core.write.no_such_sheet", "no such sheet"));
     }
@@ -575,8 +583,7 @@ fn prepare_tags(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
-    let dir = folder_dir(music, &path);
+    let (path, dir) = resolve_library(music, &req.path)?;
     if !dir.is_dir() {
         return Err(walk::no_such_folder());
     }
@@ -618,8 +625,7 @@ fn prepare_tagedit(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
-    let dir = folder_dir(music, &path);
+    let (path, dir) = resolve_library(music, &req.path)?;
     if !dir.is_dir() {
         return Err(walk::no_such_folder());
     }
@@ -685,8 +691,7 @@ fn prepare_rename(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
-    let dir = folder_dir(music, &path);
+    let (path, dir) = resolve_library(music, &req.path)?;
     if !dir.is_dir() {
         return Err(walk::no_such_folder());
     }
@@ -985,12 +990,11 @@ fn prepare_playlist(
     id: u64,
     req: &Request,
 ) -> Result<Preview, Msg> {
-    let path = Library::check(&req.path).ok_or_else(walk::not_library_path)?;
+    let (path, full) = resolve_library(music, &req.path)?;
     let suffix = classify::suffix(&path).unwrap_or_default();
     if !playlist::SUFFIXES.contains(&suffix.as_str()) {
         return Err(not_a_playlist());
     }
-    let full = music.join(&path);
     if !full.is_file() {
         return Err(no_such_playlist());
     }
@@ -1005,15 +1009,21 @@ fn prepare_playlist(
     }
     let bytes = fs::read(&full).map_err(|e| text::at(full.display(), e))?;
     let base = match &req.base {
-        Some(b) => Library::check(b).ok_or_else(|| {
-            msg!(
-                "core.write.base_not_library",
-                "the base is not a library path"
-            )
-        })?,
+        Some(b) => {
+            resolve_library(music, b)
+                .map_err(|_| {
+                    msg!(
+                        "core.write.base_not_library",
+                        "the base is not a library path"
+                    )
+                })?
+                .0
+        }
         None => folder.clone(),
     };
-    if !folder_dir(music, &base).is_dir() {
+    let (_, base_dir) = resolve_library(music, &base)
+        .map_err(|_| msg!("core.write.no_such_base", "no such base folder"))?;
+    if !base_dir.is_dir() {
         return Err(msg!("core.write.no_such_base", "no such base folder"));
     }
     let choice = plfix::Choice {
