@@ -189,6 +189,7 @@
   "page.mb.country": "国家",
   "page.mb.status": "状态",
   "page.mb.unmatched": "{files} {files|个文件}与 {tracks} {tracks|首曲目} 未能配对。",
+  "page.mb.step.sort_name": "按标签中的艺人未命中；已按「{artist}」搜索。",
   "page.mb.step.without_suffix": "按标签中的专辑未命中；已去掉版本后缀，按「{album}」搜索。",
   "page.mb.step.without_tracks": "固定曲目数未命中；已不锁定曲目数，按「{album}」搜索。",
   "page.mb.rewrite_hint": "若写入某个发行版，标签将变为 MusicBrainz 的内容（文件上的专辑名可能去掉版本后缀）。",

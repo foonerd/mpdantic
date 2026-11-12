@@ -189,6 +189,7 @@
   "page.mb.country": "País",
   "page.mb.status": "Estado",
   "page.mb.unmatched": "{files} {files|ficheiro|ficheiros} e {tracks} {tracks|faixa|faixas} não puderam ser emparelhados.",
+  "page.mb.step.sort_name": "Nenhum resultado para o artista como nas etiquetas; pesquisado como «{artist}».",
   "page.mb.step.without_suffix": "Nenhum resultado para o álbum como nas etiquetas; pesquisado sem o sufixo de edição como «{album}».",
   "page.mb.step.without_tracks": "Nenhum resultado com o número de faixas fixo; pesquisado «{album}» sem fixar o número de faixas.",
   "page.mb.rewrite_hint": "Se escrever uma edição, as etiquetas passam a ser as do MusicBrainz (o título do álbum nos ficheiros pode perder um sufixo de edição).",

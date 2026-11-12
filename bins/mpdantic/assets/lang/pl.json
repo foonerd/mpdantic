@@ -189,6 +189,7 @@
   "page.mb.country": "Kraj",
   "page.mb.status": "Status",
   "page.mb.unmatched": "{files} {files|plik|pliki|plików} i {tracks} {tracks|utwór|utwory|utworów} nie udało się sparować.",
+  "page.mb.step.sort_name": "Brak trafienia dla artysty jak w tagach; szukano jako „{artist}“.",
   "page.mb.step.without_suffix": "Brak trafienia dla albumu jak w tagach; szukano bez przyrostka edycji jako „{album}“.",
   "page.mb.step.without_tracks": "Brak trafienia z zablokowaną liczbą utworów; szukano „{album}“ bez blokady liczby utworów.",
   "page.mb.rewrite_hint": "Jeśli zapiszesz wydanie, tagi staną się tymi z MusicBrainz (tytuł albumu na plikach może stracić przyrostek edycji).",

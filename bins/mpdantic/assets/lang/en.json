@@ -189,6 +189,7 @@
   "page.mb.country": "Country",
   "page.mb.status": "Status",
   "page.mb.unmatched": "{files} {files|file|files} and {tracks} {tracks|track|tracks} could not be paired.",
+  "page.mb.step.sort_name": "No hit for the artist as tagged; searched as \"{artist}\".",
   "page.mb.step.without_suffix": "No hit for the album as tagged; searched without the edition suffix as \"{album}\".",
   "page.mb.step.without_tracks": "No hit with the track count locked; searched \"{album}\" without locking the track count.",
   "page.mb.rewrite_hint": "If you Write a release, the tags become MusicBrainz's (the album title on the files may lose an edition suffix).",

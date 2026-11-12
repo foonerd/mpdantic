@@ -5,11 +5,12 @@
 //! (split, then look up each). Map refuses a mixed folder, or when nothing pairs by
 //! title/track number (no order-only zip). A shorter or longer folder than the
 //! release is allowed: paired files get edits; unmatched files and missing tracks
-//! are reported as guidance. The search is a short ladder: as tagged, then without
-//! an edition suffix, then without locking the track count; the card says which
-//! step hit. One request per second on the public site, a cache under the data
-//! folder, backoff on 503. A local mirror from the settings skips the gap. No
-//! AcoustID, no write to MusicBrainz.
+//! are reported as guidance. The search is a short ladder: as tagged, then a
+//! `Last, First` sort-name flipped to display form, then without an edition
+//! suffix, then without locking the track count; the card says which step hit.
+//! One request per second on the public site, a cache under the data folder,
+//! backoff on 503. A local mirror from the settings skips the gap. No AcoustID,
+//! no write to MusicBrainz.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -144,14 +145,28 @@ impl Client {
 
     /// The search ladder for a query already taken from the folder's tags.
     fn ladder_search(&self, tagged: Query) -> Result<SearchPage, Msg> {
-        let mut steps: Vec<(&str, Query)> = Vec::with_capacity(3);
+        let flip = artist_from_sort_name(&tagged.artist);
+        let mut steps: Vec<(&str, Query)> = Vec::with_capacity(4);
         steps.push(("as_tagged", tagged.clone()));
+        if let Some(ref display) = flip {
+            steps.push((
+                "sort_name",
+                Query {
+                    artist: display.clone(),
+                    album: tagged.album.clone(),
+                    tracks: tagged.tracks,
+                },
+            ));
+        }
+        // Later steps use the display form when the tag looked like a sort-name:
+        // the tagged form already missed (or would) on MusicBrainz's artist field.
+        let artist = flip.clone().unwrap_or_else(|| tagged.artist.clone());
         let normalised = normalise_album(&tagged.album);
         if !normalised.is_empty() && normalised != tagged.album {
             steps.push((
                 "without_suffix",
                 Query {
-                    artist: tagged.artist.clone(),
+                    artist: artist.clone(),
                     album: normalised.clone(),
                     tracks: tagged.tracks,
                 },
@@ -164,7 +179,7 @@ impl Client {
                 tagged.album.clone()
             };
             let loose = Query {
-                artist: tagged.artist.clone(),
+                artist,
                 album,
                 tracks: 0,
             };
@@ -198,7 +213,7 @@ impl Client {
     }
 
     /// The release's tracks mapped onto the folder's files as tagedit edits.
-    /// Refuses mixed albums, a file/track count mismatch, or an incomplete pair.
+    /// Refuses mixed albums, or when nothing pairs.
     pub fn map_release(
         &self,
         music: &Path,
@@ -393,8 +408,8 @@ pub struct SearchPage {
     pub query: Query,
     /// What the Lucene query actually used (may be normalised, tracks dropped).
     pub searched: Query,
-    /// Which ladder step produced `releases`: `as_tagged`, `without_suffix`,
-    /// `without_tracks`, or `mixed_album` when the folder is a mix/dump guide.
+    /// Which ladder step produced `releases`: `as_tagged`, `sort_name`,
+    /// `without_suffix`, `without_tracks`, or `mixed_album` when the folder is a mix/dump guide.
     pub step: String,
     pub releases: Vec<ReleaseHit>,
     /// Album groups in the folder; more than one means look up is not safe yet.
@@ -460,6 +475,27 @@ const EDITION_WORDS: &[&str] = &[
     "limited",
     "digipak",
 ];
+
+/// Display form from a MusicBrainz-style sort-name (`Collins, Phil` →
+/// `Phil Collins`). One comma only; the part after it must not look like a
+/// band list (`Earth, Wind & Fire` stays put).
+fn artist_from_sort_name(artist: &str) -> Option<String> {
+    let artist = artist.trim();
+    let (last, rest) = artist.split_once(',')?;
+    let last = last.trim();
+    let rest = rest.trim();
+    if last.is_empty() || rest.is_empty() {
+        return None;
+    }
+    if rest.contains(',') || rest.contains('&') || rest.contains(';') {
+        return None;
+    }
+    let flipped = format!("{rest} {last}");
+    if flipped == artist {
+        return None;
+    }
+    Some(flipped)
+}
 
 /// Album title for a wider search: trailing `(…)`, `[…]`, `{…}` removed, then
 /// common edition words dropped; whitespace collapsed.
@@ -1093,6 +1129,61 @@ mod tests {
         );
         assert_eq!(normalise_album("21"), "21");
         assert_eq!(normalise_album("  Demo [Deluxe] "), "Demo");
+    }
+
+    #[test]
+    fn a_sort_name_flips_to_the_display_form() {
+        assert_eq!(
+            artist_from_sort_name("Collins, Phil").as_deref(),
+            Some("Phil Collins")
+        );
+        assert_eq!(
+            artist_from_sort_name("Beethoven, Ludwig van").as_deref(),
+            Some("Ludwig van Beethoven")
+        );
+        assert_eq!(artist_from_sort_name("Phil Collins"), None);
+        assert_eq!(artist_from_sort_name("Earth, Wind & Fire"), None);
+        assert_eq!(artist_from_sort_name("Last, First, Extra"), None);
+    }
+
+    #[test]
+    fn the_ladder_tries_sort_name_when_the_tag_is_last_comma_first() {
+        let dir = std::env::temp_dir().join(format!("mpdantic-mb-sort-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        let base = "https://musicbrainz.org";
+        let tagged = Query {
+            artist: "Collins, Phil".into(),
+            album: "Hits".into(),
+            tracks: 16,
+        };
+        let empty = r#"{"releases":[]}"#;
+        let hit = r#"{"releases":[{"id":"44444444-4444-4444-4444-444444444444","score":100,"title":"…Hits","status":"Official","artist-credit":[{"name":"Phil Collins","joinphrase":""}],"date":"1998","country":"XW","track-count":16}]}"#;
+        let urls = Client::with_fetch(
+            base,
+            false,
+            dir.join("cache-urls"),
+            Box::new(FixtureFetch {
+                map: BTreeMap::new(),
+            }),
+        );
+        let url_as = urls.search_url(&tagged);
+        let url_sort = urls.search_url(&Query {
+            artist: "Phil Collins".into(),
+            album: tagged.album.clone(),
+            tracks: 16,
+        });
+        let mut map = BTreeMap::new();
+        map.insert(url_as, (200, empty.into()));
+        map.insert(url_sort, (200, hit.into()));
+        let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
+        let page = client.ladder_search(tagged.clone()).unwrap();
+        assert_eq!(page.step, "sort_name");
+        assert_eq!(page.query, tagged);
+        assert_eq!(page.searched.artist, "Phil Collins");
+        assert_eq!(page.releases.len(), 1);
+        assert_eq!(page.releases[0].artist, "Phil Collins");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
