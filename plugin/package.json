@@ -25,7 +25,7 @@
       "amd64"
     ],
     "details": "Pedantic about your library, so MPD does not choke on it. Audits and repairs a music library for MPD, folder by folder, from its own management pages on the player. Those pages are open to the player's network, as Volumio's own are: anyone who can reach the player can read and write the library from them; every write is undoable. After each write Volumio rebuilds its album list, which takes a while on a large library.",
-    "changelog": "0.1.4 Fifth test cut: MusicBrainz release lookup on the Tags tab with a search ladder (as tagged, without edition suffix, without track lock), Preview/Write through the existing tag path; local-mirror switch on the settings page; path confinement and a scoped mount helper; prepared batches expire."
+    "changelog": "0.1.5 Sixth test cut: MusicBrainz map refuses unsafe folders and pairs by identity; folder rename from tags; Tags Organise (Move/Skip albums out of a mix into Artist/Album); mix Look up guides instead of refusing; Ignore context under the work."
   },
   "dependencies": {
     "kew": "^0.7.0",
