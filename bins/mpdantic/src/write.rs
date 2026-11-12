@@ -1326,11 +1326,22 @@ fn prepare_playlist(
         .map(|(f, _)| f.to_string())
         .unwrap_or_default();
     let place = placed(shares, &folder)?;
-    let (_, size, _) = stat(&full);
+    let (exists, size, mtime) = stat(&full);
     if size > plcheck::MAX_PLAYLIST {
         return Err(playlist_too_large(size));
     }
     let bytes = fs::read(&full).map_err(|e| text::at(full.display(), e))?;
+    // Discard: remove the library playlist file; same write-model remove as a sheet.
+    if matches!(req.repairs.as_deref(), Some([r]) if r == "remove") {
+        let mut p = empty(id, "playlist", folder, path, "remove", place);
+        p.exists = exists;
+        p.before = display(&bytes);
+        p.after = String::new();
+        p.changed = true;
+        p.size = size;
+        p.mtime = mtime;
+        return Ok(p);
+    }
     let base = match &req.base {
         Some(b) => {
             resolve_library(music, b)
@@ -1515,6 +1526,13 @@ fn note_for(preview: &Preview, written: usize) -> Msg {
             msg!(
                 "core.write.note_sheet_removed",
                 "sheet {file} removed",
+                file = preview.file
+            )
+        }
+        "playlist" if preview.op == "remove" => {
+            msg!(
+                "core.write.note_playlist_removed",
+                "playlist {file} discarded",
                 file = preview.file
             )
         }
@@ -2195,8 +2213,11 @@ pub fn undo(
             let dst_parent = parent_library(&entry.after);
             let from = file_name(&entry.path).to_string();
             let to = file_name(&entry.after).to_string();
-            if src_parent != dst_parent || batch.kind == "organise" {
-                // Cross-folder move (organise): undo moves after → path.
+            // Organise and folder layout journal full library paths; a layout
+            // under an artist that already held the leaf keeps the same parent,
+            // so leaf Rename under batch.path (the layout base) would miss.
+            // Folder leaf renames use Move too (after → path); same result.
+            if src_parent != dst_parent || batch.kind == "organise" || batch.kind == "folder" {
                 let at = folder_dir(music, &dst_parent).join(&to);
                 let back = folder_dir(music, &src_parent).join(&from);
                 if !at.exists() {
@@ -3024,6 +3045,75 @@ mod tests {
     }
 
     #[test]
+    fn a_library_playlist_discarded_comes_back_with_the_undo() {
+        let dir = temp("playlist-discard");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let text = b"#EXTM3U\n01.flac\n";
+        fs::create_dir_all(music.join("INTERNAL/Jazz")).unwrap();
+        fs::write(music.join("INTERNAL/Jazz/mix.m3u"), text).unwrap();
+        let req = Request {
+            kind: "playlist".into(),
+            path: "INTERNAL/Jazz/mix.m3u".into(),
+            lines: Vec::new(),
+            repairs: Some(vec!["remove".into()]),
+            encoding: None,
+            album: None,
+            album_artist: None,
+            date: None,
+            base: None,
+            name: None,
+            edits: None,
+            pattern: None,
+            moves: Vec::new(),
+            duplicates: Vec::new(),
+        };
+        let p = prepare(&music, &shares, &d, &dir.join("playlists"), 1, &req).unwrap();
+        assert_eq!(p.kind, "playlist");
+        assert_eq!(p.op, "remove");
+        assert!(p.changed);
+        assert!(p.after.is_empty());
+        let a = apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert!(!music.join("INTERNAL/Jazz/mix.m3u").exists());
+        assert_eq!(
+            journal.load(&a.batch).unwrap().note,
+            "playlist INTERNAL/Jazz/mix.m3u discarded"
+        );
+        let u = undo(&music, &shares, &mounter, &journal, &address, &a.batch).unwrap();
+        assert!(u.written);
+        assert_eq!(fs::read(music.join("INTERNAL/Jazz/mix.m3u")).unwrap(), text);
+        assert!(prepare(
+            &music,
+            &shares,
+            &d,
+            &dir.join("playlists"),
+            2,
+            &Request {
+                kind: "playlist".into(),
+                path: "INTERNAL/Jazz/not-a-playlist.txt".into(),
+                lines: Vec::new(),
+                repairs: Some(vec!["remove".into()]),
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: None,
+                edits: None,
+                pattern: None,
+                moves: Vec::new(),
+                duplicates: Vec::new(),
+            },
+        )
+        .is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_whole_write_keeps_the_files_mode_and_a_new_file_takes_its_folders() {
         use std::os::unix::fs::PermissionsExt;
         let dir = temp("whole");
@@ -3518,6 +3608,71 @@ mod tests {
         undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
         assert!(leaf.is_dir());
         assert!(!music.join("INTERNAL/Peter Hollens").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_layout_under_an_artist_that_already_holds_it_undoes() {
+        // Hollens case: leaf already under Peter Hollens; layout only renames the
+        // album segment. Same parent, batch path is the grandparent — undo must
+        // still find the folder (not look for the album leaf under INTERNAL).
+        let dir = temp("folder-layout-same-parent");
+        let music = dir.join("music");
+        let shares = mount::shares(&sample_config(&dir)).unwrap();
+        let d = decoders();
+        let mounter = local_mounter(&dir);
+        let journal = Journal::new(&dir.join("undo"));
+        let address = fake_mpd("OK MPD 0.24.6\n");
+        let pl = dir.join("playlists");
+        let leaf = music.join("INTERNAL/Peter Hollens/MR0XF1~N");
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(leaf.join("01.flac"), real_flac(&[("TITLE", "One")])).unwrap();
+        let p = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            1,
+            &Request {
+                kind: "folder".into(),
+                path: "INTERNAL/Peter Hollens/MR0XF1~N".into(),
+                lines: Vec::new(),
+                repairs: None,
+                encoding: None,
+                album: None,
+                album_artist: None,
+                date: None,
+                base: None,
+                name: Some("Peter Hollens/Misty Mountains: Songs".into()),
+                edits: None,
+                pattern: None,
+                moves: Vec::new(),
+                duplicates: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(p.path, "INTERNAL");
+        assert_eq!(p.renames[0].name, "Peter Hollens/MR0XF1~N");
+        assert_eq!(
+            p.renames[0].to.as_deref(),
+            Some("Peter Hollens/Misty Mountains_ Songs")
+        );
+        apply(&music, &shares, &mounter, &journal, &address, &p).unwrap();
+        assert!(music
+            .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs/01.flac")
+            .is_file());
+        assert!(!leaf.exists());
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.kind == "folder" && !b.undone)
+            .unwrap();
+        undo(&music, &shares, &mounter, &journal, &address, &batch.id).unwrap();
+        assert!(leaf.is_dir());
+        assert!(music.join("INTERNAL/Peter Hollens").is_dir());
+        assert!(!music
+            .join("INTERNAL/Peter Hollens/Misty Mountains_ Songs")
+            .exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

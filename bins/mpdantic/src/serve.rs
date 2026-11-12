@@ -433,6 +433,14 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
                 .collect();
             (200, json, serde_json::Value::Array(list).to_string() + "\n")
         }
+        ("POST", "/api/undo/vacuum") => match shared.journal.vacuum() {
+            Ok(n) => (
+                200,
+                json,
+                serde_json::json!({ "cleared": n }).to_string() + "\n",
+            ),
+            Err(e) => (500, json, error(&e)),
+        },
         ("POST", _) if r.path.starts_with("/api/undo/") => {
             let id = r.path["/api/undo/".len()..].to_string();
             let (code, body) = undo_batch(shared, &id);

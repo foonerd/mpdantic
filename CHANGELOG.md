@@ -8,9 +8,13 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 - Organise stage 2: when a destination already holds a bit-identical file, Preview offers leave / replace / remove for that copy (no silent delete).
 - Folder rename **Artist / Album**: a fourth suggestion and a one-slash custom path move the folder under the grandparent as `Artist/Album`, creating the artist folder when needed; undo restores the leaf and drops an empty artist folder this write left behind.
+- Browse soft hint on a child folder whose leaf carries a tilde (DOS 8.3 junk): muted `→ suggested name` from tags, opening the same Rename panel. Well-named siblings stay quiet (no tag read of every child).
+- Playlists **Discard**: remove an unwanted library playlist file through Preview/Write; Written Undo restores it. Volumio's own lists are unchanged.
+- Written **Vacuum**: clear the whole undo journal after the page dialog confirms; Undo for those batches is no longer possible.
 
 ### Fixed
 
+- Folder layout undo when the album already sits under its artist (same parent, batch path is the grandparent) finds the folder again; Written Undo no longer says "not at … any more".
 - MusicBrainz map no longer refuses when the folder has fewer or more files than the release has tracks. Unique title / track pairing still applies; unmatched files and missing tracks are noted on Preview. Mixed-album folders and a complete pairing miss still refuse.
 - Tag check T10 also flags a value that carries a line break (for example an album artist of two lines), not only placeholders and empty values.
 - MusicBrainz search: when the album artist looks like a sort-name (`Collins, Phil`), the ladder retries as the display form (`Phil Collins`) after the tagged form misses.

@@ -45,6 +45,10 @@
   .row .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .row.dir .name { color: var(--accent); font-weight: 600; }
   .row.dot .name { color: var(--muted); font-style: italic; }
+  /* Soft folder-rename hint: muted, not a second commit control. */
+  .row .hint { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; font-weight: 400; color: var(--muted); border: none; background: transparent; padding: 0; }
+  .row .hint:hover { color: var(--accent); border: none; }
   .row .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; flex: none; }
   .row .keep { flex: none; font-size: 12px; padding: 3px 9px; }
   .foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
@@ -309,7 +313,7 @@
       </div>
       <div class="write">
         <b data-i18n="page.folder.title">Folder name</b>
-        <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, as Artist/Album under the parent tree, or a name you type. The name is made safe for a share. Browse also offers Rename on a folder row. Nothing is written before the preview and Write; the undo gives the name back.</div>
+        <div class="help" data-i18n="page.folder.help">Rename the folder in hand from its album or album artist tags, as Artist/Album under the parent tree, or a name you type. The name is made safe for a share. Browse also offers Rename on a folder row. Nothing is written before the preview and Write; the undo gives the name back. A short name with a tilde may show a soft suggestion on the row.</div>
         <div id="folder-tags-box"></div>
         <div id="folder-tags-preview-box"></div>
       </div>
@@ -367,7 +371,9 @@
   <div class="panel" id="panel-undo" hidden>
     <div class="head">
       <b data-i18n="page.tab.undo">Written</b>
-      <span class="sub" data-i18n="page.undo.sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after.</span>
+      <span class="sub" data-i18n="page.undo.sub">Every write MPDantic made, newest first. An undo puts the file back as it was, when nothing else has changed it since; MPD is told to update the folder after. Vacuum clears the journal when undo is no longer needed.</span>
+      <span class="grow"></span>
+      <button id="vacuum" data-i18n="page.undo.vacuum" data-i18n-title="page.undo.vacuum_title">Vacuum</button>
     </div>
     <div class="body">
       <div class="done" id="undo-note" hidden></div>
@@ -414,6 +420,15 @@
     <div class="card" role="dialog" aria-modal="true">
       <div class="text" data-i18n="page.findings.close_confirm">A preview is open and nothing has been written. Leave the findings?</div>
       <div class="actions"><button class="primary" id="fx-stay" data-i18n="page.findings.stay">Stay</button><button id="fx-leave" data-i18n="page.findings.leave">Leave</button></div>
+    </div>
+  </div>
+  <div class="dialog" id="vacuum-dialog" hidden>
+    <div class="card" role="dialog" aria-modal="true">
+      <div class="text" id="vacuum-text"></div>
+      <div class="actions">
+        <button class="primary" id="vacuum-cancel" data-i18n="page.cancel">Cancel</button>
+        <button id="vacuum-go" data-i18n="page.undo.vacuum_confirm_action">Vacuum</button>
+      </div>
     </div>
   </div>
 </section>
@@ -541,10 +556,21 @@
     });
   }
 
+  // DOS 8.3 short names (and similar junk leaves): soft-hint candidates only.
+  // Well-named children stay quiet — no N tag reads of every sibling.
+  function leafLooksJunk(name) {
+    return name.indexOf('~') >= 0;
+  }
+
+  let listGen = 0;
+  const folderHintCache = Object.create(null);
+
   function render() {
     crumbs(current.path);
     const list = $('list');
     list.textContent = '';
+    const gen = ++listGen;
+    const hintJobs = [];
     if (!current.entries.length) list.appendChild(el('div', 'empty', t('page.nothing_here')));
     current.entries.forEach((entry) => {
       const row = el('div', 'row' + (entry.dir ? ' dir' : '') + (entry.name.startsWith('.') ? ' dot' : ''));
@@ -553,6 +579,12 @@
       if (entry.dir) {
         const child = (current.path ? current.path + '/' : '') + entry.name;
         if (!isRootFolder(child)) {
+          if (leafLooksJunk(entry.name)) {
+            const hintSlot = el('span', 'hint');
+            hintSlot.hidden = true;
+            row.appendChild(hintSlot);
+            hintJobs.push({ child, hintSlot });
+          }
           const rename = el('button', 'keep', t('page.folder.rename'));
           rename.title = t('page.folder.rename_title');
           rename.addEventListener('click', (ev) => { ev.stopPropagation(); openFolderRename(child, $('folder-rename-box')); });
@@ -582,6 +614,34 @@
     $('analyse-playlists').textContent = current.path ? t('page.check_folder') : t('page.check_library');
     if (!$('panel-tags').hidden) refreshFolderTagsBlock();
     refreshIgnoreTrailer();
+    fillFolderHints(gen, hintJobs);
+  }
+
+  // Soft hint beside a junk leaf: album (else album artist) when tags agree.
+  // Opens the same Rename panel. Cached; skipped when the listing has moved on.
+  async function fillFolderHints(gen, jobs) {
+    for (const job of jobs) {
+      if (gen !== listGen) return;
+      let s = folderHintCache[job.child];
+      if (!s) {
+        try {
+          s = await api('/api/folder?path=' + encodeURIComponent(job.child));
+          folderHintCache[job.child] = s;
+        } catch (_) {
+          continue;
+        }
+      }
+      if (gen !== listGen) return;
+      const suggested = s.album || s.albumartist;
+      if (!suggested || suggested === s.leaf) continue;
+      const btn = el('button', 'hint', t('page.folder.hint', { name: suggested }));
+      btn.title = t('page.folder.hint_title');
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openFolderRename(job.child, $('folder-rename-box'));
+      });
+      job.hintSlot.replaceWith(btn);
+    }
   }
 
   // A folder of the listing kept out: its name as a line in the .mpdignore of the
@@ -1877,6 +1937,13 @@
         imp.addEventListener('click', () => { imp.disabled = true; repairWith('volumio_playlist', s.path, card, imp); });
         actions.appendChild(imp);
       }
+      const discard = el('button', '', t('page.playlists.discard'));
+      discard.title = t('page.playlists.discard_title');
+      discard.addEventListener('click', () => {
+        discard.disabled = true;
+        repairWith('playlist', s.path, card, discard, { repairs: ['remove'] });
+      });
+      actions.appendChild(discard);
       if (actions.childNodes.length) { inner.appendChild(actions); inner.appendChild(card); }
       if (s.entry_list.length) {
         const rows = s.entry_list.map((e) => {
@@ -2324,6 +2391,13 @@
           imp.title = t('page.playlists.import_title');
           imp.addEventListener('click', () => { imp.disabled = true; repairWith('volumio_playlist', path, box, imp); });
           actions.appendChild(imp);
+          const discard = el('button', '', t('page.playlists.discard') + ': ' + name(path));
+          discard.title = t('page.playlists.discard_title');
+          discard.addEventListener('click', () => {
+            discard.disabled = true;
+            repairWith('playlist', path, box, discard, { repairs: ['remove'] });
+          });
+          actions.appendChild(discard);
         }
       });
     }
@@ -2805,7 +2879,7 @@
       card.appendChild(list);
     }
     if (p.op === 'remove') {
-      card.appendChild(el('div', 'help', t('page.preview.sheet_removed')));
+      card.appendChild(el('div', 'help', p.kind === 'playlist' ? t('page.preview.playlist_discarded') : t('page.preview.sheet_removed')));
     } else if (p.kind === 'volumio_list') {
       const changes = (p.items || []).filter((c) => c.action !== 'kept');
       card.appendChild(el('div', 'help', changes.length ? t('page.preview.items_kept_changed', { kept: p.kept, changed: changes.length }) : t('page.preview.items_kept_nothing', { kept: p.kept })));
@@ -2846,7 +2920,7 @@
     const actions = el('div', 'actions');
     const changing = p.kind === 'tags' ? (p.files || []).filter((f) => f.changes.length).length : 0;
     const label = p.kind === 'cue' ? (p.op === 'remove' ? t('page.write.remove_sheet') : t('page.write.write_sheet'))
-      : p.kind === 'playlist' ? (p.exists ? t('page.write.write_playlist') : t('page.write.write_named', { name: p.file.split('/').pop() }))
+      : p.kind === 'playlist' ? (p.op === 'remove' ? t('page.write.discard_playlist') : (p.exists ? t('page.write.write_playlist') : t('page.write.write_named', { name: p.file.split('/').pop() })))
       : p.kind === 'volumio_playlist' ? t('page.write.write_volumio_playlist')
       : p.kind === 'volumio_list' ? t('page.write.write_list')
       : p.kind === 'tags' ? t('page.write.write_files', { n: changing })
@@ -2915,6 +2989,7 @@
     try { list = await api('/api/undo'); } catch (e) { return; }
     box.textContent = '';
     box.className = list.length ? '' : 'progress';
+    $('vacuum').disabled = !list.length;
     if (!list.length) { box.textContent = t('page.undo.nothing'); return; }
     list.forEach((b) => {
       const row = el('div', 'sugg batch');
@@ -2930,6 +3005,44 @@
       box.appendChild(row);
     });
   }
+
+  // Clear the whole journal after the page dialog confirms; undo for those batches is gone.
+  function askVacuum(list) {
+    const d = $('vacuum-dialog');
+    $('vacuum-text').textContent = t('page.undo.vacuum_confirm', { n: list.length });
+    const done = async (go) => {
+      d.hidden = true;
+      $('vacuum-cancel').onclick = null;
+      $('vacuum-go').onclick = null;
+      d.onkeydown = null;
+      if (!go) return;
+      $('vacuum').disabled = true;
+      const note = $('undo-note');
+      try {
+        const a = await api('/api/undo/vacuum', { method: 'POST' });
+        note.textContent = '';
+        note.appendChild(el('div', 'done', t('page.undo.vacuum_done', { n: a.cleared })));
+        note.hidden = false;
+        loadUndo();
+      } catch (e) {
+        note.textContent = '';
+        note.appendChild(el('div', 'done bad', String(e.message || e)));
+        note.hidden = false;
+        $('vacuum').disabled = false;
+      }
+    };
+    $('vacuum-cancel').onclick = () => done(false);
+    $('vacuum-go').onclick = () => done(true);
+    d.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(false); } };
+    d.hidden = false;
+    $('vacuum-cancel').focus();
+  }
+  $('vacuum').addEventListener('click', async () => {
+    let list;
+    try { list = await api('/api/undo'); } catch (e) { return; }
+    if (!list.length) return;
+    askVacuum(list);
+  });
 
   // The outcome goes above the list, which is read again and would wipe it.
   async function undoBatch(id, row, button) {

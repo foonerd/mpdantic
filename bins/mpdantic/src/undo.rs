@@ -134,6 +134,26 @@ impl Journal {
         batch.undone = true;
         self.record(&batch)
     }
+
+    /// Every batch directory removed; returns how many were cleared. Undo for
+    /// those writes is no longer possible.
+    pub fn vacuum(&self) -> Result<usize, Msg> {
+        let ids: Vec<String> = match fs::read_dir(&self.dir) {
+            Ok(read) => read
+                .flatten()
+                .filter(|e| e.path().join("manifest.json").is_file())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        let mut n = 0;
+        for id in ids {
+            let path = self.dir.join(&id);
+            fs::remove_dir_all(&path).map_err(|e| text::at(path.display(), e))?;
+            n += 1;
+        }
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +216,43 @@ mod tests {
         assert!(j.kept("100", "../manifest.json").is_err());
         assert!(j.kept("100", "nothing").is_err());
         assert_eq!(j.load("100").unwrap().entries[0].before_bytes, None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vacuum_clears_every_batch_including_undone() {
+        let dir = temp("vacuum");
+        let j = Journal::new(&dir);
+        let base = Batch {
+            id: "10".into(),
+            kind: "mpdignore".into(),
+            path: "NAS/Jazz".into(),
+            when: 10,
+            note: "one".into(),
+            entries: vec![Entry {
+                path: "NAS/Jazz/.mpdignore".into(),
+                op: "write_text".into(),
+                before: None,
+                before_bytes: Some("0.before".into()),
+                after: "*.iso\n".into(),
+            }],
+            undone: false,
+        };
+        j.record(&base).unwrap();
+        j.keep("10", "0.before", b"old").unwrap();
+        let other = Batch {
+            id: "20".into(),
+            when: 20,
+            ..base.clone()
+        };
+        j.record(&other).unwrap();
+        j.mark_undone("10").unwrap();
+        assert_eq!(j.list().len(), 2);
+        assert_eq!(j.vacuum().unwrap(), 2);
+        assert!(j.list().is_empty());
+        assert!(!dir.join("10").exists());
+        assert!(!dir.join("20").exists());
+        assert_eq!(j.vacuum().unwrap(), 0);
         fs::remove_dir_all(&dir).unwrap();
     }
 }
