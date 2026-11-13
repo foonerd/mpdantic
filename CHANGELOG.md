@@ -6,6 +6,15 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ### Fixed
 
+- A comment written onto an MP3 is a comment frame; it was refused by the writer, and the batch answered an error.
+- A track or disc number given twice stays two values (and is raised as a tag given twice); only a number beside a total tag shows as `n/total`.
+- MusicBrainz: a 503 (the site busy) is retried with a wait and then said as busy, not as an unreachable address; a transport error is said without the URL; an expired cached answer is served when the site cannot answer; after a release matched on the track count pairs nothing, the page offers the search without the count.
+- A folder rename moves the findings of the folder and of every folder under it to the new path; the undo moves them back.
+- Update library from the leave dialog leaves as soon as MPD has the job; a refusal is said in the dialog itself. The header's button says Updating while an update runs, on every tab, and the wait ends with the page's own job.
+- A phone: the tabs wrap so every tab is in view; the MusicBrainz hits are cards. The Organise preview no longer shows an empty file block. "Work through them" is not offered when nothing is open.
+- The dismissal of a code and of a folder ask through the page's own dialog, not the browser's.
+- The nine catalogues carry the library update, the leave dialog and the folder rename in their own language; the catalogue check refuses a value left in English.
+- The installer's refusal removes the helper at the path it installs; a library update covers the folders it then clears.
 - Mount helper installed root-owned at `/usr/local/libexec/mpdantic-mount` (outside the volumio-writable plugin tree); sudoers and uninstall follow.
 - MusicBrainz: one client per process so the 1 req/s throttle holds across Look ups; cache TTL (7 days, 1 day for empty search); search treats empty-album files alone as not a mix.
 - Organise replace journals the destination's bytes so undo restores Hits/; pending flush drops only the snapshot so folders added during an update stay; library Update always answers 200 with `update_error` when MPD fails.
