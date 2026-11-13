@@ -20,7 +20,9 @@ use lofty::ape::{ApeFile, ApeItem, ApeTag};
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::flac::FlacFile;
-use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame, TimestampFrame};
+use lofty::id3::v2::{
+    CommentFrame, Frame, FrameId, Id3v2Tag, TextInformationFrame, TimestampFrame,
+};
 use lofty::iff::aiff::AiffFile;
 use lofty::iff::wav::WavFile;
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst, Mp4File};
@@ -994,6 +996,25 @@ fn set_id3v2(tag: &mut Id3v2Tag, key: &str, values: &[String]) {
     if values.is_empty() {
         return;
     }
+    if key == "COMM" {
+        // A comment is its own frame kind (language, description, text), not a text
+        // frame. lofty keeps one comment frame per language and description, so a
+        // second value takes a numbered description; MPD reads every frame's text.
+        for (i, v) in values.iter().enumerate() {
+            let description = if i == 0 {
+                String::new()
+            } else {
+                (i + 1).to_string()
+            };
+            tag.insert(Frame::Comment(CommentFrame::new(
+                TextEncoding::UTF8,
+                *b"eng",
+                description,
+                v.clone(),
+            )));
+        }
+        return;
+    }
     let text = values.join("\0");
     let frame = if matches!(key, "TDRC" | "TDOR" | "TDEN" | "TDRL" | "TDTG") {
         match Timestamp::from_str(values[0].trim()) {
@@ -1687,9 +1708,12 @@ pub mod tests {
             },
             Edit {
                 name: "b.mp3".to_string(),
-                set: [("album".to_string(), "Sessions".to_string())]
-                    .into_iter()
-                    .collect(),
+                set: [
+                    ("album".to_string(), "Sessions".to_string()),
+                    ("comment".to_string(), "ripped by hand".to_string()),
+                ]
+                .into_iter()
+                .collect(),
             },
         ];
         let p = plan_edits(&dir, "INTERNAL/Jazz", &decoders(), &edits).unwrap();
@@ -1716,7 +1740,12 @@ pub mod tests {
         // The ID3v1-only MP3 gets a fresh ID3v2 with its fields and the edit.
         let b = &p.files[1];
         let keys: Vec<&str> = b.changes.iter().map(|c| c.key.as_str()).collect();
-        assert_eq!(keys, ["TIT2", "TPE1", "TRCK", "TALB"], "{:?}", b.changes);
+        assert_eq!(
+            keys,
+            ["TIT2", "TPE1", "TRCK", "TALB", "COMM"],
+            "{:?}",
+            b.changes
+        );
         apply_file(&dir.join("a.flac"), "flac", &a.changes).unwrap();
         apply_file(&dir.join("b.mp3"), "mp3", &b.changes).unwrap();
         let seen = tags::view(&tags::read(&dir.join("a.flac"), "flac"));
@@ -1728,7 +1757,39 @@ pub mod tests {
         let seen = tags::view(&tags::read(&dir.join("b.mp3"), "mp3"));
         assert_eq!(seen.album, ["Sessions"]);
         assert_eq!(seen.title, ["Title"]);
+        assert_eq!(
+            seen.comment,
+            ["ripped by hand"],
+            "a comment on an MP3 is a comment frame, read back as one value"
+        );
         assert!(!seen.id3v1_only);
+        // The comment changed again, then taken away: the frame goes with it.
+        apply_file(
+            &dir.join("b.mp3"),
+            "mp3",
+            &[KeyChange {
+                kind: Kind::Id3v2,
+                key: "COMM".to_string(),
+                before: vec!["ripped by hand".to_string()],
+                after: vec!["first".to_string(), "second".to_string()],
+            }],
+        )
+        .unwrap();
+        let seen = tags::view(&tags::read(&dir.join("b.mp3"), "mp3"));
+        assert_eq!(seen.comment, ["first", "second"]);
+        apply_file(
+            &dir.join("b.mp3"),
+            "mp3",
+            &[KeyChange {
+                kind: Kind::Id3v2,
+                key: "COMM".to_string(),
+                before: vec!["first".to_string(), "second".to_string()],
+                after: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let seen = tags::view(&tags::read(&dir.join("b.mp3"), "mp3"));
+        assert!(seen.comment.is_empty(), "{:?}", seen.comment);
         // Nothing to change, a file that is not in the folder, a bad track number.
         let same = plan_edits(
             &dir,
