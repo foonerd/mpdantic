@@ -6,7 +6,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [0.1.8] - 2026-11-13
 
-The ninth test cut, a pre-release as the eight before: the fixes of an audit of the eighth, the follow-up defects found on validating them, Wheaten's asks, a phone-width pass, and the catalogues complete in eleven languages. Validated on an x86 player with a real MPD; every write is still undoable from the Written tab.
+The ninth cut and the first published as a release, the eight before it pre-releases: the fixes of an audit of the eighth, the follow-up defects found on validating them, Wheaten's asks, a phone-width pass, and the catalogues complete in eleven languages. Validated on an x86 player with a real MPD; every write is still undoable from the Written tab.
 
 ### Fixed
 
