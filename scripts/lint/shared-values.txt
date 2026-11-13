@@ -1,0 +1,41 @@
+# Catalogue values that are the same word in more than one of the languages: a
+# non-English catalogue may carry these as the English without being untranslated.
+# One value per line; scripts/lint/catalogue.js reads this file.
+Tags
+Playlists
+Playlist
+System
+Audio
+Album
+Disc
+Genre
+Status
+Score
+Date
+Track
+Tracks
+Archive
+Image
+Name
+File
+Items
+Sheets
+Stream
+Streams
+Repository
+Releases
+Changelog
+Issues
+Volumio
+MusicBrainz
+error
+album
+date
+track
+playlist
+stream
+Archives
+Images
+Name:
+{path}: track "{track}"
+{path}: track 0

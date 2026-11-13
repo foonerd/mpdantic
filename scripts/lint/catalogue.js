@@ -4,8 +4,12 @@
 // key of the catalogue is used; the English the markup carries is the catalogue's;
 // every finding code's text is the core's; every msg! of the core is in the catalogue
 // with the same template, its arguments the template's placeholders; the markup a
-// text may carry is a link, a code word, a bold or a span and nothing else; and every
-// language's plural forms are as many as that language takes.
+// text may carry is a link, a code word, a bold or a span and nothing else; every
+// language's plural forms are as many as that language takes; and no language
+// carries the English where a translation is due (a value equal to the English with
+// a word of four letters outside its placeholders, unless the word is one the
+// languages share, listed in shared-values.txt; or a value that reads as English by
+// two of its small words, whatever the English says now).
 const fs = require('fs');
 
 const LANG = 'bins/mpdantic/assets/lang/';
@@ -114,7 +118,19 @@ for (const key of keys) {
   if (key.startsWith('core.') && !(key in core)) say('en.json: ' + key + ' has no msg! in the core');
 }
 
-// Every language: the markup a text may carry, and the plural forms it takes.
+// Every language: the markup a text may carry, the plural forms it takes, and no
+// English left where a translation is due.
+const shared = new Set(read('scripts/lint/shared-values.txt').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')));
+const wordy = (s) => /[A-Za-z]{4,}/.test(String(s).replace(/\{[^}]*\}/g, ''));
+// Small words no other catalogue language spells this way: two of them in one text
+// is English, translated or not when the English itself moved on.
+const ENGLISH = new Set(['the', 'and', 'with', 'from', 'this', 'that', 'not', 'are', 'you', 'your', 'every', 'when', 'which', 'folder', 'files', 'written', 'library', 'player', 'into', 'under', 'only', 'what', 'where']);
+const readsEnglish = (s) => {
+  const words = new Set(String(s).replace(/\{[^}]*\}/g, ' ').toLowerCase().match(/[a-z']+/g) || []);
+  let n = 0;
+  for (const w of words) if (ENGLISH.has(w)) n++;
+  return n >= 2;
+};
 const files = fs.readdirSync(LANG).filter((f) => /^[a-z]+\.json$/.test(f));
 for (const file of files) {
   const code = file.replace('.json', '');
@@ -123,6 +139,9 @@ for (const file of files) {
   const cat = JSON.parse(read(LANG + file));
   for (const [key, value] of Object.entries(cat)) {
     if (typeof value !== 'string') { say(file + ': ' + key + ' is not a text'); continue; }
+    const bare = value.replace(/\{[^}]*\}/g, '').trim();
+    if (code !== 'en' && key in en && value === en[key] && wordy(value) && !shared.has(value.trim()) && !shared.has(bare)) say(file + ': ' + key + ' is the English, untranslated: ' + JSON.stringify(value));
+    else if (code !== 'en' && readsEnglish(value)) say(file + ': ' + key + ' reads as English: ' + JSON.stringify(value.slice(0, 80)));
     for (const m of value.matchAll(/\{([a-z_]+)\|([^}]*)\}/g)) {
       const n = m[2].split('|').length;
       if (n !== forms) say(file + ': ' + key + ' lists ' + n + ' plural forms for ' + m[1] + '; ' + code + ' takes ' + forms);

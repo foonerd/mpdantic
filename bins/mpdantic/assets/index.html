@@ -64,6 +64,19 @@
   .tab:hover { background: none; color: var(--text); border-color: transparent; text-decoration: none; }
   .tabs .grow { flex: 1; }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  /* A phone: the tabs on as many rows as they take, every one in view; the
+     MusicBrainz hits as cards, a cell per line with its heading as the label. */
+  @media (max-width: 640px) {
+    .tabs { flex-wrap: wrap; overflow-x: visible; }
+    .tab { padding: 8px 12px; }
+    table.mb-hits, table.mb-hits tbody, table.mb-hits tr { display: block; width: 100%; }
+    table.mb-hits thead { display: none; }
+    table.mb-hits tr { padding: 6px 0; border-bottom: 1px solid var(--line); }
+    table.mb-hits td { display: inline-block; border: 0; padding: 1px 10px 1px 0; width: auto; }
+    table.mb-hits td.hit-title { display: block; font-weight: 600; font-size: 13px; }
+    table.mb-hits td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); }
+    table.mb-hits td.hit-use { display: block; padding-top: 4px; }
+  }
   .panel { margin-top: 12px; }
   .panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   /* The head's controls always sit on a line of their own, at the right: the spacer
@@ -435,6 +448,15 @@
     </div>
   </div>
 </div>
+<div class="dialog" id="confirm-dialog" hidden>
+  <div class="card" role="dialog" aria-modal="true">
+    <div class="text" id="confirm-text"></div>
+    <div class="actions">
+      <button class="primary" id="confirm-cancel" data-i18n="page.cancel">Cancel</button>
+      <button id="confirm-go"></button>
+    </div>
+  </div>
+</div>
 <div class="dialog" id="library-leave-dialog" hidden>
   <div class="card" role="dialog" aria-modal="true">
     <div class="text" id="library-leave-text"></div>
@@ -546,7 +568,11 @@
     const r = await fetch(url, Object.assign({ cache: 'no-store' }, options || {}));
     if (r.status === 204) return null;
     const body = await r.json().catch(() => ({ error: r.statusText }));
-    if (!r.ok) throw new Error(tm(body.error) || r.statusText);
+    if (!r.ok) {
+      const err = new Error(tm(body.error) || r.statusText);
+      err.key = body.error && body.error.k;
+      throw err;
+    }
     return body;
   }
 
@@ -1189,7 +1215,13 @@
 
   // Release lookup for the folder in hand: search, pick a hit, map onto the files,
   // Preview/Write through the existing tagedit path.
-  $('mb-search').addEventListener('click', async () => {
+  // The core's message is a sentence of its own (busy, unreachable, nothing paired);
+  // the generic one only when there is none.
+  const mbFailure = (e) => el('div', 'help bad', (e && e.message) || t('page.mb.error', { error: String(e) }));
+
+  // The look up, from the top of the ladder or from a step of it: after a release
+  // matched on the track count paired nothing, the search without the count.
+  async function mbSearch(step) {
     const box = $('mb-box');
     const preview = $('mb-preview-box');
     preview.textContent = '';
@@ -1197,7 +1229,9 @@
     box.appendChild(el('div', 'progress', t('page.mb.searching')));
     $('mb-search').disabled = true;
     try {
-      const page = await api('/api/mb/search', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ path: current.path }) });
+      const request = { path: current.path };
+      if (step) request.step = step;
+      const page = await api('/api/mb/search', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(request) });
       box.textContent = '';
       // Mix / dump folders: concrete destinations, not jargon — never a bare refuse.
       if (page.step === 'mixed_album') {
@@ -1250,7 +1284,7 @@
         return;
       }
       box.appendChild(el('div', 'help', t('page.mb.pick')));
-      const table = el('table', 'fx-table');
+      const table = el('table', 'fx-table mb-hits');
       const head = el('thead');
       const hr = el('tr');
       ['page.mb.score', 'page.field.album', 'page.field.albumartist', 'page.mb.date', 'page.mb.country', 'page.mb.status', 'page.mb.tracks', ''].forEach((k) => {
@@ -1259,13 +1293,16 @@
       head.appendChild(hr);
       table.appendChild(head);
       const body = el('tbody');
+      const labels = ['page.mb.score', '', 'page.field.albumartist', 'page.mb.date', 'page.mb.country', 'page.mb.status', 'page.mb.tracks'];
       hits.forEach((hit) => {
         const tr = el('tr');
         tr.style.cursor = 'pointer';
-        [String(hit.score || ''), hit.title || '', hit.artist || '', hit.date || '', hit.country || '', hit.status || '', String(hit.track_count || '')].forEach((v) => {
-          tr.appendChild(el('td', '', v));
+        [String(hit.score || ''), hit.title || '', hit.artist || '', hit.date || '', hit.country || '', hit.status || '', String(hit.track_count || '')].forEach((v, i) => {
+          const td = el('td', i === 1 ? 'hit-title' : '', v);
+          if (labels[i]) td.dataset.label = t(labels[i]);
+          tr.appendChild(td);
         });
-        const td = el('td');
+        const td = el('td', 'hit-use');
         const b = el('button', 'small', t('page.mb.use'));
         const use = async () => {
           preview.textContent = '';
@@ -1289,7 +1326,12 @@
             await again();
           } catch (e) {
             preview.textContent = '';
-            preview.appendChild(el('div', 'help bad', t('page.mb.error', { error: e.message || e })));
+            preview.appendChild(mbFailure(e));
+            if (e && e.key === 'core.mb.pair_failed' && s.tracks > 0 && page.step !== 'without_tracks') {
+              const next = el('button', 'small', t('page.mb.search_without_tracks'));
+              next.addEventListener('click', () => mbSearch('without_tracks'));
+              preview.appendChild(next);
+            }
           }
         };
         b.addEventListener('click', (ev) => { ev.stopPropagation(); use(); });
@@ -1302,11 +1344,12 @@
       box.appendChild(table);
     } catch (e) {
       box.textContent = '';
-      box.appendChild(el('div', 'help bad', t('page.mb.error', { error: e.message || e })));
+      box.appendChild(mbFailure(e));
     } finally {
       $('mb-search').disabled = false;
     }
-  });
+  }
+  $('mb-search').addEventListener('click', () => mbSearch(null));
 
   // ----------------------------------------------------- file names and tags
 
@@ -2069,6 +2112,7 @@
       line.hidden = false;
       const vars = { path: theLibrary(o.path), when: when(o.when), open: o.open, folders: o.open_folders };
       line.appendChild(el('span', '', t(o.open ? 'page.findings.of_last_check' : 'page.findings.none_open', vars) + (o.cancelled ? ' ' + t('page.check_cancelled') : '')));
+      if (!o.open) return;
       const b = el('button', 'small', t('page.findings.work_through'));
       b.addEventListener('click', () => openFindings(kind));
       line.appendChild(b);
@@ -2317,12 +2361,34 @@
     }
   }
 
+  // The page's own confirm: the text, Cancel as the primary with the focus, the
+  // action second, Escape as Cancel. The browser's dialogs are not used.
+  function askConfirm(message, action) {
+    return new Promise((resolve) => {
+      const d = $('confirm-dialog');
+      $('confirm-text').textContent = message;
+      $('confirm-go').textContent = action;
+      const done = (yes) => {
+        d.hidden = true;
+        $('confirm-cancel').onclick = null;
+        $('confirm-go').onclick = null;
+        d.onkeydown = null;
+        resolve(yes);
+      };
+      $('confirm-cancel').onclick = () => done(false);
+      $('confirm-go').onclick = () => done(true);
+      d.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(false); } };
+      d.hidden = false;
+      $('confirm-cancel').focus();
+    });
+  }
+
   async function fxBulkDismiss(scope, code) {
     const on = true;
     let body;
     if (scope === 'all') {
       const n = (fx.overview && fx.overview.by_code_open && fx.overview.by_code_open[code]) || fx.total || 0;
-      if (!window.confirm(t('page.findings.dismiss_all_confirm', { code, n }))) return;
+      if (!(await askConfirm(t('page.findings.dismiss_all_confirm', { code, n }), t('page.findings.dismiss')))) return;
       body = { all: true, code, dismissed: on };
     } else {
       const table = $('fx-folders').querySelector('table.fx-table');
@@ -2400,7 +2466,7 @@
     if (open.length) {
       const dismissFolder = el('button', 'small', t('page.findings.dismiss_folder'));
       dismissFolder.addEventListener('click', async () => {
-        if (!window.confirm(t('page.findings.dismiss_folder_confirm', { n: open.length }))) return;
+        if (!(await askConfirm(t('page.findings.dismiss_folder_confirm', { n: open.length }), t('page.findings.dismiss')))) return;
         dismissFolder.disabled = true;
         try {
           await api('/api/findings/' + fx.kind + '/dismiss', {
@@ -2991,7 +3057,7 @@
       card.appendChild(el('pre', 'file', p.after || t('page.preview.empty')));
     } else if (p.kind === 'tags') {
       card.appendChild(el('div', 'help', t('page.preview.tags_help')));
-    } else if (p.kind !== 'rename') {
+    } else if (!['rename', 'folder', 'organise'].includes(p.kind)) {
       if ((p.kind === 'cue' || p.kind === 'playlist') && p.exists) {
         card.appendChild(el('div', 'help', t('page.preview.as_is')));
         card.appendChild(el('pre', 'file', p.before));
@@ -3044,6 +3110,9 @@
   }
 
   let libraryPending = [];
+  // Whether an update this page asked for is still running in MPD: the header's
+  // button stays, disabled, saying so, whichever tab is open.
+  let libraryUpdating = false;
   async function refreshLibraryPending() {
     try {
       const a = await api('/api/library/pending');
@@ -3055,8 +3124,9 @@
     const head = $('library-update');
     const undoBtn = $('library-update-undo');
     if (head) {
-      head.hidden = !on;
-      head.disabled = !on;
+      head.hidden = !on && !libraryUpdating;
+      head.disabled = !on || libraryUpdating;
+      head.textContent = libraryUpdating ? t('page.library.updating_short') : t('page.library.update');
       head.title = on
         ? t('page.library.update_title') + ' ' + t('page.library.pending_paths', { n: libraryPending.length })
         : t('page.library.update_title');
@@ -3076,10 +3146,12 @@
         const a = await api('/api/library/pending');
         updating = a.updating_db;
       } catch (e) { break; }
+      // Ours is done when MPD names no job, or a later one.
+      const ours = updating !== null && updating !== undefined && Number(updating) <= Number(job);
       if (note) {
         note.textContent = '';
         const line = el('div', 'done');
-        if (updating !== null && updating !== undefined) {
+        if (ours) {
           line.appendChild(el('span', 'tag warn', t('page.library.update')));
           line.appendChild(text(' ' + t('page.library.updating', { job: updating })));
         } else {
@@ -3089,7 +3161,7 @@
         note.appendChild(line);
         note.hidden = false;
       }
-      if (updating === null || updating === undefined) return;
+      if (!ours) return;
     }
   }
 
@@ -3111,12 +3183,16 @@
         note.appendChild(done);
         note.hidden = false;
       }
+      const accepted = !a.update_error && a.updated !== null && a.updated !== undefined;
+      libraryUpdating = accepted;
       await refreshLibraryPending();
-      if (!a.update_error && a.updated !== null && a.updated !== undefined) {
+      if (accepted) {
         await waitLibraryUpdating(a.updated, note);
+        libraryUpdating = false;
+        await refreshLibraryPending();
       }
       if (button) button.disabled = false;
-      return !a.update_error && a.updated !== null && a.updated !== undefined;
+      return accepted;
     } catch (e) {
       if (note) {
         note.textContent = '';
@@ -3142,16 +3218,31 @@
     const d = $('library-leave-dialog');
     $('library-leave-text').textContent = t('page.library.leave_text', { n: libraryPending.length });
     const finish = async (choice) => {
+      if (choice === 'update') {
+        // MPD runs the update by itself once it has the job, so the page leaves
+        // then; a refusal stays in the dialog, with the same three ways out.
+        const go = $('library-leave-update');
+        go.disabled = true;
+        let a;
+        try {
+          a = await api('/api/library/update', { method: 'POST' });
+        } catch (e) {
+          a = { update_error: String(e.message || e) };
+        }
+        go.disabled = false;
+        await refreshLibraryPending();
+        if (a.update_error || a.updated === null || a.updated === undefined) {
+          $('library-leave-text').textContent = t('page.library.not_updated', { error: a.update_error || '' });
+          go.focus();
+          return;
+        }
+      }
       d.hidden = true;
       $('library-leave-stay').onclick = null;
       $('library-leave-without').onclick = null;
       $('library-leave-update').onclick = null;
       d.onkeydown = null;
       if (choice === 'stay') return;
-      if (choice === 'update') {
-        const ok = await updateLibrary($('library-leave-update'));
-        if (!ok) return;
-      }
       onLeave();
     };
     $('library-leave-stay').onclick = () => finish('stay');
