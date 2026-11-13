@@ -885,27 +885,21 @@ pub fn view(raw: &Raw) -> Seen {
     seen
 }
 
-/// Show disc/track as `n/total` when the tagger wrote the pair as two values or
-/// as number plus TOTALDISCS / TOTALTRACKS.
-fn fold_number_total(values: &mut Vec<String>, total: Option<&str>) {
+/// Show disc/track as `n/total` when the tagger wrote the number and a total tag
+/// (TOTALTRACKS, TRACKTOTAL, TOTALDISCS, DISCTOTAL) beside it. Only that: a number
+/// given twice stays two values, so the tag check can say so (T09) and the editor
+/// does not show a total the file never had.
+fn fold_number_total(values: &mut [String], total: Option<&str>) {
     let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if values.len() == 1 {
-        let n = values[0].trim();
-        if n.contains('/') {
-            return;
-        }
-        if let Some(t) = total.map(str::trim).filter(|t| digits(t)) {
-            if digits(n) {
-                values[0] = format!("{n}/{t}");
-            }
-        }
+    let [n] = values else {
+        return;
+    };
+    if n.contains('/') {
         return;
     }
-    if values.len() == 2 {
-        let a = values[0].trim();
-        let b = values[1].trim();
-        if digits(a) && digits(b) {
-            *values = vec![format!("{a}/{b}")];
+    if let Some(t) = total.map(str::trim).filter(|t| digits(t)) {
+        if digits(n.trim()) {
+            *n = format!("{}/{t}", n.trim());
         }
     }
 }
@@ -1028,6 +1022,39 @@ pub mod tests {
         let s = view(&read(&path, "flac"));
         assert_eq!(s.disc, ["1/2"]);
         assert_eq!(s.track, ["3/10"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_number_given_twice_stays_two_values_and_a_slash_is_left_alone() {
+        // Two values are two values: no total invented from a tag given twice.
+        let mut twice = vec!["1".to_string(), "12".to_string()];
+        fold_number_total(&mut twice, None);
+        assert_eq!(twice, ["1", "12"]);
+        fold_number_total(&mut twice, Some("12"));
+        assert_eq!(
+            twice,
+            ["1", "12"],
+            "a total folds into one number, never two"
+        );
+        let mut one = vec!["3".to_string()];
+        fold_number_total(&mut one, Some(" 9 "));
+        assert_eq!(one, ["3/9"]);
+        let mut word = vec!["three".to_string()];
+        fold_number_total(&mut word, Some("9"));
+        assert_eq!(word, ["three"], "only a number takes a total");
+        // Through a file: a value with its slash is left as written.
+        let path = temp("disc-slash.flac");
+        File::create(&path)
+            .unwrap()
+            .write_all(&flac_bytes(
+                44100,
+                44100,
+                &[("DISCNUMBER", "1/2"), ("TOTALDISCS", "3"), ("TITLE", "One")],
+            ))
+            .unwrap();
+        let s = view(&read(&path, "flac"));
+        assert_eq!(s.disc, ["1/2"]);
         let _ = std::fs::remove_file(&path);
     }
 
