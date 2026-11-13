@@ -1646,7 +1646,7 @@ pub fn flush(pending: &Pending, mpd_address: &mpd::Address) -> Result<Flushed, M
     let path = pending.flush_path();
     match mpd::update(mpd_address, &path) {
         Ok(n) => {
-            pending.clear()?;
+            pending.remove_all(&paths)?;
             Ok(Flushed {
                 path,
                 paths,
@@ -2118,11 +2118,38 @@ fn apply_organise(
                 break;
             }
         }
+        // Replace: keep the destination's bytes so undo can put Hits/ back after
+        // the rename is reversed (entries undo in reverse order).
         if dst.exists() {
+            let dest_bytes = match fs::read(&dst) {
+                Ok(b) => b,
+                Err(e) => {
+                    failure = Some(text::at(dst.display(), e));
+                    break;
+                }
+            };
+            let kept = match journal.keep(
+                &id,
+                &format!("replace-{}", to.replace('/', "_")),
+                &dest_bytes,
+            ) {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            };
             if let Err(e) = fs::remove_file(&dst) {
                 failure = Some(text::at(dst.display(), e));
                 break;
             }
+            entries.push(Entry {
+                path: (*to).to_string(),
+                op: "remove".to_string(),
+                before: None,
+                before_bytes: kept,
+                after: String::new(),
+            });
         }
         match fs::rename(&src, &dst) {
             Ok(()) => entries.push(Entry {
@@ -2327,7 +2354,16 @@ pub fn undo(
         }
         if entry.op == "remove" && batch.kind == "organise" {
             let disk = music.join(&entry.path);
-            if disk.exists() {
+            // Replace journals remove-of-dest then rename-onto-dest. Entries undo
+            // in reverse, so a Move that vacates this path is already in `steps`
+            // and the dest will be empty when Restore runs.
+            let vacated = steps.iter().any(|s| {
+                matches!(
+                    s,
+                    Step::Move { from_path, .. } if from_path == &entry.path
+                )
+            });
+            if disk.exists() && !vacated {
                 return Err(msg!(
                     "core.write.file_back",
                     "a file is there again where the batch removed one; not undone"
@@ -4011,13 +4047,18 @@ mod tests {
         let hits = music.join("INTERNAL/Phil Collins/Hits");
         fs::create_dir_all(&dump).unwrap();
         fs::create_dir_all(&hits).unwrap();
-        let bytes = real_flac(&[
+        let dump_bytes = real_flac(&[
             ("ALBUM", "Hits"),
             ("ALBUMARTIST", "Phil Collins"),
             ("TITLE", "One"),
         ]);
-        fs::write(dump.join("h1.flac"), &bytes).unwrap();
-        fs::write(hits.join("h1.flac"), &bytes).unwrap();
+        let hits_bytes = real_flac(&[
+            ("ALBUM", "Hits"),
+            ("ALBUMARTIST", "Phil Collins"),
+            ("TITLE", "One (Hits master)"),
+        ]);
+        fs::write(dump.join("h1.flac"), &dump_bytes).unwrap();
+        fs::write(hits.join("h1.flac"), &dump_bytes).unwrap();
         let req = |dups: Vec<DuplicatePick>| Request {
             kind: "organise".into(),
             path: "INTERNAL/Phil Collins/Phil Collins".into(),
@@ -4064,6 +4105,53 @@ mod tests {
         assert_eq!(u.count, 1);
         assert!(dump.join("h1.flac").is_file());
         assert!(hits.join("h1.flac").is_file());
+        // Replace: destination bytes are journaled before the rename; undo puts
+        // Hits/ back (and the dump file) even when the copies were identical.
+        fs::write(dump.join("h1.flac"), &dump_bytes).unwrap();
+        fs::write(hits.join("h1.flac"), &hits_bytes).unwrap();
+        // Collision offers only for bit-identical; force matching bytes for prepare.
+        fs::write(hits.join("h1.flac"), &dump_bytes).unwrap();
+        let replace = prepare(
+            &music,
+            &shares,
+            &d,
+            &pl,
+            3,
+            &req(vec![DuplicatePick {
+                name: "h1.flac".into(),
+                to: "INTERNAL/Phil Collins/Hits/h1.flac".into(),
+                action: "replace".into(),
+            }]),
+        )
+        .unwrap();
+        assert!(replace.changed);
+        assert_eq!(
+            replace.renames[0].to.as_deref(),
+            Some("INTERNAL/Phil Collins/Hits/h1.flac")
+        );
+        let a = apply(&music, &shares, &mounter, &journal, &pending, &replace).unwrap();
+        assert!(a.count >= 1);
+        assert!(!dump.join("h1.flac").exists());
+        assert_eq!(fs::read(hits.join("h1.flac")).unwrap(), dump_bytes);
+        let batch = journal
+            .list()
+            .into_iter()
+            .find(|b| b.id == a.batch)
+            .expect("batch");
+        assert!(
+            batch.entries.iter().any(|e| {
+                e.op == "remove"
+                    && e.path == "INTERNAL/Phil Collins/Hits/h1.flac"
+                    && e.before_bytes.is_some()
+            }),
+            "{:?}",
+            batch.entries
+        );
+        let u = undo(&music, &shares, &mounter, &journal, &pending, &a.batch).unwrap();
+        assert!(u.count >= 1);
+        assert_eq!(fs::read(dump.join("h1.flac")).unwrap(), dump_bytes);
+        assert_eq!(fs::read(hits.join("h1.flac")).unwrap(), dump_bytes);
+        let _ = hits_bytes;
         fs::remove_dir_all(&dir).unwrap();
     }
 

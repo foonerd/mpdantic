@@ -143,12 +143,19 @@ pub struct Dismissal {
 pub struct Filter {
     pub codes: Vec<String>,
     pub dismissed: bool,
+    /// When set, only rows whose folder is this path (album / folder dismiss).
+    pub folder: Option<String>,
 }
 
 impl Filter {
     fn takes(&self, row: &Row, dismissed: bool) -> bool {
         (self.codes.is_empty() || self.codes.iter().any(|c| c == &row.code))
             && (self.dismissed || !dismissed)
+            && self
+                .folder
+                .as_ref()
+                .map(|f| f == &row.folder)
+                .unwrap_or(true)
     }
 }
 
@@ -595,6 +602,11 @@ impl Store {
                         {
                             return None;
                         }
+                        if let Some(folder) = &filter.folder {
+                            if &row.folder != folder {
+                                return None;
+                            }
+                        }
                         let gone = dismissed.contains(&(row.code.clone(), row.path.clone()));
                         // Dismiss open ones; restore dismissed ones.
                         if on == gone {
@@ -974,6 +986,7 @@ mod tests {
             let only_t06 = Filter {
                 codes: vec!["T06".to_string()],
                 dismissed: false,
+                folder: None,
             };
             let page = store.folders("tags", &only_t06, 0, 50).unwrap();
             assert_eq!(page.total, 1);
@@ -981,6 +994,7 @@ mod tests {
             let only_t04 = Filter {
                 codes: vec!["T04".to_string()],
                 dismissed: false,
+                folder: None,
             };
             let files = store.rows_page("tags", &only_t04, 0, 2).unwrap();
             assert_eq!(files.total, 3);
@@ -1021,6 +1035,7 @@ mod tests {
         let only_t04 = Filter {
             codes: vec!["T04".to_string()],
             dismissed: false,
+            folder: None,
         };
         assert_eq!(store.dismiss_filter("tags", &only_t04, true).unwrap(), 3);
         assert_eq!(store.overview("tags").unwrap().open, 1);
@@ -1072,6 +1087,7 @@ mod tests {
         let with = Filter {
             codes: vec![],
             dismissed: true,
+            folder: None,
         };
         let page = store.folders("tags", &with, 0, 50).unwrap();
         assert_eq!(page.total, 2);
@@ -1173,6 +1189,7 @@ mod tests {
                 &Filter {
                     codes: vec![],
                     dismissed: true,
+                    folder: None,
                 },
             )
             .unwrap();
@@ -1186,6 +1203,7 @@ mod tests {
                 &Filter {
                     codes: vec!["T04".into()],
                     dismissed: false,
+                    folder: None,
                 },
             )
             .unwrap();

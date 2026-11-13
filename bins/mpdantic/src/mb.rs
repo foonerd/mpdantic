@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -31,6 +31,10 @@ use crate::text::Msg;
 
 /// How long between live calls to the public MusicBrainz site from this process.
 const MIN_GAP: Duration = Duration::from_secs(1);
+/// How long a successful cached body is trusted before a live refetch.
+const CACHE_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Empty search results expire sooner so a later MusicBrainz addition is seen.
+const CACHE_TTL_EMPTY: Duration = Duration::from_secs(24 * 3600);
 /// How many times a 503 is retried, waiting longer each time.
 #[cfg(not(test))]
 const BACKOFF: &[Duration] = &[
@@ -86,7 +90,6 @@ impl Client {
     /// the shell's settings; cache under the data folder.
     pub fn from_settings(settings: &Path, cache: PathBuf) -> Client {
         let (base, throttle) = endpoint_from(settings);
-        let _ = fs::create_dir_all(&cache);
         Client {
             base,
             throttle,
@@ -98,7 +101,6 @@ impl Client {
 
     #[cfg(test)]
     fn with_fetch(base: &str, throttle: bool, cache: PathBuf, fetch: Box<dyn Fetch>) -> Client {
-        let _ = fs::create_dir_all(&cache);
         Client {
             base: base.trim_end_matches('/').to_string(),
             throttle,
@@ -108,15 +110,24 @@ impl Client {
         }
     }
 
+    /// Refresh the base URL and throttle flag from the shell's settings; keep the
+    /// throttle clock and the cache so a settings change does not reset the gap.
+    pub fn refresh_endpoint(&mut self, settings: &Path) {
+        let (base, throttle) = endpoint_from(settings);
+        self.base = base;
+        self.throttle = throttle;
+    }
+
     /// Search releases for the folder's tags; empty artist and album refuse.
-    /// More than one album tag returns a guide (step `mixed_album`) with the groups —
+    /// More than one *named* album returns a guide (step `mixed_album`) with the groups —
     /// no MusicBrainz call — so the page can say what to do with a mix or dump.
+    /// Files without an album tag alone do not count as a mix (same as map).
     /// Ladder: as tagged → normalised album with tracks → normalised without tracks.
     pub fn search(&self, music: &Path, path: &str, decoders: &Decoders) -> Result<SearchPage, Msg> {
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
         let groups = organise::album_groups_for_folder(path, &files);
-        if groups.len() > 1 {
+        if organise::mixed_named_albums(&files) {
             return Ok(SearchPage {
                 query: Query {
                     artist: String::new(),
@@ -314,12 +325,25 @@ impl Client {
     fn get_cached(&self, url: &str) -> Result<String, Msg> {
         let key = cache_key(url);
         let file = self.cache.join(&key);
-        if let Ok(text) = fs::read_to_string(&file) {
-            if !text.is_empty() {
-                return Ok(text);
+        if let Ok(meta) = fs::metadata(&file) {
+            if let (Ok(text), Ok(modified)) = (fs::read_to_string(&file), meta.modified()) {
+                if !text.is_empty() {
+                    let age = SystemTime::now()
+                        .duration_since(modified)
+                        .unwrap_or(Duration::MAX);
+                    let ttl = if cache_body_empty(&text) {
+                        CACHE_TTL_EMPTY
+                    } else {
+                        CACHE_TTL
+                    };
+                    if age < ttl {
+                        return Ok(text);
+                    }
+                }
             }
         }
         let body = self.get_live(url)?;
+        let _ = fs::create_dir_all(&self.cache);
         let tmp = self.cache.join(format!("{key}.part"));
         if fs::write(&tmp, &body).is_ok() {
             let _ = fs::rename(&tmp, &file);
@@ -411,6 +435,14 @@ fn truncate(s: &str, n: usize) -> String {
         t.push('…');
     }
     t
+}
+
+fn cache_body_empty(body: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("releases").cloned())
+        .and_then(|r| r.as_array().map(|a| a.is_empty()))
+        .unwrap_or(false)
 }
 
 fn cache_key(url: &str) -> String {
@@ -1209,7 +1241,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.k, "core.mb.http");
         assert!(err.contains("503"), "{err}");
-        fs::remove_dir_all(&dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1755,5 +1787,44 @@ mod tests {
         );
         assert_eq!(normalise_title("…Hits"), "hits");
         assert_eq!(normalise_title("  Both  Sides! "), "both sides");
+    }
+
+    #[test]
+    fn the_public_throttle_holds_across_two_live_gets_on_one_client() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        struct CountingFetch {
+            n: Arc<AtomicUsize>,
+        }
+        impl Fetch for CountingFetch {
+            fn get(&self, _: &str) -> Result<(u16, String), String> {
+                self.n.fetch_add(1, Ordering::SeqCst);
+                Ok((200, r#"{"releases":[]}"#.into()))
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("mpdantic-mb-throttle-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        let n = Arc::new(AtomicUsize::new(0));
+        let client = Client::with_fetch(
+            "https://musicbrainz.org",
+            true,
+            cache,
+            Box::new(CountingFetch { n: n.clone() }),
+        );
+        let t0 = Instant::now();
+        client
+            .get_live("https://musicbrainz.org/ws/2/release/?query=one&fmt=json")
+            .unwrap();
+        client
+            .get_live("https://musicbrainz.org/ws/2/release/?query=two&fmt=json")
+            .unwrap();
+        assert!(
+            t0.elapsed() >= MIN_GAP,
+            "two throttled gets finished in {:?}",
+            t0.elapsed()
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 2);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

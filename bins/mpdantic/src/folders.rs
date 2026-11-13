@@ -53,7 +53,7 @@ pub fn is_root_folder(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
     matches!(
         parts.as_slice(),
-        ["INTERNAL"] | ["USB"] | ["NAS"] | ["NAS", _]
+        ["INTERNAL"] | ["USB"] | ["USB", _] | ["NAS"] | ["NAS", _]
     )
 }
 
@@ -247,6 +247,8 @@ mod tests {
         assert_eq!(layout_base("INTERNAL"), "INTERNAL");
         assert!(is_root_folder("INTERNAL"));
         assert!(is_root_folder("NAS/multimedia"));
+        assert!(is_root_folder("USB/MyStick"));
+        assert!(!is_root_folder("USB/MyStick/Album"));
         assert!(!is_root_folder("INTERNAL/Peter Hollens/MR0XF1~N"));
     }
 

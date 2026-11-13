@@ -4,6 +4,19 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Mount helper installed root-owned at `/usr/local/libexec/mpdantic-mount` (outside the volumio-writable plugin tree); sudoers and uninstall follow.
+- MusicBrainz: one client per process so the 1 req/s throttle holds across Look ups; cache TTL (7 days, 1 day for empty search); search treats empty-album files alone as not a mix.
+- Organise replace journals the destination's bytes so undo restores Hits/; pending flush drops only the snapshot so folders added during an update stay; library Update always answers 200 with `update_error` when MPD fails.
+- Folder rename / organise refresh findings on old and new paths; USB/`<drive>` treated as a root for rename.
+- Tags teaser Work through uses findings open counts (dismissals applied); T09 multi-Artist ignored when AlbumArtist is set; T10 Various Artists only as Artist without AlbumArtist; disc/track show as n/total when TOTALDISCS / TOTALTRACKS (or a pair of numbers) is present.
+- Favourites/lists: relocate a share remounted under another name (`NAS/Old/…` → `NAS/New/…` when unique); Update library polls `updating_db` until MPD finishes.
+
+### Changed
+
+- Tag editor column picker remembered in the browser; findings folder card can dismiss every open finding in that folder.
+
 ## [0.1.7] - 2026-11-12
 
 The eighth test cut, a pre-release as the seven before: **Update library** defers MPD's update (and Volumio's album-list rebuild) until you ask, so many albums cost one rebuild. Driven on the same two players. Every write is still undoable from the Written tab.

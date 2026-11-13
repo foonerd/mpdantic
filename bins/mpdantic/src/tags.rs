@@ -694,6 +694,8 @@ impl Seen {
 /// MPD's view of the blocks, by the rules of each block's kind.
 pub fn view(raw: &Raw) -> Seen {
     let mut seen = Seen::default();
+    let mut total_discs: Option<String> = None;
+    let mut total_tracks: Option<String> = None;
     let has_more_than_v1 = raw.blocks.iter().any(|b| b.kind != Kind::Id3v1);
     for block in &raw.blocks {
         match block.kind {
@@ -703,6 +705,19 @@ pub fn view(raw: &Raw) -> Seen {
                     if key == "cuesheet" {
                         // Read by MPD's embedded cue plugin, not as a tag.
                         seen.cuesheet = true;
+                        continue;
+                    }
+                    // Not read by MPD; used only to show disc/track as n/total.
+                    if key == "totaldiscs" || key == "disctotal" {
+                        if total_discs.is_none() {
+                            total_discs = Some(item.value.clone());
+                        }
+                        continue;
+                    }
+                    if key == "totaltracks" || key == "tracktotal" {
+                        if total_tracks.is_none() {
+                            total_tracks = Some(item.value.clone());
+                        }
                         continue;
                     }
                     let name = match key.as_str() {
@@ -865,7 +880,34 @@ pub fn view(raw: &Raw) -> Seen {
             }
         }
     }
+    fold_number_total(&mut seen.disc, total_discs.as_deref());
+    fold_number_total(&mut seen.track, total_tracks.as_deref());
     seen
+}
+
+/// Show disc/track as `n/total` when the tagger wrote the pair as two values or
+/// as number plus TOTALDISCS / TOTALTRACKS.
+fn fold_number_total(values: &mut Vec<String>, total: Option<&str>) {
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if values.len() == 1 {
+        let n = values[0].trim();
+        if n.contains('/') {
+            return;
+        }
+        if let Some(t) = total.map(str::trim).filter(|t| digits(t)) {
+            if digits(n) {
+                values[0] = format!("{n}/{t}");
+            }
+        }
+        return;
+    }
+    if values.len() == 2 {
+        let a = values[0].trim();
+        let b = values[1].trim();
+        if digits(a) && digits(b) {
+            *values = vec![format!("{a}/{b}")];
+        }
+    }
 }
 
 /// UTF-8 read as Latin-1: an accented letter shows as two characters, the first in
@@ -964,6 +1006,29 @@ pub mod tests {
         out.extend_from_slice(&data);
         out.extend_from_slice(&tag);
         out
+    }
+
+    #[test]
+    fn disc_and_track_show_as_n_over_total() {
+        let path = temp("disc-total.flac");
+        File::create(&path)
+            .unwrap()
+            .write_all(&flac_bytes(
+                44100,
+                44100,
+                &[
+                    ("DISCNUMBER", "1"),
+                    ("TOTALDISCS", "2"),
+                    ("TRACKNUMBER", "3"),
+                    ("TOTALTRACKS", "10"),
+                    ("TITLE", "One"),
+                ],
+            ))
+            .unwrap();
+        let s = view(&read(&path, "flac"));
+        assert_eq!(s.disc, ["1/2"]);
+        assert_eq!(s.track, ["3/10"]);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -66,8 +66,14 @@ impl Pending {
         common_ancestor(&paths)
     }
 
-    pub fn clear(&self) -> Result<(), Msg> {
-        self.paths.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    /// Drop only the paths a flush covered; folders added while MPD was updating stay.
+    pub fn remove_all(&self, folders: &[String]) -> Result<(), Msg> {
+        {
+            let mut paths = self.paths.lock().unwrap_or_else(|e| e.into_inner());
+            for f in folders {
+                paths.remove(f.trim_matches('/'));
+            }
+        }
         self.save()
     }
 
@@ -139,7 +145,8 @@ mod tests {
         );
         let again = Pending::open(&dir);
         assert_eq!(again.list(), p.list());
-        again.clear().unwrap();
+        let all = again.list();
+        again.remove_all(&all).unwrap();
         assert!(Pending::open(&dir).list().is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -166,5 +173,18 @@ mod tests {
             common_ancestor(&["NAS/QNAP/A".to_string(), "NAS/QNAP/A/Album".to_string()]),
             "NAS/QNAP/A"
         );
+    }
+
+    #[test]
+    fn remove_all_keeps_folders_added_during_a_flush() {
+        let dir = temp("remove-all");
+        let p = Pending::open(&dir);
+        p.add("NAS/A").unwrap();
+        p.add("NAS/B").unwrap();
+        let snapshot = p.list();
+        p.add("NAS/C").unwrap();
+        p.remove_all(&snapshot).unwrap();
+        assert_eq!(p.list(), vec!["NAS/C".to_string()]);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

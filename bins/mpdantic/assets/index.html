@@ -1020,8 +1020,22 @@
   const original = (file, f) => (file.values[f] || []).join(' ; ');
 
   // `nodes`: the grid's box, the count's span, the Preview button, the preview's box.
+  function loadEditorColumns() {
+    try {
+      const raw = localStorage.getItem('mpdantic.editor.columns');
+      if (!raw) return null;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return null;
+      const kept = EDIT_FIELDS.filter((f) => list.includes(f));
+      return kept.length ? kept : null;
+    } catch (e) { return null; }
+  }
+  function saveEditorColumns(cols) {
+    try { localStorage.setItem('mpdantic.editor.columns', JSON.stringify(cols)); } catch (e) { /* no storage */ }
+  }
+
   function makeEditor(nodes) {
-    const grid = { path: null, files: [], edits: {}, columns: ['track', 'title', 'artist', 'albumartist', 'album', 'date'] };
+    const grid = { path: null, files: [], edits: {}, columns: loadEditorColumns() || ['track', 'title', 'artist', 'albumartist', 'album', 'date'] };
 
     // The grid read from the folder; the preview box is cleared when the editor is
     // opened, kept when the grid is read again after a write (the outcome stays).
@@ -1078,6 +1092,7 @@
         c.checked = grid.columns.includes(f);
         c.addEventListener('change', () => {
           grid.columns = EDIT_FIELDS.filter((x) => (x === f ? c.checked : grid.columns.includes(x)));
+          saveEditorColumns(grid.columns);
           render();
         });
         l.appendChild(c);
@@ -1794,16 +1809,27 @@
   }
 
   // The five examples (or the totals table) are a teaser; each code opens the work list on that code.
-  function codeWorkThrough(box, kind, r) {
+  // Counts come from the findings store's open rows (dismissals already applied), not the raw report.
+  async function codeWorkThrough(box, kind, r) {
     const codes = Object.keys(r.by_code || {});
     if (!codes.length) return;
+    let openBy = r.by_code || {};
+    try {
+      const all = await api('/api/findings');
+      const o = all && all[kind];
+      if (o && o.by_code_open) openBy = o.by_code_open;
+    } catch (e) { /* report counts if the store is not there yet */ }
     const row = el('div', 'actions');
+    let any = false;
     codes.forEach((code) => {
-      const b = el('button', 'small', t('page.findings.work_through_code', { code, n: r.by_code[code] }));
+      const n = openBy[code] || 0;
+      if (!n) return;
+      any = true;
+      const b = el('button', 'small', t('page.findings.work_through_code', { code, n }));
       b.addEventListener('click', () => openFindings(kind, [code]));
       row.appendChild(b);
     });
-    box.appendChild(row);
+    if (any) box.appendChild(row);
   }
 
   function findingLine(f) {
@@ -1902,23 +1928,33 @@
     });
     const codes = Object.keys(r.findings);
     const f = section(box, t('page.tags.would_see'), codes.length ? notes.join(' ') : notes.join(' ') + ' ' + t('page.tags.nothing'));
-    codes.forEach((code) => {
-      const g = r.findings[code];
-      const d = el('div', 'sugg');
-      const top = el('div', 'top');
-      top.appendChild(el('code', '', code));
-      // A code raised once per folder counts folders, as the core says; the rest count files.
-      const unit = (r.per_folder || []).indexOf(code) >= 0 ? 'page.count.folders' : 'page.files';
-      top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t(unit, { n: g.count })));
-      // The five examples are a teaser; the work list holds every finding.
-      const work = el('button', 'small', t('page.findings.work_through_code', { code, n: g.count }));
-      work.addEventListener('click', () => openFindings('tags', [code]));
-      top.appendChild(work);
-      d.appendChild(top);
-      if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
-      f.appendChild(d);
-    });
-    ignoreFoot(box, r.in_force);
+    (async () => {
+      let openBy = null;
+      try {
+        const all = await api('/api/findings');
+        openBy = (all && all.tags && all.tags.by_code_open) || null;
+      } catch (e) { /* use the report's counts until a store exists */ }
+      codes.forEach((code) => {
+        const g = r.findings[code];
+        const open = openBy ? (openBy[code] || 0) : g.count;
+        const d = el('div', 'sugg');
+        const top = el('div', 'top');
+        top.appendChild(el('code', '', code));
+        // A code raised once per folder counts folders, as the core says; the rest count files.
+        const unit = (r.per_folder || []).indexOf(code) >= 0 ? 'page.count.folders' : 'page.files';
+        top.appendChild(el('span', '', codeText(code, r.codes[code]) + ': ' + t(unit, { n: g.count })));
+        // Work through uses open findings counts (dismissals applied), not the raw report.
+        if (open) {
+          const work = el('button', 'small', t('page.findings.work_through_code', { code, n: open }));
+          work.addEventListener('click', () => openFindings('tags', [code]));
+          top.appendChild(work);
+        }
+        d.appendChild(top);
+        if (g.examples.length) d.appendChild(el('div', 'ex', examples(g.examples)));
+        f.appendChild(d);
+      });
+      ignoreFoot(box, r.in_force);
+    })();
   }
 
   // --------------------------------------------------------- the playlist report
@@ -2361,6 +2397,24 @@
     const codes = {};
     open.forEach((r) => { codes[r.code] = (codes[r.code] || 0) + 1; });
     fxSummary(card, open.length, codes);
+    if (open.length) {
+      const dismissFolder = el('button', 'small', t('page.findings.dismiss_folder'));
+      dismissFolder.addEventListener('click', async () => {
+        if (!window.confirm(t('page.findings.dismiss_folder_confirm', { n: open.length }))) return;
+        dismissFolder.disabled = true;
+        try {
+          await api('/api/findings/' + fx.kind + '/dismiss', {
+            method: 'POST', headers: JSON_BODY,
+            body: JSON.stringify({ all: true, folder: folder, dismissed: true }),
+          });
+          await fxRefresh();
+        } catch (e) {
+          dismissFolder.disabled = false;
+          inner.appendChild(el('div', 'help bad', String(e.message || e)));
+        }
+      });
+      inner.appendChild(dismissFolder);
+    }
     rows.filter((r) => fx.filter.dismissed || !r.dismissed).forEach((r) => {
       const row = el('div', 'frow' + (r.dismissed ? ' dismissed' : ''));
       row.appendChild(el('code', '', r.code + (r.line ? ' ' + t('page.line', { n: r.line }) : '')));
@@ -3013,6 +3067,32 @@
     }
   }
 
+  async function waitLibraryUpdating(job, note) {
+    const started = Date.now();
+    while (Date.now() - started < 30 * 60 * 1000) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let updating = null;
+      try {
+        const a = await api('/api/library/pending');
+        updating = a.updating_db;
+      } catch (e) { break; }
+      if (note) {
+        note.textContent = '';
+        const line = el('div', 'done');
+        if (updating !== null && updating !== undefined) {
+          line.appendChild(el('span', 'tag warn', t('page.library.update')));
+          line.appendChild(text(' ' + t('page.library.updating', { job: updating })));
+        } else {
+          line.appendChild(el('span', 'tag ok', t('page.library.update')));
+          line.appendChild(text(' ' + t('page.library.update_done', { job: job })));
+        }
+        note.appendChild(line);
+        note.hidden = false;
+      }
+      if (updating === null || updating === undefined) return;
+    }
+  }
+
   async function updateLibrary(button) {
     if (button) button.disabled = true;
     const note = $('undo-note');
@@ -3032,6 +3112,10 @@
         note.hidden = false;
       }
       await refreshLibraryPending();
+      if (!a.update_error && a.updated !== null && a.updated !== undefined) {
+        await waitLibraryUpdating(a.updated, note);
+      }
+      if (button) button.disabled = false;
       return !a.update_error && a.updated !== null && a.updated !== undefined;
     } catch (e) {
       if (note) {

@@ -119,8 +119,8 @@ pub struct Shared {
     /// The settings the shell writes, read at each page for the player's language
     /// and the MusicBrainz mirror.
     pub settings: std::path::PathBuf,
-    /// MusicBrainz response cache under the data folder.
-    pub mb_cache: std::path::PathBuf,
+    /// One MusicBrainz client for the process: the 1 req/s throttle holds across requests.
+    pub mb: Mutex<crate::mb::Client>,
     /// One measurement of the album query at a time, and the last one made.
     pub measuring: std::sync::atomic::AtomicBool,
     pub album: Mutex<Option<report::Album>>,
@@ -422,26 +422,27 @@ fn route(shared: &Shared, r: &Request) -> (u16, &'static str, String) {
         }
         (_, "/api/library/pending") if get => {
             let paths = shared.pending.list();
+            let updating_db = mpd::updating_db(&shared.mpd).ok().flatten();
             (
                 200,
                 json,
-                serde_json::json!({ "paths": paths, "pending": !paths.is_empty() }).to_string()
+                serde_json::json!({
+                    "paths": paths,
+                    "pending": !paths.is_empty(),
+                    "updating_db": updating_db,
+                })
+                .to_string()
                     + "\n",
             )
         }
         ("POST", "/api/library/update") => match write::flush(&shared.pending, &shared.mpd) {
-            Ok(flushed) => {
-                let code = if flushed.update_error.is_some() {
-                    500
-                } else {
-                    200
-                };
-                (
-                    code,
-                    json,
-                    serde_json::to_string(&flushed).unwrap_or_default() + "\n",
-                )
-            }
+            // Always 200 with Flushed: the page reads update_error; a 500 without
+            // an error key became "Internal Server Error" in the browser.
+            Ok(flushed) => (
+                200,
+                json,
+                serde_json::to_string(&flushed).unwrap_or_default() + "\n",
+            ),
             Err(e) if e.k == "core.library.nothing_pending" => (400, json, error(&e)),
             Err(e) => (500, json, error(&e)),
         },
@@ -683,6 +684,7 @@ fn findings_get(shared: &Shared, rest: &str, query: &str) -> (u16, &'static str,
             .map(|(_, v)| v.clone())
             .collect(),
         dismissed: matches!(value("dismissed").as_deref(), Some("1") | Some("true")),
+        folder: None,
     };
     if let Some(kind) = rest.strip_suffix(".txt") {
         if !findings::KINDS.contains(&kind) {
@@ -767,6 +769,10 @@ fn findings_post(shared: &Shared, rest: &str, body: &[u8]) -> (u16, String) {
                         })
                         .unwrap_or_default(),
                     dismissed: false,
+                    folder: request["folder"]
+                        .as_str()
+                        .filter(|f| !f.is_empty())
+                        .map(String::from),
                 };
                 return match shared.findings.dismiss_filter(kind, &filter, on) {
                     Ok(count) => (
@@ -902,6 +908,19 @@ fn store_kinds(batch_kind: &str) -> &'static [&'static str] {
     }
 }
 
+/// Drop every finding under a folder that no longer exists (rename / organise).
+fn clear_findings_folder(shared: &Shared, batch_kind: &str, folder: &str) {
+    for kind in store_kinds(batch_kind)
+        .iter()
+        .copied()
+        .filter(|k| shared.findings.has(k))
+    {
+        if let Err(e) = shared.findings.patch(kind, folder, Vec::new()) {
+            eprintln!("mpdantic: the {kind} findings of {folder} were not cleared: {e}");
+        }
+    }
+}
+
 /// After a write or an undo in a folder: the folder checked again for each kind
 /// the batch touches that has a store, with the decoders last read, and the store
 /// patched; the folder's rows after, per kind, for the page. A failure here is said
@@ -938,6 +957,63 @@ fn refresh_folder(shared: &Shared, batch_kind: &str, folder: &str) -> Option<ser
         }
     }
     (!out.is_empty()).then_some(serde_json::Value::Array(out))
+}
+
+fn refresh_folders(
+    shared: &Shared,
+    batch_kind: &str,
+    folders: &[String],
+) -> Option<serde_json::Value> {
+    let mut all = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for folder in folders {
+        if folder.is_empty() || !seen.insert(folder.clone()) {
+            continue;
+        }
+        if let Some(serde_json::Value::Array(rows)) = refresh_folder(shared, batch_kind, folder) {
+            all.extend(rows);
+        }
+    }
+    (!all.is_empty()).then_some(serde_json::Value::Array(all))
+}
+
+/// Folders whose findings move with a folder rename or organise batch.
+fn findings_touch_paths(preview: &write::Preview) -> (Vec<String>, Vec<String>) {
+    match preview.kind.as_str() {
+        "folder" => {
+            let Some(r) = preview.renames.first() else {
+                return (vec![preview.path.clone()], Vec::new());
+            };
+            let old = walk::join(&preview.path, &r.name);
+            let new =
+                r.to.as_ref()
+                    .map(|to| walk::join(&preview.path, to))
+                    .unwrap_or_else(|| old.clone());
+            (vec![new], vec![old])
+        }
+        "organise" => {
+            let mut refresh = vec![preview.path.clone()];
+            for r in &preview.renames {
+                if let Some(to) = &r.to {
+                    if let Some(parent) = std::path::Path::new(to).parent() {
+                        let p = parent.to_string_lossy().to_string();
+                        if !p.is_empty() {
+                            refresh.push(p);
+                        }
+                    }
+                }
+            }
+            (refresh, Vec::new())
+        }
+        _ => (vec![preview.path.clone()], Vec::new()),
+    }
+}
+
+fn parent_of(path: &str) -> String {
+    match path.rfind('/') {
+        Some(i) => path[..i].to_string(),
+        None => path.to_string(),
+    }
 }
 
 /// `POST /api/batches` with `{ "kind": "mpdignore", "path": "NAS/Jazz", "lines": [...] }`:
@@ -1066,17 +1142,13 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(&preview.id);
             let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
-            let refresh_path = if preview.kind == "folder" {
-                preview
-                    .renames
-                    .first()
-                    .and_then(|r| r.to.as_ref())
-                    .map(|to| walk::join(&preview.path, to))
-                    .unwrap_or_else(|| preview.path.clone())
-            } else {
-                preview.path.clone()
-            };
-            if let Some(findings) = refresh_folder(shared, &preview.kind, &refresh_path) {
+            let (refresh, clear) = findings_touch_paths(&preview);
+            for old in &clear {
+                if !refresh.iter().any(|p| p == old) {
+                    clear_findings_folder(shared, &preview.kind, old);
+                }
+            }
+            if let Some(findings) = refresh_folders(shared, &preview.kind, &refresh) {
                 value["findings"] = findings;
             }
             (200, value.to_string() + "\n")
@@ -1090,13 +1162,17 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
 /// `POST /api/undo/<id>`: the batch undone; library folders enqueue Update library.
 fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
     let shares = mount::shares(&shared.networkfs).unwrap_or_default();
-    // The batch's kind and folder, for the findings of the folder after the undo.
-    let batch = shared
-        .journal
-        .list()
-        .iter()
-        .find(|b| b.id == id)
-        .map(|b| (b.kind.clone(), b.path.clone()));
+    // Kind, base path, and entry paths so a folder rename / organise undo clears ghosts.
+    let batch_meta = shared.journal.list().iter().find(|b| b.id == id).map(|b| {
+        (
+            b.kind.clone(),
+            b.path.clone(),
+            b.entries
+                .iter()
+                .map(|e| (e.path.clone(), e.after.clone(), e.op.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
     match write::undo(
         shared.library.music(),
         &shares,
@@ -1107,8 +1183,31 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
     ) {
         Ok(applied) => {
             let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
-            if let Some((kind, folder)) = batch {
-                if let Some(findings) = refresh_folder(shared, &kind, &folder) {
+            if let Some((kind, folder, entries)) = batch_meta {
+                let mut refresh = vec![folder.clone()];
+                let mut clear = Vec::new();
+                if kind == "folder" {
+                    for (path, after, op) in &entries {
+                        if op == "rename" {
+                            clear.push(after.clone());
+                            refresh.push(path.clone());
+                        }
+                    }
+                } else if kind == "organise" {
+                    for (path, after, op) in &entries {
+                        if op == "rename" {
+                            refresh.push(parent_of(after));
+                            refresh.push(parent_of(path));
+                        }
+                        refresh.push(parent_of(path));
+                    }
+                }
+                for gone in &clear {
+                    if !refresh.iter().any(|p| p == gone) {
+                        clear_findings_folder(shared, &kind, gone);
+                    }
+                }
+                if let Some(findings) = refresh_folders(shared, &kind, &refresh) {
                     value["findings"] = findings;
                 }
             }
@@ -1261,7 +1360,8 @@ fn mb_search(shared: &Shared, body: &[u8]) -> (u16, String) {
         return (404, error(&walk::no_such_folder()));
     }
     let (_, decoders) = shared.decoders();
-    let client = crate::mb::Client::from_settings(&shared.settings, shared.mb_cache.clone());
+    let mut client = shared.mb.lock().unwrap_or_else(|e| e.into_inner());
+    client.refresh_endpoint(&shared.settings);
     match client.search(shared.library.music(), &path, &decoders) {
         Ok(page) => (200, json(&page)),
         Err(e) => (400, error(&e)),
@@ -1286,7 +1386,8 @@ fn mb_map(shared: &Shared, body: &[u8]) -> (u16, String) {
         return (404, error(&walk::no_such_folder()));
     }
     let (_, decoders) = shared.decoders();
-    let client = crate::mb::Client::from_settings(&shared.settings, shared.mb_cache.clone());
+    let mut client = shared.mb.lock().unwrap_or_else(|e| e.into_inner());
+    client.refresh_endpoint(&shared.settings);
     match client.map_release(shared.library.music(), &path, id, &decoders) {
         Ok(mapped) => (200, json(&mapped)),
         Err(e) => (400, error(&e)),
@@ -1520,7 +1621,10 @@ mod tests {
             volumio_playlists: data.join("volumio-playlists"),
             buffer_plan: data.join("buffer.json"),
             settings: data.join("settings.json"),
-            mb_cache: data.join("mb-cache"),
+            mb: Mutex::new(crate::mb::Client::from_settings(
+                &data.join("settings.json"),
+                data.join("mb-cache"),
+            )),
             measuring: std::sync::atomic::AtomicBool::new(false),
             album: Mutex::new(None),
             mounter: mount::Mounter::new(&run, Box::new(|_| Err("no mount in a test".to_string()))),

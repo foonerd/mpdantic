@@ -190,6 +190,41 @@ fn library_path(uri: &str) -> Option<String> {
     Library::check(rest).filter(|p| !p.is_empty())
 }
 
+/// When a NAS or USB share was remounted under another name: `NAS/Old/Artist/…`
+/// → `NAS/New/Artist/…` if exactly one sibling share holds the rest of the path.
+fn share_prefix_relocate(music: &Path, lib: &str) -> Option<String> {
+    let parts: Vec<&str> = lib.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let root = parts[0];
+    if root != "NAS" && root != "USB" {
+        return None;
+    }
+    let rest = parts[2..].join("/");
+    let root_dir = music.join(root);
+    let entries = fs::read_dir(&root_dir).ok()?;
+    let mut hits = Vec::new();
+    for e in entries.flatten() {
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name == parts[1] {
+            continue;
+        }
+        let candidate = e.path().join(&rest);
+        if candidate.is_file() {
+            hits.push(format!("{root}/{name}/{rest}"));
+            if hits.len() > 1 {
+                return None;
+            }
+        }
+    }
+    hits.pop()
+}
+
 /// What an item is against the library; duplicates are decided by the caller.
 pub fn state_of(music: &Path, item: &serde_json::Value, decoders: &Decoders) -> &'static str {
     let Some(uri) = field(item, &["uri"]) else {
@@ -426,8 +461,14 @@ pub fn plan(
                     if index.is_none() {
                         index = Some(Index::build(music, "", decoders)?);
                     }
-                    let parts = plfix::components(s.uri.strip_prefix("mnt/").unwrap_or(&s.uri));
+                    let lib = s.uri.strip_prefix("mnt/").unwrap_or(&s.uri);
+                    let parts = plfix::components(lib);
                     found = index.as_ref().and_then(|i| i.find(&parts));
+                    // Share remounted under another name: same path under NAS/<share>/…
+                    // or USB/<drive>/…; only when exactly one live share holds the rest.
+                    if found.is_none() {
+                        found = share_prefix_relocate(music, lib).map(|p| (p, 0));
+                    }
                 }
                 match found {
                     Some((library_path, ties)) => {
@@ -591,6 +632,24 @@ pub mod tests {
         assert!(junk.items.is_empty() && !junk.salvaged && junk.problem.is_some());
         let object = read_items(b"{\"uri\":\"a\"}");
         assert!(object.problem.as_deref().unwrap().starts_with("not a list"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_share_remounted_under_another_name_is_relocated() {
+        let root = temp_library("vlists-share");
+        fs::create_dir_all(root.join("NAS/NewShare/Artist/Album")).unwrap();
+        fs::write(root.join("NAS/NewShare/Artist/Album/01.flac"), b"x").unwrap();
+        assert_eq!(
+            share_prefix_relocate(&root, "NAS/OldShare/Artist/Album/01.flac").as_deref(),
+            Some("NAS/NewShare/Artist/Album/01.flac")
+        );
+        fs::create_dir_all(root.join("NAS/Other/Artist/Album")).unwrap();
+        fs::write(root.join("NAS/Other/Artist/Album/01.flac"), b"x").unwrap();
+        assert_eq!(
+            share_prefix_relocate(&root, "NAS/OldShare/Artist/Album/01.flac"),
+            None
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 

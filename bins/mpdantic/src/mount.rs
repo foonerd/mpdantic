@@ -109,8 +109,9 @@ pub struct Mounter {
     gid: u32,
 }
 
-/// Where the install puts the mount helper sudo is allowed to run.
-pub const MOUNT_HELPER: &str = "/data/plugins/system_controller/mpdantic/bin/mpdantic-mount";
+/// Where the install puts the mount helper sudo is allowed to run: root-owned,
+/// outside the plugin folder (which is volumio-writable after install).
+pub const MOUNT_HELPER: &str = "/usr/local/libexec/mpdantic-mount";
 
 /// The real runner: `sudo -n` the mount helper with `mount` or `umount`, never
 /// raw `/bin/mount`. The helper itself refuses a target outside `/run/mpdantic/mounts`.

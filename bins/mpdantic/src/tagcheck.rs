@@ -100,6 +100,7 @@ const PLACEHOLDERS: &[&str] = &[
     "no artist",
     "no album",
     "track",
+    // "various" / "various artists" as Artist: only without AlbumArtist (see file()).
     "various",
     "various artists",
 ];
@@ -522,6 +523,8 @@ fn file_findings(
     if seen.id3v1_only {
         found(report, sink, folder, path, "T08", Msg::raw(path));
     }
+    // Several Artist values with AlbumArtist set are guest credits, not a twice-tag.
+    let album_artist_set = seen.album_artist.iter().any(|v| !v.trim().is_empty());
     for (name, values) in [
         ("title", &seen.title),
         ("artist", &seen.artist),
@@ -530,6 +533,9 @@ fn file_findings(
         ("date", &seen.date),
         ("track", &seen.track),
     ] {
+        if name == "artist" && album_artist_set {
+            continue;
+        }
         let mut distinct: Vec<&str> = values.iter().map(|v| v.trim()).collect();
         distinct.sort();
         distinct.dedup();
@@ -551,21 +557,30 @@ fn file_findings(
             break;
         }
     }
-    let placeholder = |v: &String| {
+    // "Various Artists" as Artist is fine when AlbumArtist is set (a compilation);
+    // only flag it when it is the Artist with no AlbumArtist.
+    let various = |t: &str| t == "various" || t == "various artists";
+    let placeholder = |v: &String, field: &str| {
         let t = v.trim().to_lowercase();
-        t.is_empty()
-            || PLACEHOLDERS.contains(&t.as_str())
+        if t.is_empty() {
+            return true;
+        }
+        if various(&t) {
+            return field == "artist" && !album_artist_set;
+        }
+        PLACEHOLDERS.contains(&t.as_str())
             || (t.starts_with("track ") && t[6..].chars().all(|c| c.is_ascii_digit()))
     };
     let broken_line = |v: &String| v.contains('\n') || v.contains('\r');
-    if let Some(v) = seen
+    let t10 = seen
         .title
         .iter()
-        .chain(&seen.artist)
-        .chain(&seen.album_artist)
-        .chain(&seen.album)
-        .find(|v| placeholder(v) || broken_line(v))
-    {
+        .map(|v| (v, "title"))
+        .chain(seen.artist.iter().map(|v| (v, "artist")))
+        .chain(seen.album_artist.iter().map(|v| (v, "albumartist")))
+        .chain(seen.album.iter().map(|v| (v, "album")))
+        .find(|(v, field)| placeholder(v, field) || broken_line(v));
+    if let Some((v, _)) = t10 {
         let shown = v.trim().replace(['\r', '\n'], " / ");
         found(
             report,
@@ -820,6 +835,59 @@ mod tests {
         assert_eq!(r.read, 0);
         assert!(r.findings.is_empty());
         assert!(r.splits.is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn multi_artist_with_albumartist_is_not_t09_and_various_needs_no_albumartist() {
+        let root = library("t09-t10");
+        fs::create_dir_all(root.join("INTERNAL/Comp")).unwrap();
+        fs::write(
+            root.join("INTERNAL/Comp/a.flac"),
+            flac_bytes(
+                44100,
+                44100,
+                &[
+                    ("ARTIST", "Guest One"),
+                    ("ARTIST", "Guest Two"),
+                    ("ALBUMARTIST", "Various Artists"),
+                    ("ALBUM", "Hits"),
+                    ("TITLE", "One"),
+                    ("TRACKNUMBER", "1"),
+                ],
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("INTERNAL/Solo")).unwrap();
+        fs::write(
+            root.join("INTERNAL/Solo/b.flac"),
+            flac_bytes(
+                44100,
+                44100,
+                &[
+                    ("ARTIST", "Various Artists"),
+                    ("ALBUM", "Dump"),
+                    ("TITLE", "Two"),
+                    ("TRACKNUMBER", "1"),
+                ],
+            ),
+        )
+        .unwrap();
+        let mut sink = crate::findings::Collector::default();
+        check_folder(&root, "INTERNAL/Comp", &decoders(), note(), &mut sink).unwrap();
+        assert!(
+            sink.rows.iter().all(|w| w.code != "T09" && w.code != "T10"),
+            "{:?}",
+            sink.rows
+        );
+        let mut sink = crate::findings::Collector::default();
+        check_folder(&root, "INTERNAL/Solo", &decoders(), note(), &mut sink).unwrap();
+        assert_eq!(
+            sink.rows.iter().filter(|w| w.code == "T10").count(),
+            1,
+            "{:?}",
+            sink.rows
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 

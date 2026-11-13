@@ -173,6 +173,32 @@ mod tests {
     }
 
     #[test]
+    fn mixed_named_albums_ignores_empty_album_alone() {
+        let files = vec![
+            file(
+                "a.flac",
+                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
+            ),
+            file(
+                "b.flac",
+                BTreeMap::from([("album".into(), vec!["".into()])]),
+            ),
+        ];
+        assert!(!mixed_named_albums(&files));
+        let files = vec![
+            file(
+                "a.flac",
+                BTreeMap::from([("album".into(), vec!["Hits".into()])]),
+            ),
+            file(
+                "b.flac",
+                BTreeMap::from([("album".into(), vec!["Other".into()])]),
+            ),
+        ];
+        assert!(mixed_named_albums(&files));
+    }
+
+    #[test]
     fn groups_carry_concrete_paths_and_names() {
         let files = vec![
             file(

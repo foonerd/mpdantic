@@ -233,6 +233,16 @@ pub fn update(address: &Address, path: &str) -> Result<u64, Msg> {
         .ok_or_else(|| msg!("core.mpd.no_job", "MPD answered without a job number"))
 }
 
+/// Whether MPD is still updating the database; the job number when it is.
+pub fn updating_db(address: &Address) -> Result<Option<u64>, Msg> {
+    let mut c = connect(address)?;
+    let lines = c.command("status")?;
+    Ok(lines
+        .iter()
+        .find(|(k, _)| k == "updating_db")
+        .and_then(|(_, v)| v.parse().ok()))
+}
+
 /// When MPD cannot be asked: the suffixes Volumio's MPD build commonly claims, so the
 /// analysis still tells audio from the rest. The report says they are assumed.
 pub fn assumed() -> Decoders {
@@ -268,6 +278,7 @@ pub mod tests {
                     let answer = match line.trim() {
                         "decoders" => "plugin: mad\nsuffix: mp3\nsuffix: mp2\nmime_type: audio/mpeg\nplugin: flac\nsuffix: flac\nplugin: ffmpeg\nsuffix: FLAC\nsuffix: mkv\nsuffix: txt\nOK\n".to_string(),
                         l if l.starts_with("update \"") && l.ends_with('"') => "updating_db: 7\nOK\n".to_string(),
+                        "status" => "volume: -1\nrepeat: 0\nrandom: 0\nsingle: 0\nconsume: 0\nplaylist: 1\nplaylistlength: 0\nstate: stop\nOK\n".to_string(),
                         "stats" => "uptime: 100\nplaytime: 10\nartists: 1234\nalbums: 5678\nsongs: 123456\ndb_playtime: 3542400\ndb_update: 1794342000\nOK\n".to_string(),
                         "search album \"\"" => "file: a.flac\nTitle: One\nAlbum: X\nfile: b.flac\nTitle: Two\nAlbum: X\nfile: c.flac\nTitle: Three\nAlbum: Y\nOK\n".to_string(),
                         other => format!("ACK [5@0] {{}} unknown command \"{other}\"\n"),

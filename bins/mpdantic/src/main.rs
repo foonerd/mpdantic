@@ -186,7 +186,10 @@ fn main() {
         // The shell's plan for the output buffer, written beside the settings.
         buffer_plan: args.settings.with_file_name("buffer.json"),
         settings: args.settings.clone(),
-        mb_cache: args.data.join("mb-cache"),
+        mb: Mutex::new(mb::Client::from_settings(
+            &args.settings,
+            args.data.join("mb-cache"),
+        )),
         measuring: std::sync::atomic::AtomicBool::new(false),
         album: Mutex::new(None),
         mounter: mount::Mounter::new(&args.run, mount::sudo_runner()),
