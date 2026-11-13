@@ -688,6 +688,52 @@ impl Store {
             .unwrap_or_default())
     }
 
+    /// A folder renamed, with everything under it: the rows' folder and path take
+    /// the new prefix, the dismissals with them, the check's own path when it was
+    /// that folder, and the base is written whole so the overlay says nothing old.
+    /// No check runs: the files are as they were. How many rows moved.
+    pub fn move_prefix(&self, kind: &str, from: &str, to: &str) -> Result<usize, Msg> {
+        if from.is_empty() || from == to {
+            return Ok(0);
+        }
+        let moved = self
+            .with(kind, |loaded| {
+                let mut n = 0;
+                for row in &mut loaded.rows {
+                    let Some(folder) = under_prefix(&row.folder, from, to) else {
+                        continue;
+                    };
+                    row.folder = folder;
+                    if let Some(path) = under_prefix(&row.path, from, to) {
+                        row.path = path;
+                    }
+                    n += 1;
+                }
+                if let Some(path) = under_prefix(&loaded.meta.path, from, to) {
+                    loaded.meta.path = path;
+                }
+                loaded.settle();
+                n
+            })
+            .ok_or_else(no_store)?;
+        let mut dismissals = self.dismissals();
+        let mut changed = false;
+        for d in dismissals.iter_mut().filter(|d| d.kind == kind) {
+            if let Some(path) = under_prefix(&d.path, from, to) {
+                d.path = path;
+                changed = true;
+            }
+        }
+        if changed {
+            write_json(&self.dismissed_file(), &dismissals)?;
+        }
+        self.fold(kind)?;
+        if let Some(meta) = self.with(kind, |loaded| loaded.meta.clone()) {
+            write_json(&self.meta_file(kind), &meta)?;
+        }
+        Ok(moved)
+    }
+
     /// The overlay folded into the base: the rows as loaded written whole in place
     /// of the base, the overlay gone.
     fn fold(&self, kind: &str) -> Result<(), Msg> {
@@ -770,6 +816,16 @@ impl Store {
 
 /// Records of the overlay beyond which it is folded, when the base has fewer folders.
 const FOLD_AT: usize = 50;
+
+/// `path` with `from` replaced by `to` when it is that folder or under it.
+fn under_prefix(path: &str, from: &str, to: &str) -> Option<String> {
+    if path == from {
+        return Some(to.to_string());
+    }
+    path.strip_prefix(from)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map(|rest| format!("{to}/{rest}"))
+}
 
 impl Loaded {
     /// The rows in their order and the meta's counts as the rows are.
@@ -1161,6 +1217,71 @@ mod tests {
             format!("a/{}.flac", FOLD_AT + 1)
         );
         assert_eq!(fresh.overview("tags").unwrap().open, 1);
+        fs::remove_dir_all(&data).unwrap();
+    }
+
+    #[test]
+    fn a_renamed_folder_takes_its_rows_and_dismissals_with_it_and_nothing_else_moves() {
+        let data = temp_data("move");
+        let store = Store::new(&data);
+        filled(&store);
+        store.dismiss("tags", "T04", "a/x.flac", true).unwrap();
+        // One row changed through the overlay first, so the fold has something to say.
+        store
+            .patch(
+                "tags",
+                "b/c",
+                vec![Row {
+                    code: "T04".to_string(),
+                    folder: "b/c".to_string(),
+                    path: "b/c/z.flac".to_string(),
+                    line: 0,
+                    text: no_track("b/c/z.flac"),
+                }],
+            )
+            .unwrap();
+        assert_eq!(store.move_prefix("tags", "a", "z").unwrap(), 3);
+        assert_eq!(
+            store.move_prefix("tags", "a", "z").unwrap(),
+            0,
+            "nothing left under a"
+        );
+        assert!(store.rows("tags", "a").unwrap().is_empty());
+        let rows = store.rows("tags", "z").unwrap();
+        let paths: Vec<&str> = rows.iter().map(|r| r.row.path.as_str()).collect();
+        assert_eq!(paths, ["z", "z/x.flac", "z/y.flac"]);
+        assert!(
+            rows[1].dismissed,
+            "the dismissal went with the row: {:?}",
+            rows
+        );
+        assert_eq!(
+            store.rows("tags", "b/c").unwrap().len(),
+            1,
+            "a sibling is untouched"
+        );
+        let o = store.overview("tags").unwrap();
+        assert_eq!((o.open, o.dismissed, o.meta.folders), (3, 1, 2));
+        // The base carries the move, the overlay is gone, a fresh store reads the same.
+        assert!(!data.join("findings/tags.updates.jsonl").exists());
+        let again = Store::new(&data);
+        assert_eq!(again.rows("tags", "z").unwrap().len(), 3);
+        assert!(again.rows("tags", "z").unwrap()[1].dismissed);
+        // A folder under the renamed one, and the check's own path, move too.
+        let mut w = again.begin("tags").unwrap();
+        w.found("T04", "z/sub", "z/sub/q.flac", 0, &no_track("z/sub/q.flac"));
+        w.finish(summary("z")).unwrap();
+        assert_eq!(again.move_prefix("tags", "z", "y").unwrap(), 1);
+        assert_eq!(again.overview("tags").unwrap().meta.path, "y");
+        assert_eq!(
+            again.rows("tags", "y/sub").unwrap()[0].row.path,
+            "y/sub/q.flac"
+        );
+        assert_eq!(
+            under_prefix("za/x", "z", "y"),
+            None,
+            "a prefix is a folder, not text"
+        );
         fs::remove_dir_all(&data).unwrap();
     }
 

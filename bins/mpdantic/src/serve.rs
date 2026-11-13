@@ -908,15 +908,16 @@ fn store_kinds(batch_kind: &str) -> &'static [&'static str] {
     }
 }
 
-/// Drop every finding under a folder that no longer exists (rename / organise).
-fn clear_findings_folder(shared: &Shared, batch_kind: &str, folder: &str) {
+/// A folder renamed: its findings, and those of every folder under it, go with it
+/// in each store; the files are as they were, so nothing is checked again for it.
+fn move_findings(shared: &Shared, batch_kind: &str, from: &str, to: &str) {
     for kind in store_kinds(batch_kind)
         .iter()
         .copied()
         .filter(|k| shared.findings.has(k))
     {
-        if let Err(e) = shared.findings.patch(kind, folder, Vec::new()) {
-            eprintln!("mpdantic: the {kind} findings of {folder} were not cleared: {e}");
+        if let Err(e) = shared.findings.move_prefix(kind, from, to) {
+            eprintln!("mpdantic: the {kind} findings of {from} were not moved to {to}: {e}");
         }
     }
 }
@@ -977,19 +978,32 @@ fn refresh_folders(
     (!all.is_empty()).then_some(serde_json::Value::Array(all))
 }
 
-/// Folders whose findings move with a folder rename or organise batch.
-fn findings_touch_paths(preview: &write::Preview) -> (Vec<String>, Vec<String>) {
+/// What a write does to the findings' folders: the folders to check again, and
+/// the folders moved whole with everything under them (a rename keeps the rows and
+/// changes their paths).
+struct Touch {
+    refresh: Vec<String>,
+    moves: Vec<(String, String)>,
+}
+
+fn findings_touch_paths(preview: &write::Preview) -> Touch {
     match preview.kind.as_str() {
         "folder" => {
             let Some(r) = preview.renames.first() else {
-                return (vec![preview.path.clone()], Vec::new());
+                return Touch {
+                    refresh: vec![preview.path.clone()],
+                    moves: Vec::new(),
+                };
             };
             let old = walk::join(&preview.path, &r.name);
             let new =
                 r.to.as_ref()
                     .map(|to| walk::join(&preview.path, to))
                     .unwrap_or_else(|| old.clone());
-            (vec![new], vec![old])
+            Touch {
+                refresh: vec![new.clone()],
+                moves: vec![(old, new)],
+            }
         }
         "organise" => {
             let mut refresh = vec![preview.path.clone()];
@@ -1003,9 +1017,15 @@ fn findings_touch_paths(preview: &write::Preview) -> (Vec<String>, Vec<String>) 
                     }
                 }
             }
-            (refresh, Vec::new())
+            Touch {
+                refresh,
+                moves: Vec::new(),
+            }
         }
-        _ => (vec![preview.path.clone()], Vec::new()),
+        _ => Touch {
+            refresh: vec![preview.path.clone()],
+            moves: Vec::new(),
+        },
     }
 }
 
@@ -1142,13 +1162,11 @@ fn apply_batch(shared: &Shared, id: Option<u64>) -> (u16, String) {
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(&preview.id);
             let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
-            let (refresh, clear) = findings_touch_paths(&preview);
-            for old in &clear {
-                if !refresh.iter().any(|p| p == old) {
-                    clear_findings_folder(shared, &preview.kind, old);
-                }
+            let touch = findings_touch_paths(&preview);
+            for (from, to) in &touch.moves {
+                move_findings(shared, &preview.kind, from, to);
             }
-            if let Some(findings) = refresh_folders(shared, &preview.kind, &refresh) {
+            if let Some(findings) = refresh_folders(shared, &preview.kind, &touch.refresh) {
                 value["findings"] = findings;
             }
             (200, value.to_string() + "\n")
@@ -1185,11 +1203,11 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
             let mut value = serde_json::to_value(&applied).unwrap_or(serde_json::Value::Null);
             if let Some((kind, folder, entries)) = batch_meta {
                 let mut refresh = vec![folder.clone()];
-                let mut clear = Vec::new();
                 if kind == "folder" {
                     for (path, after, op) in &entries {
                         if op == "rename" {
-                            clear.push(after.clone());
+                            // The rows went with the folder to its new name; back now.
+                            move_findings(shared, &kind, after, path);
                             refresh.push(path.clone());
                         }
                     }
@@ -1197,14 +1215,8 @@ fn undo_batch(shared: &Shared, id: &str) -> (u16, String) {
                     for (path, after, op) in &entries {
                         if op == "rename" {
                             refresh.push(parent_of(after));
-                            refresh.push(parent_of(path));
                         }
                         refresh.push(parent_of(path));
-                    }
-                }
-                for gone in &clear {
-                    if !refresh.iter().any(|p| p == gone) {
-                        clear_findings_folder(shared, &kind, gone);
                     }
                 }
                 if let Some(findings) = refresh_folders(shared, &kind, &refresh) {
@@ -1359,10 +1371,12 @@ fn mb_search(shared: &Shared, body: &[u8]) -> (u16, String) {
     if !dir.is_dir() {
         return (404, error(&walk::no_such_folder()));
     }
+    // `"step": "without_tracks"` after a release matched on the count paired nothing.
+    let step = request["step"].as_str().filter(|s| !s.is_empty());
     let (_, decoders) = shared.decoders();
     let mut client = shared.mb.lock().unwrap_or_else(|e| e.into_inner());
     client.refresh_endpoint(&shared.settings);
-    match client.search(shared.library.music(), &path, &decoders) {
+    match client.search_from(shared.library.music(), &path, &decoders, step) {
         Ok(page) => (200, json(&page)),
         Err(e) => (400, error(&e)),
     }

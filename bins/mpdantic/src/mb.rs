@@ -65,11 +65,23 @@ pub struct LiveFetch;
 
 impl Fetch for LiveFetch {
     fn get(&self, url: &str) -> Result<(u16, String), String> {
-        let response = ureq::get(url)
+        // ureq hands a 4xx or 5xx back as an error; here it is an answer with a
+        // status, so a 503 reaches the backoff. A transport error is said by its
+        // kind and message, without the URL, which is not the user's to act on.
+        let response = match ureq::get(url)
             .set("User-Agent", UA)
             .set("Accept", "application/json")
             .call()
-            .map_err(|e| e.to_string())?;
+        {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(ureq::Error::Transport(t)) => {
+                return Err(match t.message() {
+                    Some(m) if !m.is_empty() => format!("{}: {m}", t.kind()),
+                    _ => t.kind().to_string(),
+                })
+            }
+        };
         let status = response.status();
         let body = response.into_string().map_err(|e| e.to_string())?;
         Ok((status, body))
@@ -123,7 +135,17 @@ impl Client {
     /// no MusicBrainz call — so the page can say what to do with a mix or dump.
     /// Files without an album tag alone do not count as a mix (same as map).
     /// Ladder: as tagged → normalised album with tracks → normalised without tracks.
-    pub fn search(&self, music: &Path, path: &str, decoders: &Decoders) -> Result<SearchPage, Msg> {
+    /// `start` names a step of the ladder to begin at (`without_tracks` after a
+    /// release matched on the track count and paired nothing); the whole ladder from
+    /// the top when it is none, or not one of the folder's. A tagged release id is not
+    /// consulted for a named step: the user asked for other hits.
+    pub fn search_from(
+        &self,
+        music: &Path,
+        path: &str,
+        decoders: &Decoders,
+        start: Option<&str>,
+    ) -> Result<SearchPage, Msg> {
         let dir = folder_dir(music, path);
         let files = tagfix::folder_values(&dir, path, decoders)?;
         let groups = organise::album_groups_for_folder(path, &files);
@@ -145,7 +167,12 @@ impl Client {
             });
         }
         let query = query_from_files(&files);
-        if let Some(id) = album_id_from_files(&files) {
+        let tagged_id = if start.is_none() {
+            album_id_from_files(&files)
+        } else {
+            None
+        };
+        if let Some(id) = tagged_id {
             match self.hit_from_release_id(&id) {
                 Ok(hit) => {
                     return Ok(SearchPage {
@@ -167,7 +194,7 @@ impl Client {
                 "no album artist or album on the folder's files; tag them here first, or split a known mix into album folders"
             ));
         }
-        let mut page = self.ladder_search(query)?;
+        let mut page = self.ladder_search(query, start)?;
         page.groups = groups;
         Ok(page)
     }
@@ -204,8 +231,9 @@ impl Client {
         })
     }
 
-    /// The search ladder for a query already taken from the folder's tags.
-    fn ladder_search(&self, tagged: Query) -> Result<SearchPage, Msg> {
+    /// The search ladder for a query already taken from the folder's tags, from its
+    /// first step or from the named one.
+    fn ladder_search(&self, tagged: Query, start: Option<&str>) -> Result<SearchPage, Msg> {
         let flip = artist_from_sort_name(&tagged.artist);
         let mut steps: Vec<(&str, Query)> = Vec::with_capacity(4);
         steps.push(("as_tagged", tagged.clone()));
@@ -252,6 +280,9 @@ impl Client {
         let mut step = "as_tagged";
         let mut searched = tagged.clone();
         let mut releases = Vec::new();
+        if let Some(from) = start.filter(|s| steps.iter().any(|(name, _)| name == s)) {
+            steps.retain(|(name, _)| *name == from);
+        }
         for (name, q) in steps {
             let url = self.search_url(&q);
             let body = self.get_cached(&url)?;
@@ -325,6 +356,7 @@ impl Client {
     fn get_cached(&self, url: &str) -> Result<String, Msg> {
         let key = cache_key(url);
         let file = self.cache.join(&key);
+        let mut stale = None;
         if let Ok(meta) = fs::metadata(&file) {
             if let (Ok(text), Ok(modified)) = (fs::read_to_string(&file), meta.modified()) {
                 if !text.is_empty() {
@@ -339,10 +371,16 @@ impl Client {
                     if age < ttl {
                         return Ok(text);
                     }
+                    stale = Some(text);
                 }
             }
         }
-        let body = self.get_live(url)?;
+        // A live answer, or the expired one when the site cannot give a fresh one:
+        // a week-old release is still that release.
+        let body = match self.get_live(url) {
+            Ok(body) => body,
+            Err(e) => return stale.ok_or(e),
+        };
         let _ = fs::create_dir_all(&self.cache);
         let tmp = self.cache.join(format!("{key}.part"));
         if fs::write(&tmp, &body).is_ok() {
@@ -360,6 +398,14 @@ impl Client {
                 Ok((503, _)) if attempt < BACKOFF.len() => {
                     thread::sleep(BACKOFF[attempt]);
                     attempt += 1;
+                }
+                // Busy (the site's word for it, and for the rate limit) after every
+                // wait: said as that, not as a status the user cannot act on.
+                Ok((503, _)) => {
+                    return Err(msg!(
+                        "core.mb.busy",
+                        "MusicBrainz is busy; try again in a moment"
+                    ))
                 }
                 Ok((status, body)) => {
                     return Err(msg!(
@@ -1239,9 +1285,87 @@ mod tests {
         let err = client
             .get_live("https://musicbrainz.org/ws/2/release/?query=test503&fmt=json")
             .unwrap_err();
-        assert_eq!(err.k, "core.mb.http");
-        assert!(err.contains("503"), "{err}");
+        assert_eq!(err.k, "core.mb.busy", "{err}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_expired_cached_answer_is_served_when_the_site_cannot_answer() {
+        let dir = std::env::temp_dir().join(format!("mpdantic-mb-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        struct Down;
+        impl Fetch for Down {
+            fn get(&self, _: &str) -> Result<(u16, String), String> {
+                Ok((503, "busy".into()))
+            }
+        }
+        let url = "https://musicbrainz.org/ws/2/release/?query=stale&fmt=json";
+        let client = Client::with_fetch(PUBLIC, false, cache.clone(), Box::new(Down));
+        assert_eq!(client.get_cached(url).unwrap_err().k, "core.mb.busy");
+        // A body cached long ago: past its time, it is still the answer when the
+        // site gives none.
+        fs::create_dir_all(&cache).unwrap();
+        let file = cache.join(cache_key(url));
+        fs::write(&file, r#"{"releases":[]}"#).unwrap();
+        let old = SystemTime::now() - CACHE_TTL - Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(client.get_cached(url).unwrap(), r#"{"releases":[]}"#);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_ladder_starts_at_the_step_asked_for() {
+        let dir = std::env::temp_dir().join(format!("mpdantic-mb-ladder3-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        let base = "https://musicbrainz.org";
+        let tagged = Query {
+            artist: "Michael Jackson".into(),
+            album: "Thriller".into(),
+            tracks: 3,
+        };
+        let single = r#"{"releases":[{"id":"33333333-3333-3333-3333-333333333333","score":100,"title":"Thriller","status":"Official","artist-credit":[{"name":"Michael Jackson","joinphrase":""}],"date":"1983","country":"NL","track-count":3}]}"#;
+        let album = r#"{"releases":[{"id":"44444444-4444-4444-4444-444444444444","score":100,"title":"Thriller","status":"Official","artist-credit":[{"name":"Michael Jackson","joinphrase":""}],"date":"1982","country":"US","track-count":9}]}"#;
+        let urls = Client::with_fetch(
+            base,
+            false,
+            dir.join("cache-urls"),
+            Box::new(FixtureFetch {
+                map: BTreeMap::new(),
+            }),
+        );
+        let mut map = BTreeMap::new();
+        map.insert(urls.search_url(&tagged), (200, single.into()));
+        map.insert(
+            urls.search_url(&Query {
+                artist: tagged.artist.clone(),
+                album: tagged.album.clone(),
+                tracks: 0,
+            }),
+            (200, album.into()),
+        );
+        let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
+        // From the top: the single, matched on the track count, is the only hit.
+        let page = client.ladder_search(tagged.clone(), None).unwrap();
+        assert_eq!(page.step, "as_tagged");
+        assert_eq!(page.releases[0].track_count, 3);
+        // From the step asked for: the album, without the track count.
+        let page = client
+            .ladder_search(tagged.clone(), Some("without_tracks"))
+            .unwrap();
+        assert_eq!(page.step, "without_tracks");
+        assert_eq!(page.searched.tracks, 0);
+        assert_eq!(page.releases[0].track_count, 9);
+        // A step the folder's ladder does not have: the ladder from the top.
+        let page = client.ladder_search(tagged, Some("sort_name")).unwrap();
+        assert_eq!(page.step, "as_tagged");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1360,7 +1484,7 @@ mod tests {
         map.insert(url_as, (200, empty.into()));
         map.insert(url_sort, (200, hit.into()));
         let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
-        let page = client.ladder_search(tagged.clone()).unwrap();
+        let page = client.ladder_search(tagged.clone(), None).unwrap();
         assert_eq!(page.step, "sort_name");
         assert_eq!(page.query, tagged);
         assert_eq!(page.searched.artist, "Phil Collins");
@@ -1400,7 +1524,7 @@ mod tests {
         map.insert(url_as, (200, empty.into()));
         map.insert(url_norm, (200, hit.into()));
         let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
-        let page = client.ladder_search(tagged.clone()).unwrap();
+        let page = client.ladder_search(tagged.clone(), None).unwrap();
         assert_eq!(page.step, "without_suffix");
         assert_eq!(page.query, tagged);
         assert_eq!(page.searched.album, "Brothers In Arms");
@@ -1447,7 +1571,7 @@ mod tests {
         map.insert(url_norm, (200, empty.into()));
         map.insert(url_loose, (200, hit.into()));
         let client = Client::with_fetch(base, false, cache, Box::new(FixtureFetch { map }));
-        let page = client.ladder_search(tagged).unwrap();
+        let page = client.ladder_search(tagged, None).unwrap();
         assert_eq!(page.step, "without_tracks");
         assert_eq!(page.searched.album, "Abba Gold");
         assert_eq!(page.searched.tracks, 0);

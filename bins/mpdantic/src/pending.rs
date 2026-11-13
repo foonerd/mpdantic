@@ -58,14 +58,6 @@ impl Pending {
         self.save()
     }
 
-    /// The one path MPD should update to cover every pending folder: the
-    /// shallowest common ancestor, or the empty path (whole library) when the
-    /// pending folders share no useful parent.
-    pub fn flush_path(&self) -> String {
-        let paths = self.list();
-        common_ancestor(&paths)
-    }
-
     /// Drop only the paths a flush covered; folders added while MPD was updating stay.
     pub fn remove_all(&self, folders: &[String]) -> Result<(), Msg> {
         {
@@ -91,6 +83,14 @@ impl Pending {
         .map_err(|e| text::at(part.display(), e))?;
         fs::rename(&part, &self.file).map_err(|e| text::at(self.file.display(), e))
     }
+}
+
+/// The one path MPD should update to cover these folders: the shallowest common
+/// ancestor, or the empty path (whole library) when they share no useful parent.
+/// A flush takes it from the snapshot it will remove, so a folder added meanwhile
+/// is neither covered by the update nor dropped from the set.
+pub fn flush_path_of(paths: &[String]) -> String {
+    common_ancestor(paths)
 }
 
 /// Longest common prefix of path components; empty when there is none useful.

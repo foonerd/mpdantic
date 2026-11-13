@@ -1643,7 +1643,7 @@ pub fn flush(pending: &Pending, mpd_address: &mpd::Address) -> Result<Flushed, M
             "nothing pending to update"
         ));
     }
-    let path = pending.flush_path();
+    let path = crate::pending::flush_path_of(&paths);
     match mpd::update(mpd_address, &path) {
         Ok(n) => {
             pending.remove_all(&paths)?;
@@ -4192,7 +4192,7 @@ mod tests {
             pending.list(),
             vec!["INTERNAL/A".to_string(), "INTERNAL/B".to_string()]
         );
-        assert_eq!(pending.flush_path(), "INTERNAL");
+        assert_eq!(crate::pending::flush_path_of(&pending.list()), "INTERNAL");
         let f = flush(&pending, &address).unwrap();
         assert_eq!(f.updated, Some(7));
         assert_eq!(f.path, "INTERNAL");
