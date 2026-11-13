@@ -18,7 +18,7 @@ refuse() {
   echo ""
   echo "$1"
   rm -rf "$PLUGIN_DIR"
-  rm -f /usr/local/libexec/mpdantic-mount
+  rm -f "$MOUNT_HELPER"
   exit 1
 }
 
@@ -91,8 +91,5 @@ if ! visudo -c -f "$SUDOERS" >/dev/null 2>&1; then
   rm -f "$SUDOERS"
   refuse "ERROR: the sudoers entry did not validate"
 fi
-# Drop a leftover sudoers grant at the old plugin-path helper if an earlier cut left one.
-# (The file above already replaced the whole entry; nothing further.)
-
 echo "MPDantic installed"
 echo "plugininstallend"
