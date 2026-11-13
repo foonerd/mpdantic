@@ -24,6 +24,8 @@
   "page.repair": "修复",
   "page.copy": "复制",
   "page.not_checked": "尚未检查。",
+  "page.check.folded": "上次检查的是 {path}，不是此文件夹。",
+  "page.check.show": "显示其报告",
   "page.not_read": "尚未读取。",
   "page.reading": "正在读取...",
   "page.library": "音乐库",

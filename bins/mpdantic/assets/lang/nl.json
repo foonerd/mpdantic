@@ -24,6 +24,8 @@
   "page.repair": "Repareren",
   "page.copy": "Kopiëren",
   "page.not_checked": "Nog niet gecontroleerd.",
+  "page.check.folded": "De laatste controle was van {path}, niet van deze map.",
+  "page.check.show": "Rapport tonen",
   "page.not_read": "Nog niet gelezen.",
   "page.reading": "Bezig met lezen...",
   "page.library": "Bibliotheek",

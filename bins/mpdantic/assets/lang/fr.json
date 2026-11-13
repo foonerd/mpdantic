@@ -24,6 +24,8 @@
   "page.repair": "Réparer",
   "page.copy": "Copier",
   "page.not_checked": "Pas encore vérifié.",
+  "page.check.folded": "La dernière vérification portait sur {path}, pas sur ce dossier.",
+  "page.check.show": "Afficher son rapport",
   "page.not_read": "Pas encore lu.",
   "page.reading": "Lecture...",
   "page.library": "Bibliothèque",

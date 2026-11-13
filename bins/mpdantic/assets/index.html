@@ -177,6 +177,7 @@
   .workbar b { font-size: 16px; }
   .workbar .sub { color: var(--muted); font-size: 13px; }
   .findings-line { margin-top: 8px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .fold { margin-top: 10px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   button.chip { font-size: 13px; padding: 3px 10px; border-radius: 12px; }
   button.chip.on { border-color: var(--accent); background: var(--hover); color: var(--accent); }
@@ -257,6 +258,7 @@
       <button id="cancel-ignore" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
+      <div class="fold" id="fold-ignore" hidden></div>
       <div class="progress" id="progress-ignore" data-i18n="page.ignore.not_yet">Not analysed yet.</div>
       <div id="report-ignore"></div>
       <div class="write">
@@ -280,6 +282,7 @@
       <button id="cancel-cue" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
+      <div class="fold" id="fold-cue" hidden></div>
       <div class="progress" id="progress-cue" data-i18n="page.not_checked">Not checked yet.</div>
       <div class="findings-line" id="findings-cue" hidden></div>
       <div id="report-cue"></div>
@@ -295,6 +298,7 @@
       <button id="cancel-tags" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
+      <div class="fold" id="fold-tags" hidden></div>
       <div class="progress" id="progress-tags" data-i18n="page.not_checked">Not checked yet.</div>
       <div class="findings-line" id="findings-tags" hidden></div>
       <div id="report-tags"></div>
@@ -349,6 +353,7 @@
       <button id="cancel-playlists" hidden data-i18n="page.cancel">Cancel</button>
     </div>
     <div class="body">
+      <div class="fold" id="fold-playlists" hidden></div>
       <div class="progress" id="progress-playlists" data-i18n="page.not_checked">Not checked yet.</div>
       <div class="findings-line" id="findings-playlists" hidden></div>
       <div id="report-playlists"></div>
@@ -817,7 +822,11 @@
         }
         const changed = listing.path !== current.path || current.entries.length === 0;
         current = { path: listing.path, entries: listing.entries, total: listing.total, more: listing.more };
-        if (changed) loadIgnoreLines();
+        if (changed) {
+          Object.values(panels).forEach((p) => { p.shown = false; });
+          foldReports();
+          loadIgnoreLines();
+        }
       }
       render();
     } catch (e) {
@@ -1598,6 +1607,28 @@
     node.className = 'progress' + (bad ? ' bad' : '');
   }
 
+  // A report is the folder's it was made for. On another folder it folds to one
+  // line that names that folder, with a way to see it, and unfolds when that folder
+  // is back in hand. The findings line, the store's, stays either way.
+  function foldReports() {
+    Object.values(panels).forEach((p) => {
+      const fold = $('fold-' + p.kind);
+      const report = $('report-' + p.kind);
+      const progress = $('progress-' + p.kind);
+      if (!fold || !report || !progress) return;
+      const away = p.reportPath !== undefined && p.reportPath !== current.path && !p.shown;
+      report.hidden = away;
+      progress.hidden = away;
+      fold.hidden = !away;
+      if (!away) return;
+      fold.textContent = '';
+      fold.appendChild(el('span', '', t('page.check.folded', { path: theLibrary(p.reportPath) })));
+      const show = el('button', 'small', t('page.check.show'));
+      show.addEventListener('click', () => { p.shown = true; foldReports(); });
+      fold.appendChild(show);
+    });
+  }
+
   function buttons(p, running) {
     $('cancel-' + p.kind).hidden = !running;
     Object.values(panels).forEach((q) => { $('analyse-' + q.kind).disabled = running; });
@@ -1605,6 +1636,9 @@
 
   async function analyse(p) {
     $('report-' + p.kind).textContent = '';
+    p.reportPath = current.path;
+    p.shown = false;
+    foldReports();
     try {
       const started = await api('/api/jobs', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ kind: p.kind, path: current.path }) });
       follow(p, started.id);
@@ -1644,6 +1678,7 @@
     const vars = { seconds: j.seconds, dirs: j.directories, files: j.files, path: theLibrary(j.path) };
     progress(p, j.state === 'cancelled' ? t('page.job.cancelled', vars) : t('page.job.done', vars));
     p.render(j.result);
+    foldReports();
     loadOverviews();
   }
 

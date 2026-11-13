@@ -24,6 +24,8 @@
   "page.repair": "Исправить",
   "page.copy": "Копировать",
   "page.not_checked": "Ещё не проверено.",
+  "page.check.folded": "Последняя проверка была для {path}, не для этой папки.",
+  "page.check.show": "Показать её отчёт",
   "page.not_read": "Ещё не прочитано.",
   "page.reading": "Чтение...",
   "page.library": "Библиотека",

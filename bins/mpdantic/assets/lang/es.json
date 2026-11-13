@@ -24,6 +24,8 @@
   "page.repair": "Reparar",
   "page.copy": "Copiar",
   "page.not_checked": "Aún no comprobado.",
+  "page.check.folded": "La última comprobación fue de {path}, no de esta carpeta.",
+  "page.check.show": "Mostrar su informe",
   "page.not_read": "Aún no leído.",
   "page.reading": "Leyendo...",
   "page.library": "Biblioteca",

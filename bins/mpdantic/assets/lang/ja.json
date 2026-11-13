@@ -24,6 +24,8 @@
   "page.repair": "修復",
   "page.copy": "コピー",
   "page.not_checked": "まだ確認していません。",
+  "page.check.folded": "前回の確認は {path} のもので、このフォルダーのものではありません。",
+  "page.check.show": "そのレポートを表示",
   "page.not_read": "まだ読み込んでいません。",
   "page.reading": "読み込み中...",
   "page.library": "ライブラリ",

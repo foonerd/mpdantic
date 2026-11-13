@@ -24,6 +24,8 @@
   "page.repair": "Repair",
   "page.copy": "Copy",
   "page.not_checked": "Not checked yet.",
+  "page.check.folded": "The last check was of {path}, not this folder.",
+  "page.check.show": "Show its report",
   "page.not_read": "Not read yet.",
   "page.reading": "Reading...",
   "page.library": "Library",

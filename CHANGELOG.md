@@ -24,6 +24,7 @@ All notable changes to MPDantic. The format follows Keep a Changelog; the versio
 
 ### Changed
 
+- A check's report folds to one line when another folder is in hand ("The last check was of ..., not this folder", with Show its report), and unfolds when that folder is back; the findings line stays either way.
 - Tag editor column picker remembered in the browser; findings folder card can dismiss every open finding in that folder.
 
 ## [0.1.7] - 2026-11-12
